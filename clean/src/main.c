@@ -212,6 +212,11 @@ static void handle_set_config(void) {
      * do_bulk_init() completion will be lost (CSW never sent → USB timeout). */
     if (!bulk_ready)
         need_bulk_init = 1;
+    /* Trigger PCIe tunnel init after USB enumeration completes.
+     * Stock firmware waits for ~21 TURs, but we start immediately
+     * after SET_CONFIGURATION so PCIe link is up before bulk commands. */
+    if (pcie_initialized == 0)
+        need_pcie_init = 1;
 }
 
 /*=== Bulk Init -- arms MSC engine for CBW reception ===*/
@@ -2567,11 +2572,14 @@ void main(void) {
             /* pcie_phase2() sets pcie_initialized = 2 internally */
 
             {
+                uint8_t e762 = XDATA_REG8(0xE762);
                 uint8_t ltssm = XDATA_REG8(0xB450);
                 uart_puts("[S="); uart_puthex(ltssm);
-                uart_puts(" 62="); uart_puthex(XDATA_REG8(0xE762));
+                uart_puts(" 62="); uart_puthex(e762);
                 uart_puts("]\n");
-                if (ltssm >= 0x10) {
+                /* Use E762 bit 4 (link trained) instead of B450 (LTSSM state).
+                 * B450 may transiently read 0x00 even when link trained. */
+                if (e762 & 0x10) {
                     pcie_post_train();
                     pcie_initialized = 3;
                     uart_puts("[L0!]\n");
