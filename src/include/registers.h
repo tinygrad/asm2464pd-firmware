@@ -500,7 +500,7 @@
  *   0x40 = CBW received (bulk OUT, SCSI command ready at 0x912A+)
  */
 #define REG_USB_PERIPH_STATUS   XDATA_REG8(0x9101)
-#define   USB_PERIPH_BUS_RESET    0x01  // Bit 0: Bus reset (without bit 1)
+#define   USB_PERIPH_91D1_EVENT   0x01  // Bit 0: 91D1 event pending (link train, power mgmt, flag, reset)
 #define   USB_PERIPH_CONTROL      0x02  // Bit 1: Setup/control packet (EP0)
 #define   USB_PERIPH_BULK_DATA    0x04  // Bit 2: Bulk OUT data available
 #define   USB_PERIPH_BULK_REQ     0x08  // Bit 3: Bulk transfer request (USB 3.0)

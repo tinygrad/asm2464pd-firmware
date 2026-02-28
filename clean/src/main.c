@@ -58,6 +58,7 @@ static void pcie_early_init(void);
 static void phy_soft_reset(void);
 static void pcie_lane_config(void);
 static void phy_set_bit6(void);
+static void do_bulk_init(void);
 
 /*=== USB Control Transfer Helpers ===*/
 
@@ -161,9 +162,17 @@ static __code const uint8_t cfg_desc[] = {
     0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
 };
 static __code const uint8_t bos_desc[] = {
+    /* BOS header: 22 bytes total, 2 capabilities */
     0x05, 0x0F, 0x16, 0x00, 0x02,
-    0x07, 0x10, 0x02, 0x02, 0x00, 0x00, 0x00,
-    0x0A, 0x10, 0x03, 0x00, 0x0E, 0x00, 0x03, 0x00, 0x00, 0x00,
+    /* USB 2.0 Extension: LPM supported (matches stock: bmAttributes=0x1E) */
+    0x07, 0x10, 0x02, 0x1E, 0xF4, 0x00, 0x00,
+    /* SuperSpeed USB Device Capability (matches stock BOS at 0x59AB):
+     *   bmAttributes=0x00 (no LTM)
+     *   wSpeedsSupported=0x000E (FS+HS+SS)
+     *   bFunctionalitySupport=0x01 (Full Speed = lowest operational)
+     *   bU1DevExitLat=0x0A (10us)
+     *   wU2DevExitLat=0x07FF (2047us) */
+    0x0A, 0x10, 0x03, 0x00, 0x0E, 0x00, 0x01, 0x0A, 0xFF, 0x07,
 };
 static __code const uint8_t str0_desc[] = { 0x04, 0x03, 0x09, 0x04 };
 static __code const uint8_t str1_desc[] = { 0x0A, 0x03, 't',0, 'i',0, 'n',0, 'y',0 };
@@ -234,10 +243,19 @@ static void handle_set_config(void) {
     REG_USB_INT_MASK_9090 |= 0x80;
     t = REG_USB_STATUS; REG_USB_STATUS = t;
     t = REG_USB_CTRL_924C; REG_USB_CTRL_924C = t;
+
+    /* Stock firmware SET_CONFIG handler (0x460B) sets CC30 bit 0 here.
+     * This re-enables the LTSSM controller during configuration. */
+    XDATA_REG8(0xCC30) = (XDATA_REG8(0xCC30) & 0xFE) | 0x01;
+
     send_zlp_ack();
+
+    /* Defer bulk init to main loop — running it inside the ISR takes too long
+     * and causes USB3 link timeout (91D1 events not serviced in time).
+     * Stock firmware may handle this differently with hardware-level keep-alive. */
     need_bulk_init = 1;
-    if (pcie_initialized == 0)
-        need_pcie_init = 1;
+    /* PCIe init is triggered by TUR (see handle_cbw), not SET_CONFIG.
+     * This gives USB3 time to stabilize before we touch PHY PLL registers. */
 }
 
 /*=== Bulk Init -- arms MSC engine for CBW reception ===*/
@@ -712,7 +730,7 @@ static void handle_cbw(void) {
          * bulk IN works by successfully handling the first few TURs.
          * Return status 1 (not ready) until link is up. */
         tur_count++;
-        if (tur_count == 3 && pcie_initialized == 0) {
+        if (tur_count >= 1 && pcie_initialized == 0) {
             need_pcie_init = 1;
         }
         send_csw((pcie_initialized >= 2) ? 0x00 : 0x01);
@@ -806,24 +824,14 @@ static void handle_cbw(void) {
 static void handle_link_event(void) {
     uint8_t r9300 = REG_BUF_CFG_9300;
     if (r9300 & BUF_CFG_9300_SS_FAIL) {
-        /* USB3 failed — enable USB2 fallback path (from min_enum) */
+        /* Stock firmware SS_FAIL handler at 0xDB30:
+         * Does NOT force USB2 fallback on first SS_FAIL.
+         * Instead, writes 92E1 bit 6 and increments counter 0x07E4.
+         * Only after 5 failures does it do heavy reconfiguration.
+         * Our old handler was writing POWER_STATUS, USB_STATUS, PHY_LINK_CTRL,
+         * CPU_MODE, 91C0 which CAUSED the disconnect by forcing USB2 mode. */
         XDATA_REG8(0x0F1D) += 1;  /* SS_FAIL count */
-        REG_POWER_STATUS = REG_POWER_STATUS | POWER_STATUS_USB_PATH;
-        REG_POWER_EVENT_92E1 = 0x10;
-        REG_USB_STATUS = REG_USB_STATUS | 0x04;
-        REG_USB_STATUS = REG_USB_STATUS & ~0x04;
-        REG_PHY_LINK_CTRL = 0x00;
-        REG_CPU_MODE = 0x00;
-        /* Stock 0xA444-0xA45D: Only write CC30/E710 if PCIe init has run (0x0AF0 bit 4).
-         * Stock firmware clears CC30 + sets E710=0x1F here, then restores in 91D1
-         * LINK_TRAIN handler (0xC4B2). However, stock handles 91D1 in ISR where it
-         * catches the event before USB recovers (91C0 bit 1 still 0). Our 91D1 handler
-         * runs in main loop, so by the time we poll, USB has recovered and the restore
-         * is skipped. Instead, we skip the CC30/E710 corruption entirely — the PCIe
-         * link state is independent of USB SS_FAIL events. */
-        REG_USB_PHY_CTRL_91C0 = 0x10;
-        is_usb3 = 0;
-        bulk_out_state = 0; need_cbw_process = 0; need_dma_setup = 0; need_bulk_init = 0; bulk_ready = 0;
+        REG_POWER_EVENT_92E1 = (REG_POWER_EVENT_92E1 & 0xBF) | 0x40;  /* stock: 92E1 set bit 6 */
         isr_link_state = 2;
     } else if (r9300 & BUF_CFG_9300_SS_OK) {
         REG_BUF_CFG_9300 = BUF_CFG_9300_SS_OK;
@@ -840,15 +848,19 @@ static void handle_link_event(void) {
 static void handle_91d1_events(void) {
     uint8_t r91d1;
 
-    if (!(REG_USB_PERIPH_STATUS & USB_PERIPH_BUS_RESET)) return;
+    if (!(REG_USB_PERIPH_STATUS & USB_PERIPH_91D1_EVENT)) return;
     r91d1 = REG_USB_PHY_CTRL_91D1;
 
-    /* bit 3: power management (U1/U2). Stock: 0x9b95 */
+    /* bit 3: power management (U1/U2). Stock: 0x9b95
+     * Stock does complex clock reconfiguration (92CF/92C1) for U1/U2 transitions.
+     * Minimal handler: just ack and set flags. The clock reconfiguration
+     * (92CF/92C1/E712 polling) was causing USB3 link instability. */
     if (r91d1 & USB_91D1_POWER_MGMT) {
         REG_USB_PHY_CTRL_91D1 = USB_91D1_POWER_MGMT;
         G_USB_TRANSFER_FLAG = 0;
         REG_TIMER_CTRL_CC3B &= ~TIMER_CTRL_LINK_POWER;
         G_TLP_BASE_LO = 0x01;
+        XDATA_REG8(0x0AE1) = 0x01;
     }
 
     r91d1 = REG_USB_PHY_CTRL_91D1;
@@ -1029,15 +1041,40 @@ void int0_isr(void) __interrupt(0) {
 
     if (periph_status & USB_PERIPH_LINK_EVENT) {
         XDATA_REG8(0x0F1B) += 1;  /* link event count */
+        /* Stock ISR at 0x1039: 9101 bit 4 checks 9302 FIRST, then 9300.
+         * 9302 has PHY/link events that need acknowledgment (stock acks bits 3,4,5,0,1,2).
+         * Without acking 9302, USB3 hardware may drop the link. */
+        {
+            uint8_t r9302 = XDATA_REG8(0x9302);
+            if (r9302 & 0x08) XDATA_REG8(0x9302) = 0x08;  /* bit 3 */
+            else if (r9302 & 0x10) XDATA_REG8(0x9302) = 0x10;  /* bit 4 */
+            else if (r9302 & 0x20) XDATA_REG8(0x9302) = 0x20;  /* bit 5 */
+            else if (r9302 & 0x01) XDATA_REG8(0x9302) = 0x01;  /* bit 0 */
+            else if (r9302 & 0x02) XDATA_REG8(0x9302) = 0x02;  /* bit 1 */
+            else if (r9302 & 0x04) XDATA_REG8(0x9302) = 0x04;  /* bit 2 */
+        }
+        /* Then check 9300 for SS_FAIL/SS_OK (stock: 0x109C) */
         handle_link_event();
         return;
     }
 
-    if ((periph_status & USB_PERIPH_BUS_RESET) && !(periph_status & USB_PERIPH_CONTROL)) {
-        XDATA_REG8(0x0F1C) += 1;  /* bus reset count */
-        handle_usb_reset();
-        isr_link_state = 4;  /* signal bus reset */
+    /* Stock ISR at 0x0F4A: when 9101 bit 0 fires, dispatch on 91D1 bits.
+     * 9101 bit 0 is NOT bus reset — it's the 91D1 event indicator.
+     * Previously we called handle_usb_reset() here which KILLED the USB3 link
+     * by running a full USB reset sequence on every 91D1 power management event. */
+    if (periph_status & 0x01) {  /* 9101 bit 0: 91D1 events pending */
+        handle_91d1_events();
         return;
+    }
+
+    /* 9093 event acknowledgment — stock firmware at 0x0FA5-0x0FE4 checks 9093 bits
+     * when 9101 bit 2 fires. Without acking these events, USB3 hardware may drop link.
+     * Ack any pending 9093 events by writing back the pending bits. */
+    if (periph_status & 0x04) {  /* 9101 bit 2 */
+        uint8_t r9093 = XDATA_REG8(0x9093);
+        if (r9093 & 0x0F) {
+            XDATA_REG8(0x9093) = r9093 & 0x0F;  /* ack pending bits */
+        }
     }
 
     if (periph_status & USB_PERIPH_BULK_REQ) {
@@ -1460,10 +1497,9 @@ static void pcie_tunnel_setup_reinit(void) {
      *   E049: phy_set_bit6()
      *   Bank writes: 0x7041 clear bit 6, 0x1507 set bits 2,1
      *
-     * NOTE: D9A4 path DISABLED — causes USB2 fallback to fail after SS_FAIL.
-     * The pcie_lane_config() call during tunnel_setup_reinit appears to break
-     * USB PHY state needed for USB2 recovery. Investigating... */
-#if 0
+     * D9A4 path re-enabled — needed for downstream LTSSM training.
+     * Without this, B450 stays at 0x01 (Detect) instead of reaching 0x78 (L0). */
+
     /* B402 &= 0xFD (stock CB08) */
     REG_PCIE_CTRL_B402 = REG_PCIE_CTRL_B402 & 0xFD;
 
@@ -1510,7 +1546,6 @@ static void pcie_tunnel_setup_reinit(void) {
         movx    @dptr, a
         mov     0x93, #0x00
     __endasm;
-#endif
 
     uart_puts("[TR]\n");
 }
@@ -2069,11 +2104,20 @@ static void pcie_tunnel_enable(void) {
      * (0xCF2E) which runs during the PCIe dispatch. Must be 0x04 for link. */
     XDATA_REG8(0xE710) = (XDATA_REG8(0xE710) & 0xE0) | 0x04;
 
-    /* Apply PHY PLL config for PCIe (stock: 0x8E28-0x8E5E).
-     * E741/E742 are shared USB/PCIe PHY PLL registers. Cannot call at boot
-     * because PCIe PLL values break USB SuperSpeed detection.
-     * Called here after USB enumeration is complete. */
-    pcie_pll_init();
+    /* Selective PHY PLL config — apply everything EXCEPT CC43=0x80 which kills USB3.
+     * Stock pcie_pll_init (0x8E28-0x8E5E) does:
+     *   CC35 &= 0xFE, E741 R-M-W, E742 R-M-W, CC43=0x80 (KILLS USB3!),
+     *   C65B bits, C656 bit 5 clear (KILLS downstream power!), C62D, C004, C007, CA2E
+     * We apply CC35 and the controller bus config (C004/C007/CA2E/C62D) which
+     * may be needed for downstream port init. Skip CC43 and C656. */
+    REG_CPU_EXEC_STATUS_3 = REG_CPU_EXEC_STATUS_3 & 0xFE;  /* CC35 &= 0xFE */
+    REG_PHY_EXT_5B = (REG_PHY_EXT_5B & 0xF7) | 0x08;       /* C65B: set bit 3 */
+    REG_PHY_EXT_5B = (REG_PHY_EXT_5B & 0xDF) | 0x20;       /* C65B: set bit 5 */
+    XDATA_REG8(0xC62D) = (XDATA_REG8(0xC62D) & 0xE0) | 0x07;  /* C62D: set bits 0,1,2 */
+    XDATA_REG8(0xC004) = (XDATA_REG8(0xC004) & 0xFD) | 0x02;  /* C004: set bit 1 */
+    XDATA_REG8(0xC007) = XDATA_REG8(0xC007) & 0xF7;            /* C007: clear bit 3 */
+    XDATA_REG8(0xCA2E) = (XDATA_REG8(0xCA2E) & 0xFE) | 0x01;  /* CA2E: set bit 0 */
+    uart_puts("[PLL-]\n");
 
     /* Stock DE16→DE24: Timer block init (runs before BFE0 wrapper)
      * Clears globals 0x0B30-0x0B33, then initializes CD30/CD32/CD33 timer
@@ -2188,9 +2232,9 @@ static void pcie_tunnel_enable(void) {
     REG_PCIE_TUNNEL_CTRL = tmp & 0xFE;
 
     /* Step 3: Second tunnel setup — full CD8F path.
-     * Stock CD8F does CE3D (link controller re-init) + phy_soft_reset + C233 config
-     * + E712 polling + E7E3 + re-run early_init (D9A4).
-     * This is critical for proper LTSSM state before Gen3 lane reconfig. */
+     * Stock CD8F does CE3D (link controller re-init) + C233 config
+     * + E712 polling + D9A4 (PHY lane config).
+     * This is critical for proper LTSSM state and downstream link training. */
     pcie_tunnel_setup_reinit();
 
     /* Step 4: CA06 &= 0xEF, then B480 |= 0x01 (stock: 0xC039-0xC03F via lcall 0x99E0)
@@ -2201,8 +2245,10 @@ static void pcie_tunnel_enable(void) {
 
     /* Step 5: C659 &= 0xFE — 12V OFF during tunnel config (stock: 0xC042-0xC044)
      * Stock firmware turns 12V OFF here, then back ON in phase 2.
-     * This power cycle is critical for GPU to properly negotiate Gen3. */
-    REG_PCIE_LANE_CTRL_C659 = REG_PCIE_LANE_CTRL_C659 & 0xFE;
+     * SKIPPED: Keep 12V on — turning it off and relying on phase 2 to restore
+     * it fails when phase 2 is skipped (B22B already 0x04 → "skip P2" path).
+     * The "pcie works" commit also skipped this. */
+    /* REG_PCIE_LANE_CTRL_C659 = REG_PCIE_LANE_CTRL_C659 & 0xFE; */
 
     /* Step 6: Lane config (stock: lcall 0xD436 with r7=0x0F) */
     pcie_lane_config();
@@ -2757,6 +2803,8 @@ static uint8_t pcie_perst_deassert(void) {
 
 static void pcie_post_train(void) {
     /* Called once after LTSSM reaches L0 */
+    /* Ensure 12V is ON (in case phase 2 was skipped) */
+    REG_PCIE_LANE_CTRL_C659 = (REG_PCIE_LANE_CTRL_C659 & 0xFE) | 0x01;
     REG_PCIE_DMA_SIZE_A = 0x08;  REG_PCIE_DMA_SIZE_B = 0x00;
     REG_PCIE_DMA_SIZE_C = 0x08;  REG_PCIE_DMA_SIZE_D = 0x08;
     REG_PCIE_DMA_BUF_A = 0x08;  REG_PCIE_DMA_BUF_B = 0x20;
@@ -2961,6 +3009,7 @@ void main(void) {
     TCON = 0x04;  /* IT0=0 (level-triggered INT0) */
     IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
+    uart_puts("[ML]\n");
     while (1) {
         /* Deferred ISR status print */
         if (isr_link_state) {
@@ -2979,10 +3028,8 @@ void main(void) {
             isr_link_state = 0;
         }
 
-        /* Service USB3 link events (91D1) to keep link alive.
-         * Stock firmware handles these in ISR at 0x0F4A.
-         * Without this, USB3 link dies after ~30-40 seconds. */
-        handle_91d1_events();
+        /* 91D1 events are now handled in ISR (line ~1090) matching stock firmware.
+         * No need to poll from main loop. */
 
         /* NOTE: Do NOT continuously write CC30 in main loop — it interferes
          * with USB operation and prevents enumeration. CC30 is set at end of
@@ -3011,36 +3058,29 @@ void main(void) {
 
             pcie_perst_deassert();
 
-            /* Try using initial x4 Gen1 link without phase 2 reconfig.
-             * Phase 2 kills B22B (drops from 0x04 to 0x00).
-             * If x4 Gen1 works for config space access, skip phase 2.
-             * Stock firmware retrains to Gen3 x2 which we can't achieve yet. */
+            /* Always run phase 2 — stock firmware does Gen3 x2 retraining.
+             * B22B=0x04 only means lane config, NOT that downstream link trained.
+             * Stock has B450=0x78 (L0) after phase 2, ours has B450=0x00 without it.
+             * Phase 2 configures E764, B434=0x0C (x2), and triggers LTSSM training. */
             {
                 uint8_t b22b = XDATA_REG8(0xB22B);
                 uart_puts("[W="); uart_puthex(b22b); uart_puts("]\n");
 
-                if (b22b == 0x04) {
-                    /* Link already at x4 — use it directly without phase 2 */
-                    pcie_post_train();
-                    pcie_initialized = 3;
-                    uart_puts("[L0! skip P2]\n");
-                } else {
-                    /* No initial link — try phase 2 */
-                    pcie_phase2();
-                    {
-                        uint8_t link_ok = XDATA_REG8(0x0F23);
-                        b22b = XDATA_REG8(0xB22B);
-                        uart_puts("[W2="); uart_puthex(b22b);
-                        uart_puts(" P="); uart_puthex(link_ok);
-                        uart_puts("]\n");
-                        if (link_ok || b22b == 0x04) {
-                            pcie_post_train();
-                            pcie_initialized = 3;
-                            uart_puts("[L0!]\n");
-                        } else {
-                            pcie_initialized = 2;
-                            uart_puts("[LF]\n");
-                        }
+                pcie_phase2();
+                {
+                    uint8_t link_ok = XDATA_REG8(0x0F23);
+                    b22b = XDATA_REG8(0xB22B);
+                    uart_puts("[W2="); uart_puthex(b22b);
+                    uart_puts(" P="); uart_puthex(link_ok);
+                    uart_puts(" L="); uart_puthex(XDATA_REG8(0xB450));
+                    uart_puts("]\n");
+                    if (link_ok || b22b == 0x04) {
+                        pcie_post_train();
+                        pcie_initialized = 3;
+                        uart_puts("[L0!]\n");
+                    } else {
+                        pcie_initialized = 2;
+                        uart_puts("[LF]\n");
                     }
                 }
             }
