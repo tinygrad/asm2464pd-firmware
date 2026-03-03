@@ -57,8 +57,11 @@ static volatile __xdata uint8_t need_pcie_init;
 static volatile __xdata uint16_t poll_counter;
 static volatile __xdata uint8_t config_done;
 static volatile __xdata uint8_t need_rearm;  /* deferred MSC re-arm (main loop) */
+static volatile __xdata uint8_t need_state_init;  /* deferred state_init (main loop) */
+static volatile __xdata uint8_t pcie_cfg_pending;  /* B297 write seen before PCIe ready */
 
 static void poll_bulk_events(void);
+static void handle_cbw(void);
 static void sw_dma_bulk_in(uint16_t addr, uint8_t len);
 static void pcie_tunnel_enable(void);
 static void pcie_phase2(void);
@@ -66,6 +69,7 @@ static void pcie_early_init(void);
 static void phy_soft_reset(void);
 static void pcie_lane_config(void);
 static void phy_set_bit6(void);
+static void state_init(void);
 static void do_bulk_init(void);
 static void pcie_bridge_config_init(void);
 
@@ -256,63 +260,437 @@ static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint8_t w
     send_descriptor_data(wlen < desc_len ? wlen : desc_len);
 }
 
+/*
+ * ep_init_8fcf - Replicate stock 0x8FCF EP init state variable setup
+ *
+ * Stock firmware 0x8FCF: parses flash descriptors at 0x7000. With empty
+ * flash (all zeros), the checksum at 0x707E != 0x5A, so 8FCF loops 6
+ * times via the 0x91C6 skip path, then exits via 0x91CF.
+ *
+ * Net effect with empty flash:
+ *   Preamble (0x8FCF-0x9001): Sets 0x0AEx state variables
+ *   Exit path (0x91CF-0x923E): 0x0AEA|=1, 0x0AF0=0, C65A/CC35/905F config
+ *
+ * These state variables are CRITICAL because state_init's sub-functions
+ * D12A and D387 check them to determine which CC timer registers to configure:
+ *   - D12A: if 0x0AE4!=0 AND 0x0AEA>=3 → SKIP CC17/CC16/CC18/CC19/92C4/9201
+ *   - D387: if 0x0AE8==0x0F → SKIP CC22/CC23 config entirely
+ */
+/*
+ * program_bulk_endpoint - Program a bulk endpoint into the C8Ax descriptor engine
+ *
+ * The stock firmware's 8FCF function iterates over USB descriptors at 0x7000+ and
+ * programs each endpoint via the C8Ax hardware register interface (BC18 function).
+ * Since our clean firmware doesn't use the descriptor table infrastructure, we
+ * directly program the two bulk endpoints needed for BOT mass storage.
+ *
+ * Hardware endpoint programming sequence (from stock BC51-BCA0):
+ *   1. C8AD &= 0xFE (clear trigger bit)
+ *   2. C8AE = 0, C8AF = 0 (clear config)
+ *   3. C8AA = endpoint_type (bulk=0x03 for BC18)
+ *   4. C8AC = (C8AC & 0xFC) | type_bits
+ *   5. C8A1 = endpoint_address
+ *   6. C8A2 = endpoint_config, C8AB = endpoint_config2
+ *   7. C8A3:C8A4 = max_packet_size (high:low)
+ *   8. C8A9 = 0x01 (trigger hardware processing)
+ *   9. Wait for C8A9 bit 0 to clear
+ *   10. Clear C8AD bits 4-7
+ */
+static void program_bulk_endpoint(uint8_t ep_addr, uint16_t max_pkt) {
+    uint16_t i;
+    /* Step 1-2: Clear control registers */
+    XDATA_REG8(0xC8AD) = XDATA_REG8(0xC8AD) & 0xFE;
+    XDATA_REG8(0xC8AE) = 0x00;
+    XDATA_REG8(0xC8AF) = 0x00;
+
+    /* Step 3-4: Endpoint type (bulk = 0x03 per BC18 dispatch) */
+    XDATA_REG8(0xC8AA) = 0x03;  /* bulk endpoint type for C8AA */
+    XDATA_REG8(0xC8AC) = (XDATA_REG8(0xC8AC) & 0xFC) | 0x03;
+
+    /* Step 5: Endpoint address */
+    XDATA_REG8(0xC8A1) = ep_addr;
+
+    /* Step 6: Endpoint config (0 for simple bulk) */
+    XDATA_REG8(0xC8A2) = 0x00;
+    XDATA_REG8(0xC8AB) = 0x00;
+
+    /* Step 7: Max packet size (high byte, low byte) */
+    XDATA_REG8(0xC8A3) = (uint8_t)(max_pkt >> 8);  /* high byte: 0x04 for 1024 */
+    XDATA_REG8(0xC8A4) = (uint8_t)(max_pkt & 0xFF); /* low byte: 0x00 for 1024 */
+
+    /* Step 8: Trigger hardware processing */
+    XDATA_REG8(0xC8A9) = 0x01;
+
+    /* Step 9: Wait for completion (C8A9 bit 0 clears) */
+    for (i = 0; i < 10000; i++) {
+        if (!(XDATA_REG8(0xC8A9) & 0x01)) break;
+    }
+
+    /* Step 10: Clear C8AD upper bits */
+    XDATA_REG8(0xC8AD) = XDATA_REG8(0xC8AD) & 0x0F;
+}
+
+static void ep_init_8fcf(void) {
+    /* Preamble (stock 0x8FCF-0x9001): Initialize state variables */
+    XDATA_REG8(0x0213) = 0x00;
+    XDATA_REG8(0x0AE9) = 0x01;
+    XDATA_REG8(0x0AE2) = 0x01;
+    XDATA_REG8(0x0AE3) = 0x01;
+    XDATA_REG8(0x0AEF) = 0x01;
+    XDATA_REG8(0x0AE4) = 0x01;
+    XDATA_REG8(0x0AE5) = 0x01;
+    XDATA_REG8(0x0AE6) = 0x01;
+    XDATA_REG8(0x0AE7) = 0x01;
+    XDATA_REG8(0x0AE8) = 0x0F;
+    XDATA_REG8(0x0AED) = 0x03;
+    XDATA_REG8(0x0AEE) = 0x03;
+    XDATA_REG8(0x0AEA) = 0x03;
+    XDATA_REG8(0x0AEB) = 0x03;
+    XDATA_REG8(0x0AEC) = 0x03;
+
+    /* Skip path counter: stock loops 6x then exits (0x0A83 = 6) */
+    XDATA_REG8(0x0A83) = 0x06;
+
+    /* Exit path (stock 0x91CF-0x923E): */
+
+    /* 0x91CF: 0x0AEA |= 0x01 (already 0x03, stays 0x03) */
+    XDATA_REG8(0x0AEA) = XDATA_REG8(0x0AEA) | 0x01;
+
+    /* 0x91D6: check 0x0AE5 — nonzero path: 0x0AF0 = 0x00 */
+    XDATA_REG8(0x0AF0) = 0x00;  /* 0x0AE5 = 1 (nonzero) → 0x0AF0 = 0x00 */
+
+    /* 0x91EA: check 0x0AE3 — nonzero path: C65A &= 0xF7 */
+    XDATA_REG8(0xC65A) = XDATA_REG8(0xC65A) & 0xF7;
+
+    /* 0x9205: check 0x0AE2 (=1, nonzero) and 0x0AE5 (=1, nonzero)
+     * → CC35 &= 0xFB (stock 0x9217-0x921D) */
+    XDATA_REG8(0xCC35) = XDATA_REG8(0xCC35) & 0xFB;
+
+    /* 0x921E: 0x0AE2 != 0 → skip E34D call */
+
+    /* 0x9224: 0x0AF0 bit 0 not set (0x0AF0=0x00) → skip D878 */
+    /* 0x922E: 0x0AF0 bit 2 not set → skip 0x0480 */
+
+    /* 0x9238: 905F &= 0xEF (clear bit 4) */
+    XDATA_REG8(0x905F) = XDATA_REG8(0x905F) & 0xEF;
+}
+
 /*=== SET_CONFIG ===*/
+/*
+ * handle_set_config - Handle USB SET_CONFIGURATION request
+ *
+ * Uses the working approach from master branch: direct register manipulation
+ * of endpoint config, EP activation, and 9090 interrupt mask setup.
+ * This is simpler and proven to work for bulk transfers.
+ */
 static void handle_set_config(void) {
     uint8_t t;
-    XDATA_REG8(0x0F11) += 1;  /* diagnostic: handle_set_config call count */
 
-    /* EP reconfiguration only on FIRST SET_CONFIGURATION.
-     * The kernel sends SET_CONFIGURATION many times (88+ observed).
-     * Each EP reconfig writes to 90E3/CFG2/etc which disrupts the
-     * MSC hardware state machine.
-     *
-     * If bulk_ready is already set, this is a re-open without USB reset
-     * (e.g. tinygrad re-opening device). Trigger bulk re-init to clear
-     * stale bulk engine state. */
-    if (bulk_ready) {
-        need_bulk_init = 1;
-        send_zlp_ack();
-        return;
-    }
-    if (config_done) {
-        send_zlp_ack();
-        return;
-    }
-    config_done = 1;
-
+    /* Write "USBS" to D800 + set MSC length (from master, matches stock 0x494D preamble) */
     REG_USB_EP_BUF_CTRL = 0x55; REG_USB_EP_BUF_SEL = 0x53;
     REG_USB_EP_BUF_DATA = 0x42; REG_USB_EP_BUF_PTR_LO = 0x53;
     REG_USB_MSC_LENGTH = 0x0D;
+
+    /* EP0 config read-back (triggers hardware latch) */
     t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
     t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
     REG_USB_EP_CFG2 = 0x01; REG_USB_EP_CFG2 = 0x08;
+
+    /* EP status + activate */
     REG_USB_EP_STATUS_90E3 = 0x02;
     t = REG_USB_EP_CTRL_905F; REG_USB_EP_CTRL_905F = t;
     t = REG_USB_EP_CTRL_905D; REG_USB_EP_CTRL_905D = t;
     REG_USB_EP_STATUS_90E3 = 0x01; REG_USB_CTRL_90A0 = 0x01;
+
+    /* Enable global USB interrupt mask bit 7 */
     REG_USB_INT_MASK_9090 |= 0x80;
+
+    /* Status/config read-back */
     t = REG_USB_STATUS; REG_USB_STATUS = t;
     t = REG_USB_CTRL_924C; REG_USB_CTRL_924C = t;
 
-    /* Stock firmware SET_CONFIG handler (0x460B) sets CC30 bit 0 here.
-     * This re-enables the LTSSM controller during configuration. */
-    XDATA_REG8(0xCC30) = (XDATA_REG8(0xCC30) & 0xFE) | 0x01;
-
     send_zlp_ack();
-
-    /* Defer bulk init to main loop — running it inside the ISR takes too long
-     * and causes USB3 link timeout (91D1 events not serviced in time).
-     * Stock firmware may handle this differently with hardware-level keep-alive. */
     need_bulk_init = 1;
-    /* PCIe init is triggered by TUR (see handle_cbw), not SET_CONFIG.
-     * This gives USB3 time to stabilize before we touch PHY PLL registers. */
+    config_done = 1;
+    uart_puts("[C]\n");
 }
 
-/*=== Bulk Init -- arms MSC engine for CBW reception ===*/
+/*
+ * doorbell_dance - 900B/C42A doorbell sequence (stock 0x494D)
+ *
+ * Stock firmware calls this BOTH for initial MSC arm (from state_init)
+ * and for CSW send (from scsi_csw_build). The sequence configures the
+ * 900B (MSC config) and C42A (NVMe doorbell) registers in a specific
+ * interleaved order, then writes "USBS" to D800, triggers C42C=0x01,
+ * and runs post-CSW cleanup.
+ *
+ * Stock 0x494D-0x49BD: doorbell dance → "USBS" → C42C → ljmp 0xC16C
+ */
+static void doorbell_dance(void) {
+    /* RAMP UP (stock 0x494D-0x496B):
+     * 900B: set bits 1,2 → C42A: set bit 0 → 900B: set bit 0 →
+     * C42A: set bits 1,2 → C42A: set bit 3 → C42A: set bit 4 */
+    REG_USB_MSC_CFG = (REG_USB_MSC_CFG & ~0x02) | 0x02;  /* 900B set bit 1 */
+    REG_USB_MSC_CFG = (REG_USB_MSC_CFG & ~0x04) | 0x04;  /* 900B set bit 2 */
+    REG_NVME_DOORBELL = (REG_NVME_DOORBELL & ~0x01) | 0x01;  /* C42A set bit 0 */
+    REG_USB_MSC_CFG = (REG_USB_MSC_CFG & ~0x01) | 0x01;  /* 900B set bit 0 */
+    REG_NVME_DOORBELL = (REG_NVME_DOORBELL & ~0x02) | 0x02;  /* C42A set bit 1 */
+    REG_NVME_DOORBELL = (REG_NVME_DOORBELL & ~0x04) | 0x04;  /* C42A set bit 2 */
+    REG_NVME_DOORBELL = (REG_NVME_DOORBELL & ~0x08) | 0x08;  /* C42A set bit 3 */
+    REG_NVME_DOORBELL = (REG_NVME_DOORBELL & ~0x10) | 0x10;  /* C42A set bit 4 */
+
+    /* TEARDOWN (stock 0x496E-0x0999): */
+    REG_USB_MSC_CFG &= ~0x02;     /* 900B clear bit 1 */
+    REG_USB_MSC_CFG &= ~0x04;     /* 900B clear bit 2 */
+    REG_NVME_DOORBELL &= ~0x01;   /* C42A clear bit 0 */
+    REG_USB_MSC_CFG &= ~0x01;     /* 900B clear bit 0 */
+    REG_NVME_DOORBELL &= ~0x02;   /* C42A clear bit 1 */
+    REG_NVME_DOORBELL &= ~0x04;   /* C42A clear bit 2 */
+    REG_NVME_DOORBELL &= ~0x08;   /* C42A clear bit 3 */
+    REG_NVME_DOORBELL &= ~0x10;   /* C42A clear bit 4 */
+
+    /* Stock 0x499A: IDATA[0x6A] = 0 (MSC state clear) */
+    __asm
+        mov r0, #0x6a
+        clr a
+        mov @r0, a
+    __endasm;
+
+    /* Stock 0x499E-0x49A9: "USBS" signature to D800 (via 0x0D9D helper) */
+    EP_BUF(0x00) = 0x55;  /* U */
+    EP_BUF(0x01) = 0x53;  /* S */
+    EP_BUF(0x02) = 0x42;  /* B */
+    EP_BUF(0x03) = 0x53;  /* S */
+
+    /* Stock 0x49AC: 901A = 0x0D (CSW/MSC length) */
+    REG_USB_MSC_LENGTH = 0x0D;
+
+    /* Stock 0x49B2-0x49BC: C42C=0x01 (MSC trigger), C42D &= ~0x01 */
+    REG_USB_MSC_CTRL = 0x01;
+    REG_USB_MSC_STATUS &= ~0x01;
+}
+
+/*
+ * post_csw_cleanup - Post-CSW state cleanup (stock 0xC16C-0xC1DB)
+ *
+ * Called after every C42C arm (via ljmp from 0x494D).
+ * Clears state arrays and toggles C42A bit 5 with nvme_link_init.
+ */
+static void post_csw_cleanup(void) {
+    uint8_t i;
+
+    /* Stock 0xC16C-0xC178: Clear state variables */
+    XDATA_REG8(0x000B) = 0x00;
+    XDATA_REG8(0x000A) = 0x00;
+    XDATA_REG8(0x0052) = 0x00;
+
+    /* Stock 0xC179-0xC1A7: Clear state arrays (32 entries) */
+    for (i = 0; i < 32; i++) {
+        XDATA_REG8(0x0108 + i) = 0x00;
+        XDATA_REG8(0x0171 + i) = 0xFF;
+        XDATA_REG8(0x0518 + i) = 0x00;
+    }
+
+    /* Stock 0xC1AA-0xC1C6: Additional state init */
+    XDATA_REG8(0x01B4) = 0x00;
+    XDATA_REG8(0x002D) = 0x22;
+    XDATA_REG8(0x0051) = 0x21;
+    XDATA_REG8(0x002E) = 0x22;
+    XDATA_REG8(0x0050) = 0x21;
+
+    /* Stock 0xC1C4: IDATA[0x0D] = 0x22 */
+    __asm
+        mov r0, #0x0d
+        mov @r0, #0x22
+    __endasm;
+
+    /* Stock 0xC1C8-0xC1DA: C42A bit 5 toggle + nvme_link_init */
+    REG_NVME_DOORBELL = (REG_NVME_DOORBELL & ~0x20) | 0x20;  /* C42A set bit 5 */
+
+    /* nvme_link_init (0xDF5E): C428 &= ~0x08, C473 set bits 6,5 */
+    XDATA_REG8(0xC428) = XDATA_REG8(0xC428) & 0xF7;
+    XDATA_REG8(0xC473) = (XDATA_REG8(0xC473) & 0xBF) | 0x40;
+    XDATA_REG8(0xC473) = (XDATA_REG8(0xC473) & 0xDF) | 0x20;
+
+    REG_NVME_DOORBELL &= ~0x20;  /* C42A clear bit 5 */
+}
+
+/*
+ * state_init - Initialize MSC/DMA state (stock firmware 0xBDA4-0xBE20)
+ *
+ * Called once from SET_CONFIG (deferred to main loop).
+ * Stock flow: clear state vars → CC DMA config → C24C bridge setup →
+ *             doorbell dance (0x494D) → post-CSW cleanup (0xC16C)
+ *
+ * This runs BEFORE do_bulk_init (0xB1C5). The doorbell dance includes
+ * the FIRST C42C arm. do_bulk_init does the SECOND C42C arm.
+ */
+static void state_init(void) {
+    /* Stock 0xBDA4-0xBDF9: Clear ~20 state variables */
+    XDATA_REG8(0x07ED) = 0x00;
+    XDATA_REG8(0x07EE) = 0x00;
+    XDATA_REG8(0x0AF5) = 0x00;
+    XDATA_REG8(0x07EB) = 0x00;
+    XDATA_REG8(0x0AF1) = 0x00;
+    XDATA_REG8(0x0ACA) = 0x00;
+    XDATA_REG8(0x07E1) = 0x05;  /* stock sets to 0x05, not 0 */
+    XDATA_REG8(0x0B2E) = 0x00;
+    XDATA_REG8(0x0ACB) = 0x00;
+    XDATA_REG8(0x07E3) = 0x00;
+    XDATA_REG8(0x07E6) = 0x00;
+    XDATA_REG8(0x07E7) = 0x00;
+    XDATA_REG8(0x07E9) = 0x00;
+    XDATA_REG8(0x0B2D) = 0x00;
+    XDATA_REG8(0x07E2) = 0x00;
+    XDATA_REG8(0x0003) = 0x00;
+    XDATA_REG8(0x0006) = 0x00;
+    XDATA_REG8(0x07E8) = 0x00;
+    XDATA_REG8(0x07E5) = 0x00;
+    XDATA_REG8(0x0B3B) = 0x00;
+    XDATA_REG8(0x07EA) = 0x00;
+
+    /* Stock 0xBDFA: call 0x54BB (clear_pcie_enum_done) */
+    XDATA_REG8(0x0AF7) = 0x00;
+
+    /* Stock 0xBDFD: call 0xCC56 — C6A8 |= 0x01 */
+    XDATA_REG8(0xC6A8) = (XDATA_REG8(0xC6A8) & 0xFE) | 0x01;
+
+    /* Stock 0xBE00-0xBE0A: 92C8 clear bits 0 then 1 (two separate R-M-W) */
+    XDATA_REG8(0x92C8) = XDATA_REG8(0x92C8) & 0xFE;
+    XDATA_REG8(0x92C8) = XDATA_REG8(0x92C8) & 0xFD;
+
+    /* Stock 0xBE0B-0xBE13: CD31 reset sequence */
+    XDATA_REG8(0xCD31) = 0x04;
+    XDATA_REG8(0xCD31) = 0x02;
+
+    /* Stock 0xBE14: call 0xD12A — CC17/CC16/CC18/CC19 bulk DMA config
+     * D12A checks 0x0AE4 and 0x0AEA to determine which path to take:
+     *   - 0x0AE4==0: CC17 reset + CC16/CC18/CC19 config + 92C4/9201 toggle
+     *   - 0x0AE4!=0 AND 0x0AEA>=3: SKIP all CC17 config, SKIP 92C4/9201
+     *   - 0x0AE4!=0 AND 0x0AEA<3: CC17 config but SKIP 92C4/9201
+     * After ep_init_8fcf: 0x0AE4=1, 0x0AEA=3 → SKIP all */
+    XDATA_REG8(0x0B3D) = 0x00;
+    XDATA_REG8(0x05A3) = XDATA_REG8(0x05A5);  /* stock 0xD12F-0xD136 */
+    {
+        uint8_t ae4 = XDATA_REG8(0x0AE4);
+        if (ae4 == 0) {
+            /* D147: CC17 reset + config (first-time path) */
+            XDATA_REG8(0xCC17) = 0x04;  /* CC17 reset via C033 */
+            XDATA_REG8(0xCC17) = 0x02;
+            XDATA_REG8(0xCC16) = (XDATA_REG8(0xCC16) & 0xF8) | 0x04;
+            XDATA_REG8(0xCC18) = 0x01;
+            XDATA_REG8(0xCC19) = 0x90;
+            XDATA_REG8(0x0B3D) = 0x01;
+            /* D166: 0x0AE4==0 → 92C4 &= ~0x01, 9201 toggle bit 0 */
+            XDATA_REG8(0x92C4) = XDATA_REG8(0x92C4) & 0xFE;
+            XDATA_REG8(0x9201) = (XDATA_REG8(0x9201) & 0xFE) | 0x01;
+            XDATA_REG8(0x9201) = XDATA_REG8(0x9201) & 0xFE;
+        } else {
+            uint8_t aea = XDATA_REG8(0x0AEA);
+            if (aea < 3) {
+                /* D147: CC17 config only (no 92C4/9201) */
+                XDATA_REG8(0xCC17) = 0x04;
+                XDATA_REG8(0xCC17) = 0x02;
+                XDATA_REG8(0xCC16) = (XDATA_REG8(0xCC16) & 0xF8) | 0x04;
+                XDATA_REG8(0xCC18) = 0x01;
+                XDATA_REG8(0xCC19) = 0x90;
+                XDATA_REG8(0x0B3D) = 0x01;
+            }
+            /* D166: 0x0AE4!=0 → D17A (return) — skip 92C4/9201 */
+        }
+    }
+
+    /* Stock 0xBE17: call 0xD387 — CC22/CC23 config
+     * D387 checks 0x0AE8:
+     *   - 0x0AE8==0x0F: SKIP all CC22/CC23 config (immediate return)
+     *   - 0x0AE8!=0x0F: CC23 reset + CC22 config + update 0x0AE8
+     * After ep_init_8fcf: 0x0AE8=0x0F → SKIP */
+    {
+        uint8_t ae8 = XDATA_REG8(0x0AE8);
+        if (ae8 != 0x0F) {
+            /* C02B: 0x0B3C=0, CC23 reset (0x04, 0x02) */
+            XDATA_REG8(0x0B3C) = 0x00;
+            XDATA_REG8(0xCC23) = 0x04;
+            XDATA_REG8(0xCC23) = 0x02;
+            /* CC22: clear bit 4, set bits 0-2 */
+            XDATA_REG8(0xCC22) = XDATA_REG8(0xCC22) & 0xEF;
+            XDATA_REG8(0xCC22) = (XDATA_REG8(0xCC22) & 0xF8) | 0x07;
+            if (ae8 == 0) {
+                XDATA_REG8(0x0AE8) = 0x0F;
+            } else if (ae8 < 0x0B) {
+                /* D3B4: lookup CC24/CC25 from code table at 0x4DBF+ae8*2 */
+                /* For simplicity, set 0x0AE8 = 0x0F (matches final state) */
+                XDATA_REG8(0x0AE8) = 0x0F;
+            } else {
+                XDATA_REG8(0x0AE8) = 0x0F;
+            }
+        }
+        /* 0x0AE8==0x0F → D3CE (return) — skip all CC22/CC23 */
+    }
+
+    /* Stock 0xBE1A: call 0xDF86 — CC1C/CC5C bulk transfer descriptors
+     * First calls E3C6 (CC1D/CC5D reset), then configures CC1C/CC5C */
+    XDATA_REG8(0x044C) = 0x00;  /* E3C6 preamble */
+    XDATA_REG8(0xCC1D) = 0x04;
+    XDATA_REG8(0xCC1D) = 0x02;
+    XDATA_REG8(0xCC5D) = 0x04;
+    XDATA_REG8(0xCC5D) = 0x02;
+    /* CC1C/CC1E/CC1F */
+    XDATA_REG8(0xCC1C) = (XDATA_REG8(0xCC1C) & 0xF8) | 0x06;
+    XDATA_REG8(0xCC1E) = 0x00;
+    XDATA_REG8(0xCC1F) = 0x8B;
+    /* CC5C/CC5E/CC5F */
+    XDATA_REG8(0xCC5C) = (XDATA_REG8(0xCC5C) & 0xF8) | 0x04;
+    XDATA_REG8(0xCC5E) = 0x00;
+    XDATA_REG8(0xCC5F) = 0xC7;
+
+    /* Stock 0xBE1D: call 0xC24C — post-link bridge setup (checks 0x06E3)
+     * If 0x06E3 != 0: clear it, set 0x06E4/E5=1, clear state, do bridge init.
+     * We handle bridge config separately in pcie_post_train, but clear the
+     * state variables that stock clears here. */
+    if (XDATA_REG8(0x06E3)) {
+        uint16_t j;
+        XDATA_REG8(0x06E3) = 0x00;
+        XDATA_REG8(0x06E4) = 0x01;
+        XDATA_REG8(0x06E5) = 0x01;
+        XDATA_REG8(0x05A4) = 0x00;
+        XDATA_REG8(0x06E8) = 0x00;
+        XDATA_REG8(0x05A9) = 0x00;
+        XDATA_REG8(0x05AA) = 0x00;
+        XDATA_REG8(0x0AF7) = 0x00;  /* 54BB again */
+        /* Clear 0x05B0-0x0632 area (stock C24C loop via 0x0BBE helper) */
+        for (j = 0x05B0; j <= 0x0631; j++) XDATA_REG8(j) = 0x00;
+        XDATA_REG8(0x05B1) = 0x10;  /* stock C2B4 */
+    }
+
+    /* Stock 0xBE20: ljmp 0x494D — doorbell dance + initial C42C */
+    doorbell_dance();
+
+    /* Stock: 0x494D ends with ljmp 0xC16C — post-CSW cleanup */
+    post_csw_cleanup();
+
+    uart_puts("[SI]\n");
+}
+
+/*
+ * do_bulk_init - MSC engine initialization (stock firmware 0xB1C5-0xB285)
+ *
+ * Called from SET_CONFIG AFTER state_init. Configures MSC/NVMe-USB bridge
+ * engine registers, does the SECOND C42C arm, then configures DMA descriptors
+ * and USB speed settings.
+ *
+ * ONLY contains stock B1C5 body — no non-stock EP config, buffer clears,
+ * MSC toggles, or EP reconfig that were previously mixed in.
+ */
+/*
+ * do_bulk_init - MSC engine initialization (from master branch, proven working)
+ *
+ * Configures USB bulk endpoints, clears D800 buffer, does MSC toggle/reset,
+ * doorbell dance, and arms MSC for first CBW reception.
+ */
 static void do_bulk_init(void) {
     uint16_t j;
     uint8_t t;
-    XDATA_REG8(0x0F10) += 1;  /* diagnostic: do_bulk_init call count */
 
     /* Clear EP/NVMe/FIFO registers */
     REG_USB_EP_READY = 0xFF; REG_USB_EP_CTRL_9097 = 0xFF;
@@ -377,156 +755,20 @@ static void do_bulk_init(void) {
     REG_NVME_DOORBELL &= ~NVME_DOORBELL_BIT3;
     REG_NVME_DOORBELL &= ~NVME_DOORBELL_BIT4;
 
-    /* Stock firmware MSC engine init (0xB1C5-0xB24F)
-     * These registers configure the MSC/NVMe-USB bridge engine.
-     * Must be written BEFORE the initial C42C=0x01 trigger. */
+    arm_msc();
 
-    /* 92C0 |= 0x80: Power enable bit 7 */
-    XDATA_REG8(0x92C0) = (XDATA_REG8(0x92C0) & 0x7F) | 0x80;
-
-    /* 91D1 = 0x0F: Clear all link events */
-    XDATA_REG8(0x91D1) = 0x0F;
-
-    /* 9300-9302: Buffer config */
-    XDATA_REG8(0x9300) = 0x0C;
-    XDATA_REG8(0x9301) = 0xC0;
-    XDATA_REG8(0x9302) = 0xBF;
-
-    /* 9091 = 0x1F: Control phase */
-    XDATA_REG8(0x9091) = 0x1F;
-
-    /* 9093 = 0x0F: EP status */
-    XDATA_REG8(0x9093) = 0x0F;
-
-    /* 91C1 = 0xF0: PHY control */
-    XDATA_REG8(0x91C1) = 0xF0;
-
-    /* 9303-9305: Buffer descriptors */
-    XDATA_REG8(0x9303) = 0x33;
-    XDATA_REG8(0x9304) = 0x3F;
-    XDATA_REG8(0x9305) = 0x40;
-
-    /* 9002 = 0xE0: USB config */
-    XDATA_REG8(0x9002) = 0xE0;
-
-    /* 9005 = 0xF0: EP0 length high */
-    XDATA_REG8(0x9005) = 0xF0;
-
-    /* 90E2 = 0x01: MSC gate register (CRITICAL for C42C) */
-    XDATA_REG8(0x90E2) = 0x01;
-
-    /* 905E &= ~0x01: EP control clear bit 0 */
-    XDATA_REG8(0x905E) = XDATA_REG8(0x905E) & 0xFE;
-
-    /* Stock 0xB219-0xB223: Initial MSC arm (C42C=0x01, C42D &= ~0x01)
-     * NOTE: Stock does NOT write "USBS" signature for initial arm.
-     * The "USBS" write only happens in scsi_csw_build (0x494D). */
-    REG_USB_MSC_CTRL = 0x01;              /* C42C = 0x01 */
-    REG_USB_MSC_STATUS &= ~0x01;          /* C42D &= ~0x01 */
-
-    /* Stock 0xB224-0xB240: Post-C42C initialization
-     * nvme_prp_queue_init(R7=0) at 0xCF3D:
-     *   C430-C433 = 0xFF, C440-C443 = 0xFF
-     *   9096-9097 = 0xFF, 9098 = 0x03
-     *   C438-C43B = 0xFF, C448-C44B = 0xFF
-     *   9011-9017 = 0xFF, 9018 = 0x03, 9010 = 0xFE
-     *   9096-909D = 0xFF, 909E = 0x03 */
-    XDATA_REG8(0xC430) = 0xFF; XDATA_REG8(0xC431) = 0xFF;
-    XDATA_REG8(0xC432) = 0xFF; XDATA_REG8(0xC433) = 0xFF;
-    XDATA_REG8(0xC440) = 0xFF; XDATA_REG8(0xC441) = 0xFF;
-    XDATA_REG8(0xC442) = 0xFF; XDATA_REG8(0xC443) = 0xFF;
-    XDATA_REG8(0x9096) = 0xFF; XDATA_REG8(0x9097) = 0xFF;
-    XDATA_REG8(0x9098) = 0xFF; XDATA_REG8(0x9099) = 0xFF;
-    XDATA_REG8(0x909A) = 0xFF; XDATA_REG8(0x909B) = 0xFF;
-    XDATA_REG8(0x909C) = 0xFF; XDATA_REG8(0x909D) = 0xFF;
-    XDATA_REG8(0x909E) = 0x03;
-    XDATA_REG8(0xC438) = 0xFF; XDATA_REG8(0xC439) = 0xFF;
-    XDATA_REG8(0xC43A) = 0xFF; XDATA_REG8(0xC43B) = 0xFF;
-    XDATA_REG8(0xC448) = 0xFF; XDATA_REG8(0xC449) = 0xFF;
-    XDATA_REG8(0xC44A) = 0xFF; XDATA_REG8(0xC44B) = 0xFF;
-    XDATA_REG8(0x9011) = 0xFF; XDATA_REG8(0x9012) = 0xFF;
-    XDATA_REG8(0x9013) = 0xFF; XDATA_REG8(0x9014) = 0xFF;
-    XDATA_REG8(0x9015) = 0xFF; XDATA_REG8(0x9016) = 0xFF;
-    XDATA_REG8(0x9017) = 0xFF;
-    XDATA_REG8(0x9018) = 0x03;
-    XDATA_REG8(0x9010) = 0xFE;
-
-    /* nvme_link_init at 0xDF5E:
-     *   C428 &= ~0x08
-     *   C473 = (C473 & ~0x40) | 0x40  (set bit 6)
-     *   C473 = (C473 & ~0x20) | 0x20  (set bit 5) */
-    XDATA_REG8(0xC428) = XDATA_REG8(0xC428) & 0xF7;
-    XDATA_REG8(0xC473) = (XDATA_REG8(0xC473) & 0xBF) | 0x40;
-    XDATA_REG8(0xC473) = (XDATA_REG8(0xC473) & 0xDF) | 0x20;
-
-    /* 91C3 &= ~0x20: PHY control */
-    XDATA_REG8(0x91C3) = XDATA_REG8(0x91C3) & 0xDF;
-
-    /* 91C0 toggle bit 0: PHY reset */
-    XDATA_REG8(0x91C0) = (XDATA_REG8(0x91C0) & 0xFE) | 0x01;
-    XDATA_REG8(0x91C0) = XDATA_REG8(0x91C0) & 0xFE;
-
-    /* 0x54BB: clear_pcie_enum_done (0x0AF7 = 0x00) */
-    XDATA_REG8(0x0AF7) = 0x00;
-
-    /* Stock 0xB243-0xB25F: call 0xE292(R5=0x8F, R4=0x01, R7=0x04)
-     * Configures USB endpoint DMA descriptor (CC10-CC13).
-     * Without this, C42C=0x01 doesn't produce bulk IN data.
-     *
-     * 0xE642: CC11=0x04 then CC11=0x02 (reset DMA descriptor engine)
-     * 0xE292: CC10 = (CC10 & 0xF8) | R7, CC12 = R4, CC13 = R5, CC11 = 0x01 (trigger)
-     *
-     * Then stock waits for E318 bit 4 OR CC11 bit 1 before calling 0xE642 again. */
-
-    /* Step 1: Reset DMA descriptor engine (0xE642) */
-    XDATA_REG8(0xCC11) = 0x04;
-    XDATA_REG8(0xCC11) = 0x02;
-
-    /* Step 2: Configure DMA descriptor (0xE292 body) */
-    XDATA_REG8(0xCC10) = (XDATA_REG8(0xCC10) & 0xF8) | 0x04;  /* R7=0x04 */
-    XDATA_REG8(0xCC12) = 0x01;                                  /* R4=0x01 */
-    XDATA_REG8(0xCC13) = 0x8F;                                  /* R5=0x8F */
-    XDATA_REG8(0xCC11) = 0x01;                                  /* Trigger */
-
-    /* Step 3: Wait for E318 bit 4 or CC11 bit 1 (stock 0xB24C-0xB25C) */
-    for (j = 0; j < 30000; j++) {
-        if (XDATA_REG8(0xE318) & 0x10) break;
-        if (XDATA_REG8(0xCC11) & 0x02) break;
-    }
-
-    /* Step 4: Reset DMA descriptor engine again (0xE642 called at 0xB25F) */
-    XDATA_REG8(0xCC11) = 0x04;
-    XDATA_REG8(0xCC11) = 0x02;
-
-    /* Stock 0xB262-0xB285: USB speed check and 09FA/0AE1 config.
-     * 91C0 bits 4:3 = USB speed. Speed 2 = USB3 SuperSpeed.
-     * Writes XDATA[0x09FA]=0x04 (via 0xBC07), then:
-     *   speed==2: XDATA[0x0AE1]=0x01
-     *   speed!=2: XDATA[0x0AE1]=0x02 */
-    {
-        uint8_t speed = (XDATA_REG8(0x91C0) >> 3) & 0x03;
-        XDATA_REG8(0x09FA) = 0x04;
-        XDATA_REG8(0x0AE1) = (speed == 0x02) ? 0x01 : 0x02;
-    }
-
-    /* EP reconfig pass 2 — needed for bulk OUT to work.
-     * NOT in stock do_bulk_init (0xB1C5), but required in our init
-     * flow because we combine multiple stock init phases. */
+    /* 9200 toggle (second pass) */
     REG_USB_CTRL_9200 |= 0x40;
     REG_USB_MSC_CFG |= 0x01;
     REG_USB_MSC_CFG &= ~0x01;
     REG_USB_CTRL_9200 &= ~0x40;
+
+    /* EP reconfig (second pass) */
     t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
     t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
     REG_USB_EP_CFG2 = 0x01; REG_USB_EP_CFG2 = 0x08;
     t = REG_USB_EP_CTRL_905F; REG_USB_EP_CTRL_905F = t;
     REG_USB_EP_STATUS_90E3 = 0x02;
-
-    /* Re-arm MSC AFTER EP reconfig (which resets the engine) */
-    XDATA_REG8(0x90E2) = 0x01;
-    XDATA_REG8(0x905E) = XDATA_REG8(0x905E) & 0xFE;
-    REG_USB_MSC_CTRL = 0x01;
-    REG_USB_MSC_STATUS &= ~0x01;
 
     bulk_ready = 1;
     uart_puts("[rdy]\n");
@@ -551,33 +793,21 @@ static void do_bulk_init(void) {
  * The EP_COMPLETE handler does CC17 DMA descriptor reset, which
  * prepares the hardware for the next C42C.
  */
+/*
+ * send_csw - Send CSW via MSC engine trigger (from master, proven working)
+ *
+ * D800 buffer already has "USBS" + tag set up from arm_msc/handle_cbw.
+ * We just set status + residue, trigger bulk DMA, wait for EP_COMPLETE,
+ * then re-arm MSC for next CBW.
+ */
 static void send_csw(uint8_t status) {
-    XDATA_REG8(0x0F14) = 0xC3;  /* diagnostic: send_csw entry */
-
-    /* Write "USBS" signature + tag + residue + status to D800 EP buffer.
-     * Stock 0x494D: writes USBS (D800-D803), sets 901A=0x0D, C42C=0x01. */
-    EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-    EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
-    EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
-    EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+    EP_BUF(0x0C) = status;
     EP_BUF(0x08) = 0x00; EP_BUF(0x09) = 0x00;
     EP_BUF(0x0A) = 0x00; EP_BUF(0x0B) = 0x00;
-    EP_BUF(0x0C) = status;
-
-    /* Set CSW length (stock 0x49B1) */
-    REG_USB_MSC_LENGTH = 0x0D;
-
-    /* C42C = 0x01 inline in ISR (matching stock firmware 0x49B5).
-     * Stock firmware writes C42C from inside INT0 ISR after CE88+CBW+CSW.
-     * Previous C42C-in-ISR crashes were caused by missing C802 gate check,
-     * which let 9101 bit 1 spam the ISR. With C802 gate, ISR is stable. */
+    REG_USB_BULK_DMA_TRIGGER = 0x01;
+    while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
     REG_USB_MSC_CTRL = 0x01;
     REG_USB_MSC_STATUS &= ~0x01;
-
-    /* Post-CSW cleanup deferred to main loop (stock 0xC16C) */
-    need_rearm = 1;
-
-    XDATA_REG8(0x0F14) = 0xC4;  /* diagnostic: C42C fired in ISR */
 }
 
 static void sw_dma_bulk_in(uint16_t addr, uint8_t len) {
@@ -627,63 +857,16 @@ static void sw_dma_bulk_in(uint16_t addr, uint8_t len) {
     REG_USB_MSC_LENGTH = 0x0D;
 }
 
-/*
- * cbw_dma_setup - Phase 1 of CBW processing (stock: ISR first entry at 0x0FF8)
- *
- * Stock ISR flow: first INT0 fires with 0x9000 bit 0 set.
- * ISR reads C47B (==0), calls 0x17DB(R7=2), sets 90E2=0x01.
- * 0x17DB checks 0x0A7D: if !=0 reads 911D/911E into 0x0056/0x0057,
- * sets 0x0052 |= 0x06. If ==0, does CE88 handshake.
- *
- * We combine both paths since our firmware handles 0x0A7D differently.
- * This function must complete and return to main loop BEFORE
- * handle_cbw is called — giving hardware time to set up bulk IN path.
- */
-static void cbw_dma_setup(void) {
-    XDATA_REG8(0x0F14) = 0xD1;  /* diagnostic: dma_setup entered */
-    /* Stock 0x17DB(R7=2) → 0x19C8: DMA state setup */
-    XDATA_REG8(0x0A7D) = 0x02;
-
-    /* Stock 0x19C8 with 0x0A7D != 0 (second entry path):
-     * Read CBW transfer length from 911D/911E → 0x0056/0x0057
-     * Set 0x0052 |= 0x06 */
-    {
-        uint8_t xfer_hi = XDATA_REG8(0x911D);
-        uint8_t xfer_lo = XDATA_REG8(0x911E);
-        XDATA_REG8(0x0056) = xfer_hi;
-        XDATA_REG8(0x0057) = xfer_lo;
-        XDATA_REG8(0x0052) = XDATA_REG8(0x0052) | 0x06;
-    }
-
-    /* Stock ISR sets 90E2 = 0x01 as gate register */
-    XDATA_REG8(0x90E2) = 0x01;
-
-    uart_puts("[DMA1]\n");
-}
-
-/*=== CBW Handler ===*/
+/*=== CBW Handler (from master, proven working) ===*/
 static void handle_cbw(void) {
     uint8_t opcode;
-    XDATA_REG8(0x0F14) = 0xC1;  /* diagnostic: handle_cbw entered */
 
-    /* Stock 0x346B-0x3483: Clear state variables before DMA handshake.
-     * These clears are done at the start of the CBW processor (0x3458). */
-    XDATA_REG8(0x0B00) = 0x00;
-    XDATA_REG8(0x053C) = 0x00;
-    XDATA_REG8(0x00C2) = 0x00;
-    XDATA_REG8(0x0518) = 0x00;
-    XDATA_REG8(0x014E) = 0x00;
-    XDATA_REG8(0x00E5) = 0x00;
+    if (!(REG_USB_MODE & 0x01)) return;
+    REG_USB_MODE = 0x01;
 
-    /* Stock ISR second entry sets 90E2 = 0x01 as gate register */
-    XDATA_REG8(0x90E2) = 0x01;
-
-    /* DMA handshake (CE88/CE89) — stock firmware does this at 0x3484-0x348C.
-     * CE88 write transitions the DMA state machine for bulk data processing.
-     * CE89 bit 0 = ready, bit 1 = error.
-     * Skipped for now — CE88 may interfere with deferred C42C approach.
-     * CBW data registers (911F-912A) are populated by MSC engine on arrival. */
-    XDATA_REG8(0x0F14) = 0xC2;  /* diagnostic: CE88 skipped */
+    /* CE88/CE89 DMA handshake */
+    REG_BULK_DMA_HANDSHAKE = 0x00;
+    while (!(REG_USB_DMA_STATE & USB_DMA_STATE_READY)) { }
 
     cbw_tag[0] = REG_CBW_TAG_0; cbw_tag[1] = REG_CBW_TAG_1;
     cbw_tag[2] = REG_CBW_TAG_2; cbw_tag[3] = REG_CBW_TAG_3;
@@ -692,23 +875,27 @@ static void handle_cbw(void) {
     EP_BUF(0x0C) = 0x00;
 
     opcode = REG_USB_CBWCB_0;
-    XDATA_REG8(0x0F15) = opcode;  /* diagnostic: last CBW opcode */
-    uart_putc('C'); uart_puthex(opcode); uart_putc(' ');
+    uart_puts("[CBW:"); uart_puthex(opcode); uart_puts("]\n");
 
     if (opcode == 0xE5) {
         uint8_t val = REG_USB_CBWCB_1;
         uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
         XDATA_REG8(addr) = val;
+        /* Track B297 writes (PCIe config trigger) during PCIe init.
+         * If link isn't up yet, the hardware can't complete the config access.
+         * We'll re-trigger B297 after PCIe init completes. */
+        if (addr == 0xB297 && val == 0x01 && pcie_initialized < 3)
+            pcie_cfg_pending = 1;
         send_csw(0x00);
     } else if (opcode == 0xE4) {
+        /* Read XDATA — data IN phase via sw_dma_bulk_in, then CSW */
         uint8_t sz = REG_USB_CBWCB_1;
         uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
         uint8_t i;
         if (sz == 0) sz = 1;
-        /* Copy read data to EP buffer for data-in phase */
         for (i = 0; i < sz; i++) EP_BUF(i) = XDATA_REG8(addr + i);
-        sw_dma_bulk_in(addr, sz);
-        /* Restore CSW header */
+        sw_dma_bulk_in(0xD800, sz);
+        /* Restore CSW header after data-in */
         EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
         EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
         EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
@@ -733,6 +920,7 @@ static void handle_cbw(void) {
         bulk_out_state = 1;
         return;
     } else if (opcode == 0xE8) {
+        if (pcie_initialized == 0) need_pcie_init = 1;
         send_csw(0x00);
     } else if (opcode == 0x00) {
         /* SCSI TEST_UNIT_READY */
@@ -1013,86 +1201,22 @@ static void handle_usb_reset(void) {
  */
 static void poll_bulk_events(void) {
     uint8_t st = REG_USB_PERIPH_STATUS;
-
-    poll_counter++;
-    /* Periodic debug: show 9101 state every ~10000 polls */
-    if ((poll_counter & 0x3FFF) == 0) {
-        uart_puts("[p ");
-        uart_puthex(st);
-        uart_puts("]\n");
-    }
-
-    /* Ack EP_COMPLETE if pending */
     if (st & USB_PERIPH_EP_COMPLETE) {
         REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
     }
-
-    /* Check for CBW received (bit 6 of 9101) OR bulk data (bit 2).
-     * Use two-phase processing like stock firmware ISR:
-     * Phase 1 (need_dma_setup): DMA state setup + handshake
-     * Phase 2 (need_cbw_process): CBW parsing + CSW send */
-    if (st & (USB_PERIPH_CBW_RECEIVED | USB_PERIPH_BULK_DATA)) {
-        XDATA_REG8(0x0F12) += 1;  /* diagnostic: CBW detected count */
-        if (!need_dma_setup && !need_cbw_process) {
-            need_dma_setup = 1;
-        }
-    }
-    XDATA_REG8(0x0F13) = st;  /* diagnostic: last 9101 value */
+    if (st & USB_PERIPH_CBW_RECEIVED) need_cbw_process = 1;
 }
 
 void int0_isr(void) __interrupt(0) {
     uint8_t periph_status, phase;
 
-    /* Stock ISR at 0x0E50: C802 bit 0 gate check.
-     * C802 is the interrupt gate register. If bit 0 is not set,
-     * the ISR should skip main processing and go to exit path.
-     * Without this check, 9101 bit 1 (which we don't handle) causes
-     * the ISR to fire continuously, starving the main loop. */
-    if (!(XDATA_REG8(0xC802) & 0x01)) {
-        return;
-    }
-
     periph_status = REG_USB_PERIPH_STATUS;
-    XDATA_REG8(0x0F18) += 1;  /* ISR fire count */
-    XDATA_REG8(0x0F19) = periph_status;  /* last ISR periph_status */
 
-    if (periph_status & USB_PERIPH_LINK_EVENT) {
-        XDATA_REG8(0x0F1B) += 1;  /* link event count */
-        /* Stock ISR at 0x1039: 9101 bit 4 checks 9302 FIRST, then 9300.
-         * 9302 has PHY/link events that need acknowledgment (stock acks bits 3,4,5,0,1,2).
-         * Without acking 9302, USB3 hardware may drop the link. */
-        {
-            uint8_t r9302 = XDATA_REG8(0x9302);
-            if (r9302 & 0x08) XDATA_REG8(0x9302) = 0x08;  /* bit 3 */
-            else if (r9302 & 0x10) XDATA_REG8(0x9302) = 0x10;  /* bit 4 */
-            else if (r9302 & 0x20) XDATA_REG8(0x9302) = 0x20;  /* bit 5 */
-            else if (r9302 & 0x01) XDATA_REG8(0x9302) = 0x01;  /* bit 0 */
-            else if (r9302 & 0x02) XDATA_REG8(0x9302) = 0x02;  /* bit 1 */
-            else if (r9302 & 0x04) XDATA_REG8(0x9302) = 0x04;  /* bit 2 */
-        }
-        /* Then check 9300 for SS_FAIL/SS_OK (stock: 0x109C) */
-        handle_link_event();
-        return;
-    }
+    if (periph_status & USB_PERIPH_LINK_EVENT) handle_link_event();
+    handle_91d1_events();
 
-    /* Stock ISR at 0x0F4A: when 9101 bit 0 fires, dispatch on 91D1 bits.
-     * 9101 bit 0 is NOT bus reset — it's the 91D1 event indicator.
-     * Previously we called handle_usb_reset() here which KILLED the USB3 link
-     * by running a full USB reset sequence on every 91D1 power management event. */
-    if (periph_status & 0x01) {  /* 9101 bit 0: 91D1 events pending */
-        handle_91d1_events();
-        return;
-    }
-
-    /* 9093 event acknowledgment — stock firmware at 0x0FA5-0x0FE4 checks 9093 bits
-     * when 9101 bit 2 fires. Without acking these events, USB3 hardware may drop link.
-     * Ack any pending 9093 events by writing back the pending bits. */
-    if (periph_status & 0x04) {  /* 9101 bit 2 */
-        uint8_t r9093 = XDATA_REG8(0x9093);
-        if (r9093 & 0x0F) {
-            XDATA_REG8(0x9093) = r9093 & 0x0F;  /* ack pending bits */
-        }
-    }
+    if ((periph_status & USB_PERIPH_91D1_EVENT) && !(periph_status & USB_PERIPH_CONTROL))
+        handle_usb_reset();
 
     if (periph_status & USB_PERIPH_BULK_REQ) {
         uint8_t r9301 = REG_BUF_CFG_9301;
@@ -1107,43 +1231,7 @@ void int0_isr(void) __interrupt(0) {
         }
     }
 
-    /* EP_COMPLETE (bit 5) — acknowledge and reset DMA descriptors for next cycle.
-     * Stock firmware: 0x0EF4 → 0x5333 → 0x5476 → 0xD5FB (CC17 DMA reset).
-     * EP_COMPLETE fires after C42C completes (CSW sent to host).
-     * The CC17=0x04/0x02/0x01 sequence resets the DMA descriptor engine,
-     * which is REQUIRED before the next C42C can work. */
-    if (periph_status & USB_PERIPH_EP_COMPLETE) {
-        XDATA_REG8(0x0F1C) += 1;  /* EP_COMPLETE count */
-        REG_USB_EP_STATUS_90E3 = 0x02;
-
-        /* CC17 DMA descriptor reset (stock 0xD5FB: CC17=0x04, 0x02, 0x01).
-         * Stock has gate checks (0x0B3D, 9091 bit 0, 0x07E1==1) before writing,
-         * but we skip those since we control the state directly. */
-        XDATA_REG8(0xCC17) = 0x04;
-        XDATA_REG8(0xCC17) = 0x02;
-        XDATA_REG8(0xCC17) = 0x01;
-
-        /* Set 90E2 gate for next CBW (stock 0x0EF4 path) */
-        XDATA_REG8(0x90E2) = 0x01;
-    }
-
-    /* CBW handling — CE88 DMA handshake + CBW parse + send_csw in ISR.
-     * send_csw uses sw_dma_bulk_in to deliver CSW data, then requests
-     * do_bulk_init from main loop to re-arm the MSC engine. */
-    if (bulk_ready && (periph_status & USB_PERIPH_CBW_RECEIVED)) {
-        XDATA_REG8(0x0F12) += 1;  /* diagnostic */
-        cbw_dma_setup();
-        handle_cbw();
-        return;
-    }
-    /* Diagnostic: track if CBW_RECEIVED seen but not processed */
-    if (periph_status & USB_PERIPH_CBW_RECEIVED) {
-        XDATA_REG8(0x0F1A) += 1;  /* CBW seen but not bulk_ready */
-    }
-
-    if (!(periph_status & USB_PERIPH_CONTROL)) {
-        return;
-    }
+    if (!(periph_status & USB_PERIPH_CONTROL)) return;
     phase = REG_USB_CTRL_PHASE;
 
     if (phase == USB_CTRL_PHASE_DATA_OUT || phase == 0x00) {
@@ -1158,7 +1246,8 @@ void int0_isr(void) __interrupt(0) {
         REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_IN;
     } else if (phase & USB_CTRL_PHASE_SETUP) {
         uint8_t bmReq, bReq, wValL, wValH, wLenL;
-        REG_USB_CONFIG = REG_USB_CONFIG;  /* readback-writeback (from min_enum) */
+
+        REG_USB_CONFIG = REG_USB_CONFIG;  /* readback-writeback */
         REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
         bmReq = REG_USB_SETUP_BMREQ; bReq = REG_USB_SETUP_BREQ;
         wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
@@ -1174,27 +1263,21 @@ void int0_isr(void) __interrupt(0) {
             need_bulk_init = 1;
             send_zlp_ack();
         } else if (bmReq == 0x00 && (bReq == USB_REQ_SET_SEL || bReq == USB_REQ_SET_ISOCH_DELAY)) {
-            /* USB 3.0 required no-data requests */
             send_zlp_ack();
         } else if (bmReq == 0x02 && bReq == 0x01) {
-            /* CLEAR_FEATURE(HALT) -- re-arm MSC
-             * NOTE: can't use arm_msc() (C42C=0x01) here as it
-             * crashes USB3 SuperSpeed. Use do_bulk_init via main loop. */
+            /* CLEAR_FEATURE(HALT) -- re-arm MSC */
             send_zlp_ack();
-            need_bulk_init = 1;
+            arm_msc();
         } else if (bmReq == 0xC0 && bReq == 0xE4) {
-            /* Vendor read XDATA via control */
             uint16_t addr = ((uint16_t)wValH << 8) | wValL;
             uint8_t vi;
             for (vi = 0; vi < wLenL; vi++) DESC_BUF[vi] = XDATA_REG8(addr + vi);
             send_descriptor_data(wLenL);
         } else if (bmReq == 0x40 && bReq == 0xE5) {
-            /* Vendor write XDATA via control */
             uint16_t addr = ((uint16_t)wValH << 8) | wValL;
             XDATA_REG8(addr) = REG_USB_SETUP_WIDX_L;
             send_zlp_ack();
         } else if (bmReq == 0x40 && bReq == 0xE6) {
-            /* Vendor write XDATA block via control */
             uint16_t addr = ((uint16_t)wValH << 8) | wValL;
             uint8_t vi;
             if (is_usb3) {
@@ -1279,8 +1362,11 @@ static void timer_wait(uint8_t threshold_hi, uint8_t threshold_lo, uint8_t mode)
     REG_TIMER0_THRESHOLD_LO = threshold_lo;
     /* Start timer */
     REG_TIMER0_CSR = 0x01;  /* TIMER_CSR_ENABLE */
-    /* Poll until done (bit 1 set) */
-    while (!(REG_TIMER0_CSR & 0x02)) { }
+    /* Poll until done (bit 1 set), servicing USB bulk during PCIe waits */
+    while (!(REG_TIMER0_CSR & 0x02)) {
+        poll_bulk_events();
+        if (need_cbw_process) { need_cbw_process = 0; handle_cbw(); }
+    }
     /* Clear done flag */
     REG_TIMER0_CSR = 0x02;
 }
@@ -3031,7 +3117,7 @@ static void hw_init(void) {
 void main(void) {
     IE = 0;
     is_usb3 = 0; need_bulk_init = 0; need_dma_setup = 0; bulk_ready = 0; bulk_out_state = 0;
-    pcie_initialized = 0; need_pcie_init = 0; config_done = 0; need_rearm = 0;
+    pcie_initialized = 0; need_pcie_init = 0; config_done = 0; need_rearm = 0; need_state_init = 0; pcie_cfg_pending = 0;
     /* Clear diagnostic area */
     { uint8_t di; for (di = 0; di < 32; di++) XDATA_REG8(0x0F00 + di) = 0x00; }
     REG_UART_LCR &= 0xF7;
@@ -3092,8 +3178,11 @@ void main(void) {
 
     uart_puts("[ML]\n");
     while (1) {
-        /* Main loop iteration counter (wraps at 0xFF) */
-        XDATA_REG8(0x0F1D) += 1;
+        REG_CPU_KEEPALIVE = 0x0C;
+        poll_bulk_events();
+
+        if (need_bulk_init) { need_bulk_init = 0; do_bulk_init(); }
+        if (need_cbw_process) { need_cbw_process = 0; handle_cbw(); }
 
         /* Deferred ISR status print */
         if (isr_link_state) {
@@ -3112,23 +3201,10 @@ void main(void) {
             isr_link_state = 0;
         }
 
-        /* C42C is now done inline in send_csw() (inside ISR, matching stock).
-         * Post-CSW cleanup runs here when need_rearm is set. */
+        /* Post-CSW cleanup runs here when need_rearm is set. */
         if (need_rearm) {
             need_rearm = 0;
-
-            /* Post-CSW cleanup (stock 0xC16C) */
-            XDATA_REG8(0x000B) = 0x00;
-            XDATA_REG8(0x000A) = 0x00;
-            XDATA_REG8(0x0052) = 0x00;
-
-            /* C42A LINK_GATE toggle + nvme_link_init (stock 0xC1C8-0xC1DA) */
-            XDATA_REG8(0xC42A) = (XDATA_REG8(0xC42A) & 0xDF) | 0x20;
-            XDATA_REG8(0xC428) = XDATA_REG8(0xC428) & 0xF7;
-            XDATA_REG8(0xC473) = (XDATA_REG8(0xC473) & 0xBF) | 0x40;
-            XDATA_REG8(0xC473) = (XDATA_REG8(0xC473) & 0xDF) | 0x20;
-            XDATA_REG8(0xC42A) = XDATA_REG8(0xC42A) & 0xDF;
-
+            post_csw_cleanup();
             XDATA_REG8(0x0F14) = 0xC5;  /* diagnostic: post-CSW cleanup done */
         }
 
@@ -3158,6 +3234,7 @@ void main(void) {
              * ISR can process CBWs during PCIe timer_waits.
              * Without this, tinygrad's E5 writes timeout because bulk_ready=0
              * during the ~3s PCIe init window. */
+            if (need_state_init) { need_state_init = 0; state_init(); }
             if (need_bulk_init) { need_bulk_init = 0; do_bulk_init(); }
 
             pcie_perst_deassert();
@@ -3185,6 +3262,15 @@ void main(void) {
                          * CBW handler at 0x34A3 checks this — without it, CBW processing
                          * takes the error path and doesn't send CSW properly. */
                         XDATA_REG8(0x0AF7) = 0x01;
+                        /* Re-trigger any PCIe config request that arrived during init.
+                         * tinygrad writes B297=0x01 before PCIe link is up — hardware
+                         * can't complete the config access. Now that link is trained,
+                         * re-write B297 to restart the config transaction. */
+                        if (pcie_cfg_pending) {
+                            pcie_cfg_pending = 0;
+                            XDATA_REG8(0xB297) = 0x01;
+                            uart_puts("[B297!]\n");
+                        }
                         uart_puts("[L0!]\n");
                     } else {
                         pcie_initialized = 2;
@@ -3193,12 +3279,6 @@ void main(void) {
                 }
             }
         }
-
-        /* Bulk init AFTER PCIe — PCIe PLL change resets USB bulk engine,
-         * so do_bulk_init must run after pcie_post_train. */
-        if (need_bulk_init) { need_bulk_init = 0; do_bulk_init(); }
-
-        /* (C42C deferred trigger moved to top of main loop — see above) */
 
         if (bulk_out_state == 1) {
             REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_OUT;
