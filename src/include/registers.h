@@ -590,6 +590,14 @@
 #define REG_USB_CBWCB_3         XDATA_REG8(0x912D)  /* CBWCB[3] = addr high */
 #define REG_USB_CBWCB_4         XDATA_REG8(0x912E)  /* CBWCB[4] = addr low */
 #define REG_USB_CBWCB_5         XDATA_REG8(0x912F)  /* CBWCB[5] = reserved */
+#define REG_USB_CBWCB_6         XDATA_REG8(0x9130)  /* CBWCB[6] */
+#define REG_USB_CBWCB_7         XDATA_REG8(0x9131)  /* CBWCB[7] */
+#define REG_USB_CBWCB_8         XDATA_REG8(0x9132)  /* CBWCB[8] */
+#define REG_USB_CBWCB_9         XDATA_REG8(0x9133)  /* CBWCB[9] */
+#define REG_USB_CBWCB_10        XDATA_REG8(0x9134)  /* CBWCB[10] = WRITE16 sector count MSB */
+#define REG_USB_CBWCB_11        XDATA_REG8(0x9135)  /* CBWCB[11] */
+#define REG_USB_CBWCB_12        XDATA_REG8(0x9136)  /* CBWCB[12] */
+#define REG_USB_CBWCB_13        XDATA_REG8(0x9137)  /* CBWCB[13] = WRITE16 sector count LSB */
 
 // USB Endpoint Control (0x9220)
 #define REG_USB_EP_CTRL_9220    XDATA_REG8(0x9220)  /* EP control (read in setup phase) */
@@ -1045,9 +1053,11 @@
 #define REG_NVME_CTRL           XDATA_REG8(0xC400)
 #define REG_NVME_STATUS         XDATA_REG8(0xC401)
 #define REG_NVME_CTRL_STATUS    XDATA_REG8(0xC412)
-#define   NVME_CTRL_STATUS_READY  0x02  // Bit 1: NVMe controller ready
+#define   NVME_CTRL_WRITE_DIR    0x01  // Bit 0: 1=WRITE (host→device), 0=READ
+#define   NVME_CTRL_DMA_START    0x02  // Bit 1: Start DMA transfer
+#define   NVME_CTRL_STATUS_READY  0x02  // Bit 1: NVMe controller ready (alias)
 #define REG_NVME_CONFIG         XDATA_REG8(0xC413)
-#define   NVME_CONFIG_MASK_LO    0x3F  // Bits 0-5: Config value
+#define   NVME_CONFIG_EP_MASK    0x3F  // Bits 0-5: Endpoint/channel index
 #define   NVME_CONFIG_MASK_HI    0xC0  // Bits 6-7: Config mode
 #define REG_NVME_DATA_CTRL      XDATA_REG8(0xC414)
 #define   NVME_DATA_CTRL_MASK     0xC0  // Bits 6-7: Data control mode
@@ -1067,14 +1077,18 @@
 #define REG_NVME_SCSI_CTRL      XDATA_REG8(0xC4C9)  // SCSI control byte
 #define REG_NVME_SCSI_DATA      XDATA_REG8(0xC4CA)  // SCSI data byte
 
-#define REG_NVME_CMD            XDATA_REG8(0xC420)
-#define REG_NVME_CMD_OPCODE     XDATA_REG8(0xC421)
+#define REG_NVME_CMD            XDATA_REG8(0xC420)  /* Also DMA xfer byte count high */
+#define REG_NVME_CMD_OPCODE     XDATA_REG8(0xC421)  /* Also DMA xfer byte count low */
+#define REG_NVME_DMA_XFER_HI   XDATA_REG8(0xC420)  /* DMA transfer byte count high (alias) */
+#define REG_NVME_DMA_XFER_LO   XDATA_REG8(0xC421)  /* DMA transfer byte count low (alias) */
 #define REG_NVME_LBA_LOW        XDATA_REG8(0xC422)
 #define REG_NVME_LBA_MID        XDATA_REG8(0xC423)
 #define REG_NVME_LBA_HIGH       XDATA_REG8(0xC424)
 #define REG_NVME_COUNT_LOW      XDATA_REG8(0xC425)
-#define REG_NVME_COUNT_HIGH     XDATA_REG8(0xC426)
-#define REG_NVME_ERROR          XDATA_REG8(0xC427)
+#define REG_NVME_DMA_ADDR_C426  XDATA_REG8(0xC426)  /* DMA sector count / buffer addr high */
+#define REG_NVME_DMA_ADDR_C427  XDATA_REG8(0xC427)  /* DMA sector count / buffer addr low */
+#define REG_NVME_COUNT_HIGH     XDATA_REG8(0xC426)  /* Alias for compatibility */
+#define REG_NVME_ERROR          XDATA_REG8(0xC427)  /* Alias for compatibility */
 #define REG_NVME_QUEUE_CFG      XDATA_REG8(0xC428)
 #define   NVME_QUEUE_CFG_MASK_LO  0x03  // Bits 0-1: Queue config low
 #define   NVME_QUEUE_CFG_BIT3     0x08  // Bit 3: Queue config flag

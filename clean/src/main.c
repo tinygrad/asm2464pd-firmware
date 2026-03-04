@@ -204,10 +204,10 @@ static __code const uint8_t dev_desc[] = {
 static __code const uint8_t cfg_desc[] = {
     /* Configuration descriptor */
     0x09, 0x02, 0x2C, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
-    /* Interface descriptor: class=0x08 (Mass Storage), subclass=0x06 (SCSI),
-     * protocol=0x50 (Bulk-Only Transport). Stock firmware uses these exact values.
-     * The ASM2464PD MSC engine may require class 0x08 to enable C42C bulk IN. */
-    0x09, 0x04, 0x00, 0x00, 0x02, 0x08, 0x06, 0x50, 0x00,
+    /* Interface descriptor: class=0xFF (vendor-specific), subclass=0x06,
+     * protocol=0x50. Using vendor class avoids kernel mass storage driver
+     * claiming the device (which causes libusb_reset_device on detach). */
+    0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0x06, 0x50, 0x00,
     /* EP1 IN (0x81) bulk, maxpacket 1024 */
     0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,
     0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
@@ -409,9 +409,21 @@ static void handle_set_config(void) {
     t = REG_USB_STATUS; REG_USB_STATUS = t;
     t = REG_USB_CTRL_924C; REG_USB_CTRL_924C = t;
 
+    /* Run bulk init BEFORE ZLP ACK to avoid race with first CBW.
+     * Host sends first CBW immediately after SET_CONFIG completes.
+     * MSC engine must be armed before the ZLP ACK so hardware can
+     * accept the CBW when it arrives. */
+    state_init();
+    do_bulk_init();
+    need_bulk_init = 0;
+    need_state_init = 0;
+
     send_zlp_ack();
-    need_bulk_init = 1;
     config_done = 1;
+    /* Start PCIe init immediately on SET_CONFIG instead of waiting for TUR.
+     * tinygrad sends pcie_cfg_req ~1s after SET_CONFIG. PCIe init takes ~5s.
+     * Starting early gives PCIe more time to complete before cfg requests arrive. */
+    need_pcie_init = 1;
     uart_puts("[C]\n");
 }
 
@@ -796,9 +808,12 @@ static void do_bulk_init(void) {
 /*
  * send_csw - Send CSW via MSC engine trigger (from master, proven working)
  *
- * D800 buffer already has "USBS" + tag set up from arm_msc/handle_cbw.
- * We just set status + residue, trigger bulk DMA, wait for EP_COMPLETE,
+ * D800 buffer already has "USBS" + tag set up from handle_cbw.
+ * We set status + residue, trigger bulk DMA, wait for EP_COMPLETE,
  * then re-arm MSC for next CBW.
+ *
+ * After EP_COMPLETE, we clear it via 90E3/EP_READY before re-arming
+ * to prevent stale EP_COMPLETE from confusing the next cycle.
  */
 static void send_csw(uint8_t status) {
     EP_BUF(0x0C) = status;
@@ -806,6 +821,8 @@ static void send_csw(uint8_t status) {
     EP_BUF(0x0A) = 0x00; EP_BUF(0x0B) = 0x00;
     REG_USB_BULK_DMA_TRIGGER = 0x01;
     while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
+    REG_USB_EP_STATUS_90E3 = 0x02;
+    REG_USB_EP_READY = 0x01;
     REG_USB_MSC_CTRL = 0x01;
     REG_USB_MSC_STATUS &= ~0x01;
 }
@@ -861,6 +878,8 @@ static void sw_dma_bulk_in(uint16_t addr, uint8_t len) {
 static void handle_cbw(void) {
     uint8_t opcode;
 
+    XDATA_REG8(0x0F0D)++;  /* diag: handle_cbw call count (before 90E2 check) */
+    XDATA_REG8(0x0F0C) = REG_USB_MODE;  /* diag: 90E2 value at entry */
     if (!(REG_USB_MODE & 0x01)) return;
     REG_USB_MODE = 0x01;
 
@@ -875,6 +894,8 @@ static void handle_cbw(void) {
     EP_BUF(0x0C) = 0x00;
 
     opcode = REG_USB_CBWCB_0;
+    XDATA_REG8(0x0F0F) = opcode;  /* diag: last CBW opcode */
+    XDATA_REG8(0x0F0E)++;         /* diag: CBW count */
     uart_puts("[CBW:"); uart_puthex(opcode); uart_puts("]\n");
 
     if (opcode == 0xE5) {
@@ -888,19 +909,35 @@ static void handle_cbw(void) {
             pcie_cfg_pending = 1;
         send_csw(0x00);
     } else if (opcode == 0xE4) {
-        /* Read XDATA — data IN phase via sw_dma_bulk_in, then CSW */
+        /* Read XDATA — two modes based on dCBWDataTransferLength:
+         *   xfer_len=0: embed up to 4 bytes in CSW residue field (test_bulk.py)
+         *   xfer_len>0: data IN phase via sw_dma_bulk_in (tinygrad ReadOp) */
         uint8_t sz = REG_USB_CBWCB_1;
         uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
-        uint8_t i;
+        uint8_t xfer_len = REG_USB_CBW_XFER_LEN_0;
         if (sz == 0) sz = 1;
-        for (i = 0; i < sz; i++) EP_BUF(i) = XDATA_REG8(addr + i);
-        sw_dma_bulk_in(0xD800, sz);
-        /* Restore CSW header after data-in */
-        EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-        EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
-        EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
-        EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
-        send_csw(0x00);
+        if (xfer_len == 0) {
+            /* No data phase — embed in CSW residue (max 4 bytes) */
+            EP_BUF(0x08) = XDATA_REG8(addr);
+            EP_BUF(0x09) = (sz >= 2) ? XDATA_REG8(addr + 1) : 0x00;
+            EP_BUF(0x0A) = (sz >= 3) ? XDATA_REG8(addr + 2) : 0x00;
+            EP_BUF(0x0B) = (sz >= 4) ? XDATA_REG8(addr + 3) : 0x00;
+            EP_BUF(0x0C) = 0x00;
+            REG_USB_BULK_DMA_TRIGGER = 0x01;
+            while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
+            REG_USB_MSC_CTRL = 0x01;
+            REG_USB_MSC_STATUS &= ~0x01;
+        } else {
+            /* Data IN phase */
+            uint8_t i;
+            for (i = 0; i < sz; i++) EP_BUF(i) = XDATA_REG8(addr + i);
+            sw_dma_bulk_in(0xD800, sz);
+            EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
+            EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
+            EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
+            EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+            send_csw(0x00);
+        }
     } else if (opcode == 0xE6) {
         uint8_t len = REG_USB_CBWCB_1;
         uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
@@ -914,19 +951,43 @@ static void handle_cbw(void) {
         EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
         send_csw(0x00);
     } else if (opcode == 0xE7) {
-        bulk_out_addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
-        bulk_out_len = REG_USB_CBWCB_1;
-        if (bulk_out_len == 0) bulk_out_len = 64;
-        bulk_out_state = 1;
-        return;
+        /* Bulk OUT: receive data synchronously, copy to XDATA[addr] */
+        uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
+        uint8_t len = REG_USB_CBWCB_1;
+        uint8_t ci;
+        if (len == 0) len = 64;
+
+        /* Arm bulk OUT endpoint for data phase */
+        REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_OUT;
+        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+
+        /* Wait for bulk OUT data */
+        while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_BULK_DATA)) { }
+
+        /* Receive data via DMA handshake */
+        REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_OUT;
+        REG_INT_AUX_STATUS = (REG_INT_AUX_STATUS & 0xF9) | 0x02;
+        REG_BULK_DMA_HANDSHAKE = 0x00;
+        while (!(REG_USB_DMA_STATE & USB_DMA_STATE_READY)) { }
+
+        /* Copy from DMA buffer to target address */
+        for (ci = 0; ci < len; ci++)
+            XDATA_REG8(addr + ci) = XDATA_REG8(0x7000 + ci);
+
+        send_csw(0x00);
     } else if (opcode == 0xE8) {
-        if (pcie_initialized == 0) need_pcie_init = 1;
+        /* No-data vendor ping — do NOT trigger PCIe init here.
+         * PCIe init kills USB3 (bank-switched PHY writes).
+         * Only TUR (0x00) triggers PCIe init (matches tinygrad flow). */
         send_csw(0x00);
     } else if (opcode == 0x00) {
         /* SCSI TEST_UNIT_READY */
         tur_count++;
+        XDATA_REG8(0x0F10) = tur_count;  /* diag: TUR count */
+        XDATA_REG8(0x0F11) = pcie_initialized;  /* diag: pcie state */
         if (tur_count >= 1 && pcie_initialized == 0) {
             need_pcie_init = 1;
+            XDATA_REG8(0x0F12) = 0xAA;  /* diag: pcie init triggered */
         }
         send_csw(0x00);
     } else if (opcode == 0x12) {
@@ -1002,6 +1063,71 @@ static void handle_cbw(void) {
         EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
         EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
         EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+        send_csw(0x00);
+    } else if (opcode == 0x8A) {
+        /* SCSI WRITE(16) — receive bulk OUT data from host.
+         * Tinygrad sends 64KB chunks: CBW → 64KB data OUT → CSW.
+         * Data must land in internal DMA buffer (PCIe visible at 0x200000).
+         *
+         * Approach: Arm bulk OUT endpoint to receive data in 1024-byte chunks
+         * (USB SS max packet size), loop until all data received, using CE88/CE89
+         * DMA handshake to route each chunk to the right buffer location.
+         * Same mechanism as E7 but in a loop for large transfers. */
+        uint32_t xfer_len;
+        uint32_t received;
+        uint16_t timeout;
+        uint16_t chunk;
+
+        /* Read transfer length from CBW */
+        xfer_len = ((uint32_t)REG_USB_CBW_XFER_LEN_3 << 24) |
+                   ((uint32_t)REG_USB_CBW_XFER_LEN_2 << 16) |
+                   ((uint32_t)REG_USB_CBW_XFER_LEN_1 << 8) |
+                   REG_USB_CBW_XFER_LEN_0;
+
+        uart_puts("[W16:"); uart_puthex((uint8_t)(xfer_len >> 16));
+        uart_puthex((uint8_t)(xfer_len >> 8)); uart_puthex((uint8_t)xfer_len);
+        uart_puts("]\n");
+
+        /* Receive bulk OUT data in chunks.
+         * Arm endpoint → wait for BULK_DATA → CE88 handshake → repeat.
+         * Data arrives at hardware DMA buffer. We don't copy it — the
+         * hardware routes it to the internal buffer accessible from PCIe. */
+        received = 0;
+        while (received < xfer_len) {
+            /* Arm bulk OUT endpoint for data phase */
+            REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_OUT;
+            REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+
+            /* Wait for bulk OUT data */
+            for (timeout = 60000; timeout; timeout--) {
+                if (REG_USB_PERIPH_STATUS & USB_PERIPH_BULK_DATA) break;
+            }
+            if (!timeout) {
+                uart_puts("[W:BD_TO]\n");
+                send_csw(0x01);
+                return;
+            }
+
+            /* DMA handshake — receive data */
+            REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_OUT;
+            REG_INT_AUX_STATUS = (REG_INT_AUX_STATUS & 0xF9) | 0x02;
+            REG_BULK_DMA_HANDSHAKE = 0x00;
+            for (timeout = 60000; timeout; timeout--) {
+                if (REG_USB_DMA_STATE & USB_DMA_STATE_READY) break;
+            }
+            if (!timeout) {
+                uart_puts("[W:CE89_TO]\n");
+                send_csw(0x01);
+                return;
+            }
+
+            /* Each USB SS packet is up to 1024 bytes */
+            chunk = 1024;
+            if (received + chunk > xfer_len) chunk = (uint16_t)(xfer_len - received);
+            received += chunk;
+        }
+
+        uart_puts("[W:OK]\n");
         send_csw(0x00);
     } else if (opcode == 0x1E) {
         /* PREVENT_ALLOW_MEDIUM_REMOVAL — no-data, just ack */
@@ -1203,8 +1329,16 @@ static void poll_bulk_events(void) {
     uint8_t st = REG_USB_PERIPH_STATUS;
     if (st & USB_PERIPH_EP_COMPLETE) {
         REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
+        /* Stock firmware ISR (0x0E33) re-sets 90E2=0x01 on EP_COMPLETE.
+         * Hardware clears 90E2 after processing arm_msc's C42C. Without
+         * re-setting it here, handle_cbw's 90E2 check fails and the
+         * first CBW (TUR) is silently dropped. */
+        REG_USB_MODE = 0x01;
     }
-    if (st & USB_PERIPH_CBW_RECEIVED) need_cbw_process = 1;
+    /* Don't trigger CBW processing during E7 bulk-out data phase.
+     * CBW_RECEIVED (9101 bit 6) may still be asserted from the E7 CBW;
+     * re-entering handle_cbw would corrupt the bulk-out state machine. */
+    if ((st & USB_PERIPH_CBW_RECEIVED) && !bulk_out_state) need_cbw_process = 1;
 }
 
 void int0_isr(void) __interrupt(0) {
@@ -2331,105 +2465,73 @@ static void pcie_phase2(void) {
     uart_puts(" B4="); uart_puthex(XDATA_REG8(0xB434));
     uart_puts("]\n");
 
-    /* LTSSM equalization setup (stock: 0x9240-0x928C "ltssm_handler")
-     * The stock firmware's LTSSM handler temporarily enables equalization
-     * and wide link training mode before starting LTSSM negotiation.
-     * Without this, Gen3 links train transiently but can't sustain L0
-     * because the PHY can't complete equalization.
-     *
-     * Sequence (stock 0x9259-0x928C):
-     *   1. Save E764, clear bit 4
-     *   2. Save E710 (& 0x1F), set E710 |= 0x1F (enable all link widths)
-     *   3. Save CA06 (& 0xE0), set CA06 = (CA06 & 0x1F) | 0x80 (max speed)
-     *   4. E751 = 0x01 (equalization enable — CRITICAL for Gen3)
-     *   5. CA81 |= 0x01 (already done before lane_config_mask)
-     */
+    /* LTSSM equalization setup */
     {
         uint8_t saved_e710, saved_ca06_upper;
+        uint8_t tmp;
 
-        /* Save and set E710: enable all 5 link width bits for negotiation */
         saved_e710 = XDATA_REG8(0xE710) & 0x1F;
         XDATA_REG8(0xE710) = (XDATA_REG8(0xE710) & 0xE0) | 0x1F;
-
-        /* Save CA06 upper bits. Stock sets bit 7 (max speed) but this kills USB3.
-         * SKIPPED: CA06 |= 0x80 triggers PCIe speed renegotiation that crashes USB3 PHY.
-         * Link trains fine without it since we're already in Gen3 mode (CA06 bit 5). */
         saved_ca06_upper = REG_CPU_MODE_NEXT & 0xE0;
-
-        /* E751 = 0x01: equalization enable (stock 0x928A-0x928C) */
         XDATA_REG8(0xE751) = 0x01;
         uart_puts("[EQ1]\n");
 
-    /* Step 3: E764 link training config (stock: 0xCDC6 → 0xE7D4) */
-    tmp = REG_PHY_TIMER_CTRL_E764;
-    tmp = (tmp & 0xF7) | 0x08;     /* Set bit 3 */
-    REG_PHY_TIMER_CTRL_E764 = tmp;
-    tmp = REG_PHY_TIMER_CTRL_E764;
-    tmp = tmp & 0xFB;               /* Clear bit 2 */
-    REG_PHY_TIMER_CTRL_E764 = tmp;
+        /* E764 training trigger */
+        tmp = REG_PHY_TIMER_CTRL_E764;
+        tmp = (tmp & 0xF7) | 0x08;
+        REG_PHY_TIMER_CTRL_E764 = tmp;
+        tmp = REG_PHY_TIMER_CTRL_E764;
+        tmp = tmp & 0xFB;
+        REG_PHY_TIMER_CTRL_E764 = tmp;
+        tmp = REG_PHY_TIMER_CTRL_E764;
+        tmp = tmp & 0xFE;
+        REG_PHY_TIMER_CTRL_E764 = tmp;
+        tmp = REG_PHY_TIMER_CTRL_E764;
+        tmp = (tmp & 0xFD) | 0x02;
+        REG_PHY_TIMER_CTRL_E764 = tmp;
 
-    /* Step 3b: E764 bits 0,1 config */
-    tmp = REG_PHY_TIMER_CTRL_E764;
-    tmp = tmp & 0xFE;               /* Clear bit 0 */
-    REG_PHY_TIMER_CTRL_E764 = tmp;
-    tmp = REG_PHY_TIMER_CTRL_E764;
-    tmp = (tmp & 0xFD) | 0x02;     /* Set bit 1 */
-    REG_PHY_TIMER_CTRL_E764 = tmp;
+        XDATA_REG8(0x0F00) = 0x03;
 
-    XDATA_REG8(0x0F00) = 0x03;  /* Before link wait */
+        /* 2s link training wait */
+        timer_wait(0x07, 0xCF, 0x01);
 
-    /* Step 4: Wait for link — stock does a single 2s timer (r5=0xCF, r4=0x07, mode=1).
-     * Must use exact same timer parameters as stock firmware at 0xCB89. */
-    timer_wait(0x07, 0xCF, 0x01);
+        tmp = XDATA_REG8(0xE762);
+        XDATA_REG8(0x0F20) = tmp;
+        XDATA_REG8(0x0F21) = XDATA_REG8(0xB450);
+        XDATA_REG8(0x0F22) = REG_PHY_TIMER_CTRL_E764;
+        XDATA_REG8(0x0F23) = (tmp & 0x10) ? 0x01 : 0x00;
+        XDATA_REG8(0x0F24) = XDATA_REG8(0xB22B);
+        XDATA_REG8(0x0F25) = XDATA_REG8(0xE765);
+        XDATA_REG8(0x0F26) = XDATA_REG8(0xE710);
 
-    /* Step 4b: Check E762 bit 4 for link result (stock: 0xCDEB-0xCE1F)
-     * If E762 bit 4 set: link trained OK
-     * If E762 bit 4 clear: link failed */
-    tmp = XDATA_REG8(0xE762);
-    /* Save debug snapshot to scratch XDATA for readback via E4 */
-    XDATA_REG8(0x0F20) = tmp;                        /* E762 value at decision point */
-    XDATA_REG8(0x0F21) = XDATA_REG8(0xB450);         /* B450 at decision point */
-    XDATA_REG8(0x0F22) = REG_PHY_TIMER_CTRL_E764;    /* E764 at decision point */
-    XDATA_REG8(0x0F23) = (tmp & 0x10) ? 0x01 : 0x00; /* which path taken */
-    XDATA_REG8(0x0F24) = XDATA_REG8(0xB22B);         /* B22B (link width) at decision */
-    XDATA_REG8(0x0F25) = XDATA_REG8(0xE765);         /* E765 at decision */
-    XDATA_REG8(0x0F26) = XDATA_REG8(0xE710);         /* E710 at decision */
+        if (tmp & 0x10) {
+            XDATA_REG8(0x0F30) = XDATA_REG8(0xB22B);
+            XDATA_REG8(0x0F31) = XDATA_REG8(0xB450);
+            tmp = REG_PHY_TIMER_CTRL_E764;
+            REG_PHY_TIMER_CTRL_E764 = (tmp & 0xFE) | 0x01;
+            tmp = REG_PHY_TIMER_CTRL_E764;
+            REG_PHY_TIMER_CTRL_E764 = tmp & 0xFD;
+            XDATA_REG8(0x0F32) = XDATA_REG8(0xB22B);
+            XDATA_REG8(0x0F33) = XDATA_REG8(0xB450);
+            XDATA_REG8(0x06E6) = 0x00;
+            uart_puts("[LK+]\n");
+        } else {
+            tmp = REG_PHY_TIMER_CTRL_E764;
+            REG_PHY_TIMER_CTRL_E764 = tmp & 0xF7;
+            tmp = REG_PHY_TIMER_CTRL_E764;
+            REG_PHY_TIMER_CTRL_E764 = tmp & 0xFB;
+            tmp = REG_PHY_TIMER_CTRL_E764;
+            REG_PHY_TIMER_CTRL_E764 = tmp & 0xFE;
+            tmp = REG_PHY_TIMER_CTRL_E764;
+            REG_PHY_TIMER_CTRL_E764 = tmp & 0xFD;
+            uart_puts("[LK-]\n");
+        }
 
-    if (tmp & 0x10) {
-        /* Link trained (stock: 0xCBA3-0xCBB2)
-         * E764 |= 0x01 (set bit 0), then E764 &= 0xFD (clear bit 1)
-         * Transitions PHY from training to L0 stable mode.
-         * Stock E762 goes from 0x10 to 0x00 after this — that's expected. */
-        XDATA_REG8(0x0F30) = XDATA_REG8(0xB22B);  /* B22B before E764 config */
-        XDATA_REG8(0x0F31) = XDATA_REG8(0xB450);  /* B450 before E764 config */
-        tmp = REG_PHY_TIMER_CTRL_E764;
-        REG_PHY_TIMER_CTRL_E764 = (tmp & 0xFE) | 0x01;  /* Set bit 0 */
-        tmp = REG_PHY_TIMER_CTRL_E764;
-        REG_PHY_TIMER_CTRL_E764 = tmp & 0xFD;            /* Clear bit 1 */
-        XDATA_REG8(0x0F32) = XDATA_REG8(0xB22B);  /* B22B after E764 config */
-        XDATA_REG8(0x0F33) = XDATA_REG8(0xB450);  /* B450 after E764 config */
-        XDATA_REG8(0x06E6) = 0x00;
-        uart_puts("[LK+]\n");
-    } else {
-        /* Link failed (stock: 0xCE09-0xCE1E) — clear E764 bits 3,2,0,1 */
-        tmp = REG_PHY_TIMER_CTRL_E764;
-        REG_PHY_TIMER_CTRL_E764 = tmp & 0xF7;  /* Clear bit 3 */
-        tmp = REG_PHY_TIMER_CTRL_E764;
-        REG_PHY_TIMER_CTRL_E764 = tmp & 0xFB;  /* Clear bit 2 */
-        tmp = REG_PHY_TIMER_CTRL_E764;
-        REG_PHY_TIMER_CTRL_E764 = tmp & 0xFE;  /* Clear bit 0 */
-        tmp = REG_PHY_TIMER_CTRL_E764;
-        REG_PHY_TIMER_CTRL_E764 = tmp & 0xFD;  /* Clear bit 1 */
-        uart_puts("[LK-]\n");
+        /* Restore */
+        XDATA_REG8(0xE710) = (XDATA_REG8(0xE710) & 0xE0) | saved_e710;
+        REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | saved_ca06_upper;
+        XDATA_REG8(0xCA81) = XDATA_REG8(0xCA81) & 0xFE;
     }
-
-    /* LTSSM equalization restore (stock: 0x9374-0x93A0)
-     * After training (success or fail), restore saved register values.
-     * This transitions from "negotiation mode" back to operational mode. */
-    XDATA_REG8(0xE710) = (XDATA_REG8(0xE710) & 0xE0) | saved_e710;
-    REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | saved_ca06_upper;
-    XDATA_REG8(0xCA81) = XDATA_REG8(0xCA81) & 0xFE;  /* Clear CA81 bit 0 */
-    }  /* end LTSSM equalization scope */
 
     /* Step 5: C659 |= 0x01 — 12V ON (stock: 0xE8D9 with r7=1 → lcall 0xCC8B)
      * CC8B: read, clear bit 0, set bit 0, write (net: set bit 0)
@@ -3165,10 +3267,33 @@ void main(void) {
     }
 
     /* Power on at boot so GPU can start initializing early.
-     * PCIe tunnel/link training will happen after USB SET_CONFIGURATION. */
+     * Run FULL PCIe init at boot BEFORE USB enumeration.
+     * This ensures PCIe link is trained and bridge is configured before
+     * tinygrad sends pcie_cfg_req. Stock firmware also does PCIe init
+     * before USB activity. PLL changes in tunnel_enable are safe here
+     * because USB PHY hasn't started SuperSpeed negotiation yet. */
     pcie_power_enable();
     REG_PCIE_LANE_CTRL_C659 = (REG_PCIE_LANE_CTRL_C659 & 0xFE) | 0x01;
     uart_puts("[PWR]\n");
+
+    /* Full PCIe init sequence at boot */
+    uart_puts("[PCIE_BOOT]\n");
+    pcie_tunnel_enable();
+    pcie_perst_deassert();
+    pcie_phase2();
+    {
+        uint8_t link_ok = XDATA_REG8(0x0F23);
+        uint8_t b22b = XDATA_REG8(0xB22B);
+        if (link_ok || b22b == 0x04) {
+            pcie_post_train();
+            pcie_initialized = 3;
+            XDATA_REG8(0x0AF7) = 0x01;
+            uart_puts("[L0!]\n");
+        } else {
+            pcie_initialized = 2;
+            uart_puts("[LF]\n");
+        }
+    }
 
     uart_puts("[GO]\n");
     TMOD = 0x01;  /* Timer0 Mode 1 (16-bit), Timer1 Mode 0 */
@@ -3239,10 +3364,7 @@ void main(void) {
 
             pcie_perst_deassert();
 
-            /* Always run phase 2 — stock firmware does Gen3 x2 retraining.
-             * B22B=0x04 only means lane config, NOT that downstream link trained.
-             * Stock has B450=0x78 (L0) after phase 2, ours has B450=0x00 without it.
-             * Phase 2 configures E764, B434=0x0C (x2), and triggers LTSSM training. */
+            /* Phase 2: Gen3 x2 retraining. */
             {
                 uint8_t b22b = XDATA_REG8(0xB22B);
                 uart_puts("[W="); uart_puthex(b22b); uart_puts("]\n");
