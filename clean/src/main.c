@@ -721,14 +721,54 @@ static void state_init(void) {
  * MSC toggles, or EP reconfig that were previously mixed in.
  */
 /*
- * do_bulk_init - MSC engine initialization (from master branch, proven working)
+ * do_bulk_init - MSC engine initialization (hybrid: stock registers + working logic)
  *
- * Configures USB bulk endpoints, clears D800 buffer, does MSC toggle/reset,
- * doorbell dance, and arms MSC for first CBW reception.
+ * Called from SET_CONFIG AFTER state_init. Adds critical stock firmware
+ * register writes (0xB1C5-0xB285) while keeping the working MSC arm logic.
+ *
+ * Key insight: state_init()->doorbell_dance() already does the FIRST C42C arm.
+ * This function should do the SECOND arm with proper buffer setup.
  */
 static void do_bulk_init(void) {
     uint16_t j;
     uint8_t t;
+
+    /* === Stock 0xB1C5-0xB211: Critical register config === */
+    
+    /* Stock 0xB1C5-0xB1CD: 92C0 = (92C0 & 0x7F) | 0x80 */
+    REG_POWER_ENABLE = (REG_POWER_ENABLE & 0x7F) | 0x80;
+
+    /* Stock 0xB1CE-0xB1D3: 91D1 = 0x0F (clear all link events) */
+    REG_USB_PHY_CTRL_91D1 = 0x0F;
+
+    /* Stock 0xB1D4-0xB1E0: Buffer config 9300-9302 */
+    REG_BUF_CFG_9300 = 0x0C;
+    REG_BUF_CFG_9301 = 0xC0;
+    REG_BUF_CFG_9302 = 0xBF;
+
+    /* Stock 0xB1E1-0xB1EC: Control phase and EP config */
+    REG_USB_CTRL_PHASE = 0x1F;
+    REG_USB_EP_CFG1 = 0x0F;
+
+    /* Stock 0xB1ED-0xB1F2: PHY control */
+    REG_USB_PHY_CTRL_91C1 = 0xF0;
+
+    /* Stock 0xB1F3-0xB1FF: Buffer descriptors 9303-9305 */
+    REG_BUF_CFG_9303 = 0x33;
+    REG_BUF_CFG_9304 = 0x3F;
+    REG_BUF_CFG_9305 = 0x40;
+
+    /* Stock 0xB200-0xB20B: USB config registers */
+    REG_USB_CONFIG = 0xE0;
+    REG_USB_EP0_LEN_H = 0xF0;
+
+    /* Stock 0xB20C-0xB211: 90E2 = 0x01 (MSC gate - CRITICAL for C42C) */
+    REG_USB_MODE = 0x01;
+
+    /* Stock 0xB212-0xB218: 905E &= 0xFE (clear EP control bit 0) */
+    REG_USB_EP_MGMT = REG_USB_EP_MGMT & 0xFE;
+
+    /* === Original working logic (proven to work for 18/19 tests) === */
 
     /* Clear EP/NVMe/FIFO registers */
     REG_USB_EP_READY = 0xFF; REG_USB_EP_CTRL_9097 = 0xFF;
@@ -866,11 +906,19 @@ static void send_csw(uint8_t status) {
     }
     REG_USB_BULK_DMA_TRIGGER = 0x01;
     while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
-    /* Clear EP_COMPLETE from CSW DMA + reset DMA engine */
+    /* Clear EP_COMPLETE from CSW DMA + reset DMA engine
+     * (same as ISR EP_COMPLETE handler - see direct_bulk_in) */
+    XDATA_REG8(0x0AF4) = 0x40;
+    REG_USB_STATUS_909E = 0x01;
     REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
-    REG_USB_STATUS_909E = 0x01;  /* Ack buffer status (stock 0x0EE9) */
-    REG_USB_CTRL_90A0 = 0x01;  /* Reset DMA engine after EP_COMPLETE clear */
+    REG_USB_CTRL_90A0 = 0x01;
     REG_USB_BULK_DMA_TRIGGER = 0x00;
+
+    /* CC17 DMA descriptor reset (see direct_bulk_in comment) */
+    if (XDATA_REG8(0xCC17) & 0x02) {
+        XDATA_REG8(0xCC17) = 0x02;
+    }
+
     REG_USB_MSC_CTRL = 0x01;
     REG_USB_MSC_STATUS &= ~0x01;
     IE = saved_ie;
@@ -915,12 +963,36 @@ static void direct_bulk_in(uint8_t len) {
             XDATA_REG8(0x0F17) += 1;
         }
     }
+    /* Stock ISR EP_COMPLETE handler (0x0ED3-0x0EF1):
+     * When 909E bit 0 is set after EP_COMPLETE:
+     * 1. Write 0x0AF4 = 0x40 (completion indicator)
+     * 2. Call 0x54A1 (state check helper - skipped here)
+     * 3. Write 909E = 0x01 (acknowledge buffer status)
+     * 4. Write 90E3 = 0x02 (EP status clear)
+     */
+    XDATA_REG8(0x0AF4) = 0x40;
+    REG_USB_STATUS_909E = 0x01;  /* Ack buffer status */
     REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
-    REG_USB_STATUS_909E = 0x01;  /* Ack buffer status (stock 0x0EE9) */
-    REG_USB_CTRL_90A0 = 0x01;  /* Reset DMA engine after EP_COMPLETE clear */
+    REG_USB_CTRL_90A0 = 0x01;  /* Reset DMA engine */
     REG_USB_BULK_DMA_TRIGGER = 0x00;
-    /* Do NOT re-arm MSC here — caller will send CSW next which does the re-arm.
-     * Re-arming MSC between data-IN and CSW confuses the BOT state machine. */
+
+    /* MSC state transition after data-IN DMA. */
+    REG_USB_MSC_CTRL = 0x01;
+    REG_USB_MSC_STATUS &= ~0x01;
+
+    /* Reset CE88/CE89 DMA state after bulk IN.
+     * The C802 bulk DMA trigger may leave CE89 in a state that causes
+     * subsequent CE88 handshakes (used by bulk OUT) to fail.
+     * Doing a dummy CE88 handshake here ensures the state machine is
+     * ready for the next bulk operation. */
+    REG_BULK_DMA_HANDSHAKE = 0x00;
+    {
+        uint16_t wt;
+        for (wt = 1000; wt; wt--) {
+            if (REG_USB_DMA_STATE & USB_DMA_STATE_READY) break;
+        }
+    }
+
     IE = saved_ie;
 
     REG_USB_MSC_LENGTH = 0x0D;  /* Restore to CSW length */
@@ -1151,7 +1223,17 @@ static void handle_cbw(void) {
 
         uart_puts("[W16:"); uart_puthex((uint8_t)(xfer_len >> 16));
         uart_puthex((uint8_t)(xfer_len >> 8)); uart_puthex((uint8_t)xfer_len);
+        uart_puts(" 93="); uart_puthex(REG_USB_EP_CFG1);
+        uart_puts(" 94="); uart_puthex(REG_USB_EP_CFG2);
+        uart_puts(" 5A="); uart_puthex(REG_USB_EP_CFG_905A);
         uart_puts("]\n");
+
+        /* Reset bulk endpoint state before bulk OUT data phase.
+         * After E4 data-IN ops, the endpoint may be left in bulk IN mode.
+         * Stock firmware resets 905A=0x00 before bulk OUT at various places. */
+        REG_USB_EP_CFG_905A = 0x00;
+        REG_USB_EP_CFG1 = 0x00;
+        REG_USB_EP_CFG2 = 0x00;
 
         /* Receive bulk OUT data in chunks.
          * Arm endpoint → wait for BULK_DATA → CE88 handshake → repeat.
