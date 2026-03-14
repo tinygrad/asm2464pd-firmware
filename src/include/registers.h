@@ -232,6 +232,10 @@
  *   Phase 11: full ramp up + teardown (re-arm MSC engine)
  */
 #define REG_USB_MSC_CFG         XDATA_REG8(0x900B)
+#define REG_USB_ALT_SETTING_L   XDATA_REG8(0x900C)  /* Alt setting wValue low (written by SET_INTERFACE) */
+#define REG_USB_ALT_SETTING_H   XDATA_REG8(0x900D)  /* Alt setting wValue high */
+#define REG_USB_ALT_SETTING2_L  XDATA_REG8(0x900E)  /* Alt setting wValue low (duplicate) */
+#define REG_USB_ALT_SETTING2_H  XDATA_REG8(0x900F)  /* Alt setting wValue high (duplicate) */
 #define REG_USB_DATA_L          XDATA_REG8(0x9010)
 #define REG_USB_DATA_H          XDATA_REG8(0x9011)
 #define REG_USB_FIFO_STATUS     XDATA_REG8(0x9012)  /* USB FIFO/status register */
@@ -861,6 +865,7 @@
 #define REG_PCIE_POWER_B294     XDATA_REG8(0xB294)  /* PCIe power control */
 // PCIe status registers (0xB296-0xB298)
 #define REG_PCIE_STATUS         XDATA_REG8(0xB296)
+#define REG_PCIE_BRIDGE_CTRL    XDATA_REG8(0xB297)  /* PCIe bridge control (bit 0 = enable) */
 #define   PCIE_STATUS_ERROR       0x01  // Bit 0: Error flag
 #define   PCIE_STATUS_COMPLETE    0x02  // Bit 1: Completion status
 #define   PCIE_STATUS_BUSY        0x04  // Bit 2: Busy flag
@@ -966,6 +971,7 @@
 #define   PCIE_PERST_ASSERT       0x01  // Bit 0: Assert PERST# (hold device in reset)
 #define REG_TUNNEL_LINK_CTRL    REG_PCIE_PERST_CTRL  /* Legacy alias */
 #define   TUNNEL_LINK_UP          PCIE_PERST_ASSERT   // Legacy alias
+#define REG_PCIE_LINK_CTRL_B481 XDATA_REG8(0xB481)  /* PCIe link control (bits 0-1 = speed) */
 #define REG_TUNNEL_ADAPTER_MODE XDATA_REG8(0xB482)  /* Tunnel adapter mode */
 #define   TUNNEL_MODE_MASK        0xF0  // Bits 4-7: Tunnel mode
 #define   TUNNEL_MODE_ENABLED     0xF0  // High nibble 0xF0 = tunnel mode enabled
@@ -1431,6 +1437,8 @@
 #define REG_TIMER1_DIV          XDATA_REG8(0xCC16)
 #define REG_TIMER1_CSR          XDATA_REG8(0xCC17)
 #define REG_TIMER1_THRESHOLD    XDATA_REG16(0xCC18)
+#define REG_TIMER1_THRESHOLD_HI XDATA_REG8(0xCC18)  /* Timer 1 threshold high byte */
+#define REG_TIMER1_THRESHOLD_LO XDATA_REG8(0xCC19)  /* Timer 1 threshold low byte */
 #define REG_TIMER2_DIV          XDATA_REG8(0xCC1C)
 #define REG_TIMER2_CSR          XDATA_REG8(0xCC1D)
 #define REG_TIMER2_THRESHOLD    XDATA_REG16(0xCC1E)
@@ -1870,6 +1878,7 @@
 #define REG_PHY_PLL_CTRL        XDATA_REG8(0xE741)  /* PHY PLL control */
 #define REG_PHY_PLL_CFG         XDATA_REG8(0xE742)  /* PHY PLL config */
 #define REG_PHY_POLL_E750       XDATA_REG8(0xE750)  /* PHY poll (read during reset 91D1 wait) */
+#define REG_PHY_POLL_E751       XDATA_REG8(0xE751)  /* PHY poll alt */
 /*
  * PHY RXPLL Configuration (0xE760-0xE763)
  * Used in phy_rxpll_config (bank1 0xE957) to configure RXPLL before reset.
@@ -1881,6 +1890,7 @@
  * These should be CLEAR after training.
  */
 #define REG_PHY_RXPLL_CFG_A     XDATA_REG8(0xE760)
+#define REG_PHY_RXPLL_STATUS    XDATA_REG8(0xE762)  /* PHY RXPLL status */
 #define REG_SYS_CTRL_E760       REG_PHY_RXPLL_CFG_A  // Legacy alias
 #define REG_PHY_RXPLL_CFG_B     XDATA_REG8(0xE761)
 #define REG_SYS_CTRL_E761       REG_PHY_RXPLL_CFG_B  // Legacy alias
@@ -1951,6 +1961,7 @@
 //=============================================================================
 // Control: write 0x00=input(pull-up), 0x02=output LOW, 0x03=output HIGH
 #define REG_GPIO_CTRL(n)        XDATA_REG8(0xC620 + (n))  /* n = 0-27 */
+#define REG_GPIO_CTRL_0         XDATA_REG8(0xC620)  /* GPIO 0 control */
 // Input: read actual pin level regardless of mode
 #define REG_GPIO_INPUT(n)       XDATA_REG8(0xC650 + ((n) >> 3))  /* bit (n & 7) */
 

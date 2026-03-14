@@ -124,6 +124,9 @@ __idata __at(0x72) uint8_t I_BUF_CTRL_GLOBAL; /* Buffer control global */
 #define G_BOOT_STATUS_0009      XDATA_VAR8(0x0009)  /* Boot status byte */
 #define G_USB_CTRL_000A         XDATA_VAR8(0x000A)  /* USB control byte (increment counter) */
 #define G_EP_CHECK_FLAG         G_USB_CTRL_000A     /* Alias: Endpoint check flag */
+#define G_USB_CTRL_000B         XDATA_VAR8(0x000B)  /* USB control byte B (cleared in post_csw_cleanup) */
+#define G_IFACE_NUM_002E        XDATA_VAR8(0x002E)  /* Interface number (set by post_csw_cleanup) */
+#define G_EP_ALT_STATE_0050     XDATA_VAR8(0x0050)  /* EP alt setting state (0x21 = configured) */
 #define G_ENDPOINT_STATE_0051   XDATA_VAR8(0x0051)  /* Endpoint state storage */
 #define G_SYS_FLAGS_0052        XDATA_VAR8(0x0052)  /* System flags 0x0052 */
 #define G_USB_SETUP_RESULT      XDATA_VAR8(0x0053)  /* USB setup result storage */
@@ -240,7 +243,13 @@ __idata __at(0x72) uint8_t I_BUF_CTRL_GLOBAL; /* Buffer control global */
 #define G_CMD_INDEX_SRC         XDATA_VAR8(0x05A5)  /* Command index source/copy */
 #define G_PCIE_TXN_COUNT_LO     XDATA_VAR8(0x05A6)  /* PCIe transaction count low */
 #define G_PCIE_TXN_COUNT_HI     XDATA_VAR8(0x05A7)  /* PCIe transaction count high */
+#define G_EP_CONFIG_05A4        XDATA_VAR8(0x05A4)  /* EP config state (cleared in C24C bridge init) */
 #define G_EP_CONFIG_05A8        XDATA_VAR8(0x05A8)  /* EP config 0x05A8 */
+#define G_PCIE_BRIDGE_STATE_05A9 XDATA_VAR8(0x05A9) /* PCIe bridge state (cleared in C24C) */
+#define G_PCIE_BRIDGE_STATE_05AA XDATA_VAR8(0x05AA) /* PCIe bridge state (cleared in C24C) */
+#define G_PCIE_BRIDGE_STATE_05AB XDATA_VAR8(0x05AB) /* PCIe bridge state */
+#define G_PCIE_ADDR_OFFSET_LO   XDATA_VAR8(0x05AC)  /* PCIe address offset low */
+#define G_PCIE_ADDR_OFFSET_HI   XDATA_VAR8(0x05AD)  /* PCIe address offset high */
 #define G_PCIE_DIRECTION        XDATA_VAR8(0x05AE)  /* PCIe direction (bit 0: 0=read, 1=write) */
 #define G_PCIE_ADDR_0           XDATA_VAR8(0x05AF)  /* PCIe target address byte 0 */
 #define G_PCIE_ADDR_1           XDATA_VAR8(0x05B0)  /* PCIe target address byte 1 */
@@ -276,10 +285,11 @@ __idata __at(0x72) uint8_t I_BUF_CTRL_GLOBAL; /* Buffer control global */
 #define G_STATE_FLAG_0719       XDATA_VAR8(0x0719)  /* State flag for NVMe queue handling */
 #define G_DMA_WORK_05AC         XDATA_VAR8(0x05AC)  /* DMA work byte */
 #define G_DMA_WORK_05AD         XDATA_VAR8(0x05AD)  /* DMA work byte */
+#define G_USB_STATE_CLEAR_06E3  XDATA_VAR8(0x06E3)  /* USB state clear flag */
+#define G_BRIDGE_INIT_06E4      XDATA_VAR8(0x06E4)  /* Bridge init flag (set to 1 in C24C) */
 #define G_MAX_LOG_ENTRIES       XDATA_VAR8(0x06E5)  /* Max error log entries */
 #define G_QUEUE_COUNT_06E5      G_MAX_LOG_ENTRIES   /* Alias - queue count */
 #define G_STATE_FLAG_06E6       XDATA_VAR8(0x06E6)  /* Processing complete flag / error flag */
-#define G_USB_STATE_CLEAR_06E3  XDATA_VAR8(0x06E3)  /* USB state clear flag */
 #define G_SCSI_STATUS_06CB      XDATA_VAR8(0x06CB)  /* SCSI status byte */
 #define G_WORK_06E7             XDATA_VAR8(0x06E7)  /* Work variable 0x06E7 */
 #define G_WORK_06E8             XDATA_VAR8(0x06E8)  /* Work variable 0x06E8 */
@@ -487,6 +497,10 @@ __idata __at(0x72) uint8_t I_BUF_CTRL_GLOBAL; /* Buffer control global */
 #define G_LINK_EVENT_0B2D       XDATA_VAR8(0x0B2D)  /* Link event flag (cleared in bda4 reset) */
 #define G_USB_TRANSFER_FLAG     XDATA_VAR8(0x0B2E)  /* USB transfer flag */
 #define G_INTERFACE_READY_0B2F  XDATA_VAR8(0x0B2F)  /* Interface ready flag */
+#define G_PCIE_BUS_NUM_0B30     XDATA_VAR8(0x0B30)  /* PCIe bus number (for bridge config) */
+#define G_PCIE_DEV_NUM_0B31     XDATA_VAR8(0x0B31)  /* PCIe device number */
+#define G_PCIE_FN_NUM_0B32      XDATA_VAR8(0x0B32)  /* PCIe function number */
+#define G_PCIE_CFG_OFFSET_0B33  XDATA_VAR8(0x0B33)  /* PCIe config space offset */
 #define G_STATE_0B39            XDATA_VAR8(0x0B39)  /* State control 0x0B39 */
 #define G_STATE_0B3A            XDATA_VAR8(0x0B3A)  /* State control 0x0B3A */
 #define G_TRANSFER_BUSY_0B3B    XDATA_VAR8(0x0B3B)  /* Transfer busy flag */
@@ -764,5 +778,49 @@ __idata __at(0x72) uint8_t I_BUF_CTRL_GLOBAL; /* Buffer control global */
 //=============================================================================
 #define G_POWER_STATE_MAX_0A61  XDATA_VAR8(0x0A61)  /* Power state iteration max */
 #define G_POWER_STATE_IDX_0A62  XDATA_VAR8(0x0A62)  /* Power state iteration index */
+
+//=============================================================================
+// Clean Firmware Debug/PCIe State (0x0F00-0x0F4F)
+// Used by clean firmware for PCIe link training and diagnostic state.
+//=============================================================================
+#define G_PCIE_DEBUG_BASE       0x0F00               /* Base address for debug state */
+#define G_PCIE_LTSSM_STATE      XDATA_VAR8(0x0F00)  /* LTSSM state snapshot */
+#define G_PCIE_PHY_STATE        XDATA_VAR8(0x0F01)  /* PHY state snapshot */
+#define G_PCIE_LINK_WIDTH       XDATA_VAR8(0x0F02)  /* Link width (from B22B) */
+#define G_PCIE_CFG_STATUS_0     XDATA_VAR8(0x0F0C)  /* PCIe config status bytes */
+#define G_PCIE_CFG_STATUS_1     XDATA_VAR8(0x0F0D)
+#define G_PCIE_CFG_STATUS_2     XDATA_VAR8(0x0F0E)
+#define G_PCIE_CFG_STATUS_3     XDATA_VAR8(0x0F0F)
+#define G_PCIE_TRAIN_STATE_0    XDATA_VAR8(0x0F10)  /* PCIe training state */
+#define G_PCIE_TRAIN_STATE_1    XDATA_VAR8(0x0F11)
+#define G_PCIE_TRAIN_STATE_2    XDATA_VAR8(0x0F12)
+#define G_PCIE_DIAG_STATUS      XDATA_VAR8(0x0F14)  /* Diagnostic status byte */
+#define G_PCIE_LANE_STATE_BASE  XDATA_VAR8(0x0F16)  /* Per-lane state base */
+#define G_PCIE_LANE_STATE_1     XDATA_VAR8(0x0F17)
+#define G_PCIE_LANE_STATE_2     XDATA_VAR8(0x0F18)
+#define G_PCIE_LANE_STATE_3     XDATA_VAR8(0x0F19)
+#define G_PCIE_LANE_STATE_4     XDATA_VAR8(0x0F1A)
+#define G_PCIE_LANE_STATE_5     XDATA_VAR8(0x0F1B)
+#define G_PCIE_LANE_STATE_6     XDATA_VAR8(0x0F1C)
+#define G_PCIE_LANE_STATE_7     XDATA_VAR8(0x0F1D)
+#define G_PCIE_BRIDGE_BUS_PRI   XDATA_VAR8(0x0F20)  /* Bridge primary bus */
+#define G_PCIE_BRIDGE_BUS_SEC   XDATA_VAR8(0x0F21)  /* Bridge secondary bus */
+#define G_PCIE_BRIDGE_BUS_SUB   XDATA_VAR8(0x0F22)  /* Bridge subordinate bus */
+#define G_PCIE_LINK_OK          XDATA_VAR8(0x0F23)  /* Link training OK flag */
+#define G_PCIE_GPU_VID_LO       XDATA_VAR8(0x0F24)  /* GPU vendor ID low */
+#define G_PCIE_GPU_VID_HI       XDATA_VAR8(0x0F25)  /* GPU vendor ID high */
+#define G_PCIE_GPU_DID_LO       XDATA_VAR8(0x0F26)  /* GPU device ID low */
+#define G_PCIE_GPU_DID_HI       XDATA_VAR8(0x0F27)  /* GPU device ID high */
+#define G_PCIE_BRIDGE_REG_28    XDATA_VAR8(0x0F28)  /* Bridge config reg 0x28 */
+#define G_PCIE_BRIDGE_REG_29    XDATA_VAR8(0x0F29)  /* Bridge config reg 0x29 */
+#define G_PCIE_BRIDGE_REG_2A    XDATA_VAR8(0x0F2A)  /* Bridge config reg 0x2A */
+#define G_PCIE_PHY_E762         XDATA_VAR8(0x0F30)  /* PHY RXPLL status snapshot */
+#define G_PCIE_PHY_E765         XDATA_VAR8(0x0F31)  /* PHY E765 snapshot */
+#define G_PCIE_PHY_E764         XDATA_VAR8(0x0F32)  /* PHY timer ctrl snapshot */
+#define G_PCIE_PHY_FLAGS        XDATA_VAR8(0x0F33)  /* PHY flags */
+#define G_PCIE_TLP_HEADER_0     XDATA_VAR8(0x0F40)  /* TLP header byte 0 */
+#define G_PCIE_TLP_HEADER_1     XDATA_VAR8(0x0F41)  /* TLP header byte 1 */
+#define G_PCIE_TLP_HEADER_2     XDATA_VAR8(0x0F42)  /* TLP header byte 2 */
+#define G_PCIE_TLP_HEADER_3     XDATA_VAR8(0x0F43)  /* TLP header byte 3 */
 
 #endif /* __GLOBALS_H__ */
