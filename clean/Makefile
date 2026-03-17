@@ -13,9 +13,10 @@ CFLAGS += --no-xinit-opt
 
 # Memory model settings
 LDFLAGS = --code-loc 0x0000 --code-size 0x10000
-LDFLAGS += --xram-loc 0x0000 --xram-size 0x10000
+LDFLAGS += --xram-loc 0x0800 --xram-size 0xF800
 LDFLAGS += --iram-size 0x100
 LDFLAGS += --no-std-crt0
+LDFLAGS += -Wl-bXSEG=0x0800
 
 # Directories
 SRC_DIR = src

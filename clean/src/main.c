@@ -39,13 +39,46 @@ static uint16_t bulk_out_addr;
 static uint8_t bulk_out_len;
 
 static void poll_bulk_events(void);
+static void handle_cbw(void);
+static void do_bulk_init(void);
+
+static void bank1_write(uint16_t addr, uint8_t val) {
+    (void)addr; (void)val;
+    __asm
+        mov  r6, dpl
+        mov  r7, dph
+        mov  dptr, #_bank1_write_PARM_2
+        movx a, @dptr
+        mov  dpl, r6
+        mov  dph, r7
+        mov  0x93, #0x01
+        movx @dptr, a
+        mov  0x93, #0x00
+    __endasm;
+}
+static void bank1_or_bits(uint16_t addr, uint8_t mask) {
+    (void)addr; (void)mask;
+    __asm
+        mov  r6, dpl
+        mov  r7, dph
+        mov  dptr, #_bank1_or_bits_PARM_2
+        movx a, @dptr
+        mov  r5, a
+        mov  dpl, r6
+        mov  dph, r7
+        mov  0x93, #0x01
+        movx a, @dptr
+        orl  a, r5
+        movx @dptr, a
+        mov  0x93, #0x00
+    __endasm;
+}
 
 /*=== USB Control Transfer Helpers ===*/
 
 static void complete_usb3_status(void) {
+    while (!(REG_USB_CTRL_PHASE & USB_CTRL_PHASE_STAT_IN)) { }
     REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
-    /* Stock firmware polls 0x9092 bit 2 until clear (0xb974) */
-    while (REG_USB_DMA_TRIGGER & USB_DMA_STATUS_COMPLETE) { }
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_IN;
 }
 
@@ -88,13 +121,14 @@ static void arm_msc(void) {
 
 /*=== USB Request Handlers ===*/
 
-static void handle_set_address(void) {
+static void handle_set_address(uint8_t addr) {
     uint8_t tmp;
-    REG_USB_INT_MASK_9090 = 0x01;
+    tmp = REG_USB_INT_MASK_9090;
+    REG_USB_INT_MASK_9090 = (tmp & 0x80) | (addr & 0x7F);
     REG_USB_EP_CTRL_91D0 = 0x02;
 
     if (is_usb3) {
-        REG_LINK_STATUS_E716 = 0x01;
+        while (!(REG_USB_CTRL_PHASE & USB_CTRL_PHASE_STAT_IN)) { }
         REG_USB_ADDR_CFG_A = 0x03; REG_USB_ADDR_CFG_B = 0x03;
         REG_USB_ADDR_CFG_A = 0x07; REG_USB_ADDR_CFG_B = 0x07;
         tmp = REG_USB_ADDR_CFG_A; REG_USB_ADDR_CFG_A = tmp;
@@ -103,11 +137,11 @@ static void handle_set_address(void) {
         REG_USB_ADDR_PARAM_2 = 0x00; REG_USB_ADDR_PARAM_3 = 0x0A;
         tmp = REG_USB_ADDR_CTRL; REG_USB_ADDR_CTRL = tmp;
         REG_USB_EP_CTRL_9220 = 0x04;
-        complete_usb3_status();
+        REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
+        REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_IN;
     } else {
         send_zlp_ack();
     }
-    uart_puts("[A]\n");
 }
 
 /* Descriptors */
@@ -119,14 +153,24 @@ static __code const uint8_t cfg_desc[] = {
     0x09, 0x02, 0x2C, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
     0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,
     0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,
-    0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
+    0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,
     0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,
-    0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
+    0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,
+};
+/* USB3 hardware reads config descriptor from CODE ROM 0x58CF.
+ * Place our descriptor there so the hardware sees class 0xFF. */
+__code __at(0x58CF) const uint8_t hw_cfg_desc[] = {
+    0x09, 0x02, 0x2C, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
+    0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,
+    0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,
+    0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,
+    0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,
+    0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,
 };
 static __code const uint8_t bos_desc[] = {
     0x05, 0x0F, 0x16, 0x00, 0x02,
-    0x07, 0x10, 0x02, 0x02, 0x00, 0x00, 0x00,
-    0x0A, 0x10, 0x03, 0x00, 0x0E, 0x00, 0x03, 0x00, 0x00, 0x00,
+    0x07, 0x10, 0x02, 0x1E, 0xF4, 0x00, 0x00,
+    0x0A, 0x10, 0x03, 0x00, 0x0E, 0x00, 0x01, 0x0A, 0xFF, 0x07,
 };
 static __code const uint8_t str0_desc[] = { 0x04, 0x03, 0x09, 0x04 };
 static __code const uint8_t str1_desc[] = { 0x0A, 0x03, 't',0, 'i',0, 'n',0, 'y',0 };
@@ -176,8 +220,25 @@ static void handle_set_config(void) {
     REG_USB_INT_MASK_9090 |= 0x80;
     t = REG_USB_STATUS; REG_USB_STATUS = t;
     t = REG_USB_CTRL_924C; REG_USB_CTRL_924C = t;
+    /* state_init: timer config + MSC state machine init (stock 0xBDA4) */
+    REG_PHY_CFG_C6A8 |= 0x01;
+    REG_POWER_CTRL_92C8 &= 0xFE; REG_POWER_CTRL_92C8 &= 0xFD;
+    REG_CPU_TIMER_CTRL_CD31 = 0x04; REG_CPU_TIMER_CTRL_CD31 = 0x02;
+    REG_TIMER1_CSR = 0x04; REG_TIMER1_CSR = 0x02;
+    REG_TIMER1_DIV = (REG_TIMER1_DIV & 0xF8) | 0x04;
+    REG_TIMER1_THRESHOLD_HI = 0x01; REG_TIMER1_THRESHOLD_LO = 0x90;
+    REG_POWER_MISC_CTRL &= 0xFE;
+    REG_USB_CTRL_9201 |= 0x01; REG_USB_CTRL_9201 &= 0xFE;
+    REG_TIMER2_CSR = 0x04; REG_TIMER2_CSR = 0x02;
+    REG_TIMER4_CSR = 0x04; REG_TIMER4_CSR = 0x02;
+    REG_TIMER2_DIV = (REG_TIMER2_DIV & 0xF8) | 0x06;
+    REG_TIMER2_THRESHOLD_LO = 0x00; REG_TIMER2_THRESHOLD_HI = 0x8B;
+    REG_TIMER4_DIV = (REG_TIMER4_DIV & 0xF8) | 0x04;
+    REG_TIMER4_THRESHOLD_LO = 0x00; REG_TIMER4_THRESHOLD_HI = 0xC7;
+    doorbell_dance();
+    post_csw_cleanup();
+    do_bulk_init();
     send_zlp_ack();
-    need_bulk_init = 1;
     uart_puts("[C]\n");
 }
 
@@ -185,6 +246,17 @@ static void handle_set_config(void) {
 static void do_bulk_init(void) {
     uint16_t j;
     uint8_t t;
+
+    /* Stock B1C5 preamble */
+    REG_POWER_ENABLE = (REG_POWER_ENABLE & 0x7F) | 0x80;
+    REG_USB_PHY_CTRL_91D1 = 0x0F;
+    REG_BUF_CFG_9300 = 0x0C; REG_BUF_CFG_9301 = 0xC0; REG_BUF_CFG_9302 = 0xBF;
+    REG_USB_CTRL_PHASE = 0x1F; REG_USB_EP_CFG1 = 0x0F;
+    REG_USB_PHY_CTRL_91C1 = 0xF0;
+    REG_BUF_CFG_9303 = 0x33; REG_BUF_CFG_9304 = 0x3F; REG_BUF_CFG_9305 = 0x40;
+    REG_USB_CONFIG = 0xE0; REG_USB_EP0_LEN_H = 0xF0;
+    REG_USB_MODE = 0x01;
+    REG_USB_EP_MGMT = REG_USB_EP_MGMT & 0xFE;
 
     /* Clear EP/NVMe/FIFO registers */
     REG_USB_EP_READY = 0xFF; REG_USB_EP_CTRL_9097 = 0xFF;
@@ -269,46 +341,76 @@ static void do_bulk_init(void) {
 
 /*=== Bulk Transfer Engine ===*/
 
+static void doorbell_dance(void) {
+    REG_USB_MSC_CFG |= 0x02; REG_USB_MSC_CFG |= 0x04;
+    REG_NVME_DOORBELL |= 0x01; REG_USB_MSC_CFG |= 0x01;
+    REG_NVME_DOORBELL |= 0x02; REG_NVME_DOORBELL |= 0x04;
+    REG_NVME_DOORBELL |= 0x08; REG_NVME_DOORBELL |= 0x10;
+    REG_USB_MSC_CFG &= ~0x02; REG_USB_MSC_CFG &= ~0x04;
+    REG_NVME_DOORBELL &= ~0x01; REG_USB_MSC_CFG &= ~0x01;
+    REG_NVME_DOORBELL &= ~0x02; REG_NVME_DOORBELL &= ~0x04;
+    REG_NVME_DOORBELL &= ~0x08; REG_NVME_DOORBELL &= ~0x10;
+    __asm
+        mov r0, #0x6a
+        clr a
+        mov @r0, a
+    __endasm;
+    EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
+    EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
+    REG_USB_MSC_LENGTH = 0x0D;
+    REG_USB_MSC_CTRL = 0x01; REG_USB_MSC_STATUS &= ~0x01;
+}
+
+static void post_csw_cleanup(void) {
+    uint8_t i;
+    XDATA_REG8(0x000B) = 0; XDATA_REG8(0x000A) = 0; XDATA_REG8(0x0052) = 0;
+    for (i = 0; i < 32; i++) {
+        XDATA_REG8(0x0108 + i) = 0x00;
+        XDATA_REG8(0x0171 + i) = 0xFF;
+        XDATA_REG8(0x0518 + i) = 0x00;
+    }
+    XDATA_REG8(0x01B4) = 0; XDATA_REG8(0x002D) = 0x22;
+    XDATA_REG8(0x0051) = 0x21; XDATA_REG8(0x002E) = 0x22;
+    XDATA_REG8(0x0050) = 0x21;
+    __asm
+        mov r0, #0x0d
+        mov @r0, #0x22
+    __endasm;
+    REG_NVME_DOORBELL |= 0x20;
+    REG_NVME_QUEUE_CFG &= 0xF7;
+    REG_NVME_LINK_PARAM |= 0x40; REG_NVME_LINK_PARAM |= 0x20;
+    REG_NVME_DOORBELL &= ~0x20;
+}
+
 static void send_csw(uint8_t status) {
     EP_BUF(0x0C) = status;
-    EP_BUF(0x08) = 0x00; EP_BUF(0x09) = 0x00;
-    EP_BUF(0x0A) = 0x00; EP_BUF(0x0B) = 0x00;
     REG_USB_BULK_DMA_TRIGGER = 0x01;
     while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
+    REG_USB_MODE = 0x01;
     REG_USB_MSC_CTRL = 0x01;
     REG_USB_MSC_STATUS &= ~0x01;
 }
 
-static void sw_dma_bulk_in(uint16_t addr, uint8_t len) {
-    uint8_t ah = (addr >> 8) & 0xFF;
-    uint8_t al = addr & 0xFF;
-
-    /* Clear stale EP_COMPLETE */
+static void direct_bulk_in(uint8_t len) {
+    uint8_t saved_ie;
+    REG_USB_MSC_LENGTH = len;
+    saved_ie = IE; IE &= ~0x80;
     if (REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE) {
         REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
     }
-
-    REG_USB_MSC_LENGTH = len;
-    REG_DMA_CONFIG = DMA_CONFIG_SW_MODE;
-    REG_USB_EP_BUF_HI = ah; REG_USB_EP_BUF_LO = al;
-    EP_BUF(0x02) = ah; EP_BUF(0x03) = al;
-    EP_BUF(0x04) = 0x00; EP_BUF(0x05) = 0x00;
-    EP_BUF(0x06) = 0x00; EP_BUF(0x07) = 0x00;
-    EP_BUF(0x0F) = 0x00; EP_BUF(0x00) = 0x03;
-
-    REG_XFER_CTRL_C509 |= 0x01;
-    REG_USB_EP_CFG_905A = USB_EP_CFG_BULK_IN;
-    REG_USB_SW_DMA_TRIGGER = 0x01;
-    REG_XFER_CTRL_C509 &= ~0x01;
-
-    G_XFER_STATE_0AF4 = 0x40;
     REG_USB_BULK_DMA_TRIGGER = 0x01;
-
-    /* Wait for EP_COMPLETE (9101 bit 5) */
-    while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
+    { uint16_t to; for (to = 60000; to; to--)
+        if (REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE) break; }
+    G_XFER_STATE_0AF4 = 0x40;
+    REG_USB_STATUS_909E = 0x01;
     REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
-
-    REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
+    REG_USB_CTRL_90A0 = 0x01;
+    REG_USB_BULK_DMA_TRIGGER = 0x00;
+    REG_USB_MSC_CTRL = 0x01; REG_USB_MSC_STATUS &= ~0x01;
+    REG_BULK_DMA_HANDSHAKE = 0x00;
+    { uint16_t wt; for (wt = 1000; wt; wt--)
+        if (REG_USB_DMA_STATE & USB_DMA_STATE_READY) break; }
+    IE = saved_ie;
     REG_USB_MSC_LENGTH = 0x0D;
 }
 
@@ -316,7 +418,7 @@ static void sw_dma_bulk_in(uint16_t addr, uint8_t len) {
 static void handle_cbw(void) {
     uint8_t opcode;
 
-    if (!(REG_USB_MODE & 0x01)) return;
+    /* Gate check bypassed — REG_USB_MODE volatile */
     REG_USB_MODE = 0x01;
 
     /* CE88/CE89 DMA handshake */
@@ -327,14 +429,19 @@ static void handle_cbw(void) {
     cbw_tag[2] = REG_CBW_TAG_2; cbw_tag[3] = REG_CBW_TAG_3;
     EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
     EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+    EP_BUF(0x08) = 0x00; EP_BUF(0x09) = 0x00;
+    EP_BUF(0x0A) = 0x00; EP_BUF(0x0B) = 0x00;
     EP_BUF(0x0C) = 0x00;
 
     opcode = REG_USB_CBWCB_0;
-    uart_puts("[CBW:");
-    uart_puthex(opcode);
-    uart_puts("]\n");
+    { uint8_t cnt = XDATA_REG8(0x5F02);
+      XDATA_REG8(0x5F10 + (cnt & 0x0F)) = opcode;  /* log opcode */
+      XDATA_REG8(0x5F02) = cnt + 1; }
+    XDATA_REG8(0x5F00) = opcode;
 
-    if (opcode == 0xE5) {
+    if (opcode == 0xE8) {
+        send_csw(0x00);
+    } else if (opcode == 0xE5) {
         uint8_t val = REG_USB_CBWCB_1;
         uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
         XDATA_REG8(addr) = val;
@@ -342,21 +449,33 @@ static void handle_cbw(void) {
     } else if (opcode == 0xE4) {
         uint8_t sz = REG_USB_CBWCB_1;
         uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
-        if (sz > 4) sz = 4;
-        EP_BUF(0x08) = (sz >= 1) ? XDATA_REG8(addr) : 0x00;
-        EP_BUF(0x09) = (sz >= 2) ? XDATA_REG8(addr + 1) : 0x00;
-        EP_BUF(0x0A) = (sz >= 3) ? XDATA_REG8(addr + 2) : 0x00;
-        EP_BUF(0x0B) = (sz >= 4) ? XDATA_REG8(addr + 3) : 0x00;
-        REG_USB_BULK_DMA_TRIGGER = 0x01;
-        REG_USB_MSC_CTRL = 0x01;
-        REG_USB_MSC_STATUS &= ~0x01;
+        uint8_t xfer_len = REG_USB_CBW_XFER_LEN_0;
+        if (sz == 0) sz = 1;
+        if (xfer_len > 0) {
+            /* Data IN phase */
+            uint8_t ei;
+            for (ei = 0; ei < sz; ei++) EP_BUF(ei) = XDATA_REG8(addr + ei);
+            direct_bulk_in(sz);
+            EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
+            EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
+            EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
+            EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+            send_csw(0x00);
+        } else {
+            /* Embed up to 4 bytes in CSW residue field */
+            EP_BUF(0x08) = XDATA_REG8(addr);
+            EP_BUF(0x09) = (sz >= 2) ? XDATA_REG8(addr + 1) : 0x00;
+            EP_BUF(0x0A) = (sz >= 3) ? XDATA_REG8(addr + 2) : 0x00;
+            EP_BUF(0x0B) = (sz >= 4) ? XDATA_REG8(addr + 3) : 0x00;
+            send_csw(0x00);
+        }
     } else if (opcode == 0xE6) {
         uint8_t len = REG_USB_CBWCB_1;
         uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
         uint8_t i;
         if (len == 0) len = 64;
         for (i = 0; i < len; i++) EP_BUF(i) = XDATA_REG8(addr + i);
-        sw_dma_bulk_in(addr, len);
+        direct_bulk_in(len);
         EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
         EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
         EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
@@ -368,9 +487,9 @@ static void handle_cbw(void) {
         if (bulk_out_len == 0) bulk_out_len = 64;
         bulk_out_state = 1;
         return;
-    } else if (opcode == 0xE8) {
-        send_csw(0x00);
     } else {
+        /* Debug: encode opcode in CSW tag bytes for visibility */
+        EP_BUF(0x06) = opcode;  /* put opcode in tag byte 2 */
         send_csw(0x01);
     }
 }
@@ -380,10 +499,9 @@ static void handle_cbw(void) {
 static void handle_link_event(void) {
     uint8_t r9300 = REG_BUF_CFG_9300;
     if (r9300 & BUF_CFG_9300_SS_FAIL) {
-        is_usb3 = 0;
-        bulk_out_state = 0; need_cbw_process = 0; need_bulk_init = 0;
-        uart_puts("[T]\n");
+        REG_POWER_EVENT_92E1 = (REG_POWER_EVENT_92E1 & 0xBF) | 0x40;
     } else if (r9300 & BUF_CFG_9300_SS_OK) {
+        REG_BUF_CFG_9300 = BUF_CFG_9300_SS_OK;
         is_usb3 = 1;
         uart_puts("[3]\n");
     }
@@ -397,7 +515,7 @@ static void handle_link_event(void) {
 static void handle_91d1_events(void) {
     uint8_t r91d1;
 
-    if (!(REG_USB_PERIPH_STATUS & USB_PERIPH_BUS_RESET)) return;
+    if (!(REG_USB_PERIPH_STATUS & USB_PERIPH_91D1_EVENT)) return;
     r91d1 = REG_USB_PHY_CTRL_91D1;
 
     /* bit 3: power management (U1/U2). Stock: 0x9b95 */
@@ -456,10 +574,8 @@ static void handle_usb_reset(void) {
 
 static void poll_bulk_events(void) {
     uint8_t st = REG_USB_PERIPH_STATUS;
-    if (st & USB_PERIPH_EP_COMPLETE) {
-        REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
-    }
-    if (st & USB_PERIPH_CBW_RECEIVED) need_cbw_process = 1;
+    if (st & USB_PERIPH_EP_COMPLETE) REG_USB_MODE = 0x01;
+    if ((st & USB_PERIPH_CBW_RECEIVED) && !bulk_out_state) need_cbw_process = 1;
 }
 
 void int0_isr(void) __interrupt(0) {
@@ -469,23 +585,11 @@ void int0_isr(void) __interrupt(0) {
     if (periph_status & USB_PERIPH_LINK_EVENT) handle_link_event();
     handle_91d1_events();
 
-    if ((periph_status & USB_PERIPH_BUS_RESET) && !(periph_status & USB_PERIPH_CONTROL))
+    if ((periph_status & USB_PERIPH_91D1_EVENT) && !(periph_status & USB_PERIPH_CONTROL))
         handle_usb_reset();
 
-    if (periph_status & USB_PERIPH_BULK_REQ) {
-        uint8_t r9301 = REG_BUF_CFG_9301;
-        if (r9301 & BUF_CFG_9301_BIT6)
-            REG_BUF_CFG_9301 = BUF_CFG_9301_BIT6;
-        else if (r9301 & BUF_CFG_9301_BIT7) {
-            REG_BUF_CFG_9301 = BUF_CFG_9301_BIT7;
-            REG_POWER_DOMAIN |= POWER_DOMAIN_BIT1;
-        } else {
-            uint8_t r9302 = REG_BUF_CFG_9302;
-            if (r9302 & BUF_CFG_9302_BIT7) REG_BUF_CFG_9302 = BUF_CFG_9302_BIT7;
-        }
-    }
-
     if (!(periph_status & USB_PERIPH_CONTROL)) return;
+    { uint8_t cfg = REG_USB_CONFIG; REG_USB_CONFIG = cfg; }
     phase = REG_USB_CTRL_PHASE;
 
     if (phase == USB_CTRL_PHASE_DATA_OUT || phase == 0x00) {
@@ -506,7 +610,7 @@ void int0_isr(void) __interrupt(0) {
         wLenL = REG_USB_SETUP_WLEN_L;
 
         if (bmReq == 0x00 && bReq == USB_REQ_SET_ADDRESS) {
-            handle_set_address();
+            handle_set_address(wValL);
         } else if (bmReq == 0x80 && bReq == USB_REQ_GET_DESCRIPTOR) {
             handle_get_descriptor(wValH, wValL, wLenL);
         } else if (bmReq == 0x00 && bReq == USB_REQ_SET_CONFIGURATION) {
@@ -558,6 +662,161 @@ void int1_isr(void) __interrupt(2) {
 void timer1_isr(void) __interrupt(3) { }
 void serial_isr(void) __interrupt(4) { }
 void timer2_isr(void) __interrupt(5) { }
+
+/*=== PCIe Init ===*/
+static void timer_wait(uint8_t hi, uint8_t lo, uint8_t mode) {
+    uint8_t div;
+    REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
+    div = REG_TIMER0_DIV; REG_TIMER0_DIV = (div & 0xF8) | (mode & 0x07);
+    REG_TIMER0_THRESHOLD_HI = hi; REG_TIMER0_THRESHOLD_LO = lo;
+    REG_TIMER0_CSR = 0x01;
+    while (!(REG_TIMER0_CSR & 0x02)) {
+        poll_bulk_events();
+        if (need_cbw_process) { need_cbw_process = 0; handle_cbw(); }
+    }
+    REG_TIMER0_CSR = 0x02;
+}
+static void e712_poll(uint8_t lo, uint8_t mode) {
+    uint8_t tmp; uint16_t t;
+    REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
+    tmp = REG_TIMER0_DIV; REG_TIMER0_DIV = (tmp & 0xF8) | mode;
+    REG_TIMER0_THRESHOLD_HI = 0x00; REG_TIMER0_THRESHOLD_LO = lo;
+    REG_TIMER0_CSR = 0x01;
+    for (t = 30000; t; t--) { tmp = REG_LINK_STATUS_E712; if ((tmp & 0x03) || (REG_TIMER0_CSR & 0x02)) break; }
+    REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
+}
+static void bridge_config(void) {
+    uint8_t tmp;
+    REG_CPU_MODE_NEXT &= 0xEF;
+    REG_TUNNEL_CFG_A_LO = 0x1B; REG_TUNNEL_CFG_A_HI = 0x21;
+    REG_TUNNEL_DATA_LO = 0x1B;  REG_TUNNEL_DATA_HI = 0x21;
+    REG_TUNNEL_CREDITS = 0x24;  REG_TUNNEL_CFG_MODE = 0x63;
+    REG_TUNNEL_STATUS_0 = 0x24; REG_TUNNEL_STATUS_1 = 0x63;
+    REG_TUNNEL_CAP_0 = 0x06;   REG_TUNNEL_CAP_1 = 0x04; REG_TUNNEL_CAP_2 = 0x00;
+    REG_TUNNEL_CAP2_0 = 0x06;  REG_TUNNEL_CAP2_1 = 0x04; REG_TUNNEL_CAP2_2 = 0x00;
+    REG_TUNNEL_LINK_CFG_LO = 0x1B; REG_TUNNEL_LINK_CFG_HI = 0x21;
+    REG_TUNNEL_AUX_CFG_LO = 0x1B;  REG_TUNNEL_AUX_CFG_HI = 0x21;
+    REG_TUNNEL_PATH_CREDITS = 0x24; REG_TUNNEL_PATH_MODE = 0x63;
+    REG_TUNNEL_PATH2_CRED = 0x24;  REG_TUNNEL_PATH2_MODE = 0x63;
+    REG_PCIE_TUNNEL_CTRL |= 0x01;
+    REG_TUNNEL_ADAPTER_MODE |= 0x01;
+    REG_TUNNEL_ADAPTER_MODE = (REG_TUNNEL_ADAPTER_MODE & 0x0F) | 0xF0;
+    tmp = REG_PCIE_TUNNEL_CTRL; REG_PCIE_TUNNEL_CTRL = tmp & 0xFE;
+    REG_PCIE_PERST_CTRL |= 0x01;
+    REG_TUNNEL_LINK_STATE &= 0xFE;
+    REG_PCIE_TUNNEL_CFG = (REG_PCIE_TUNNEL_CFG & 0xEF) | 0x10;
+}
+static void pcie_init(void) {
+    uint8_t tmp, i; uint16_t timeout;
+    /* 1. LTSSM controller init */
+    REG_CPU_EXEC_STATUS = 0x01; REG_CPU_MODE |= 0x01;
+    REG_LINK_WIDTH_E710 = (REG_LINK_WIDTH_E710 & 0xE0) | 0x04;
+    REG_PHY_CFG_C6A8 |= 0x01; REG_CPU_EXEC_STATUS_2 = 0x04;
+    REG_LINK_CTRL_E324 &= 0xFB; REG_TIMER_CTRL_CC3B &= 0xFE;
+    REG_LINK_CTRL_E717 |= 0x01; REG_CPU_CTRL_CC3E &= 0xFD;
+    REG_TIMER_CTRL_CC3B &= 0xFD; REG_TIMER_CTRL_CC3B &= 0xBF;
+    REG_TIMER_CTRL_CC3B |= 0x03; REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
+    REG_CPU_CTRL_CC3E &= 0xFE; REG_TIMER_CTRL_CC39 |= 0x02;
+    REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0xFD;
+    REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60; REG_CPU_CTRL_CA81 |= 0x01;
+    /* 2. PHY soft reset */
+    REG_CPU_CTRL_CC37 |= 0x04;
+    REG_CPU_CTRL_CA70 = 0x00; REG_SYS_CTRL_E780 = 0x00;
+    REG_LINK_STATUS_E716 = 0x00; REG_LINK_STATUS_E716 = 0x03;
+    e712_poll(0xC8, 0x02); REG_CPU_CTRL_CC37 &= ~0x04;
+    /* 3. C233 config + E712 poll */
+    REG_PHY_CONFIG &= 0xFC; REG_PHY_CONFIG = (REG_PHY_CONFIG & 0xFB) | 0x04;
+    timer_wait(0x00, 0x14, 0x02);
+    REG_PHY_CONFIG &= 0xFB; e712_poll(0x0A, 0x03); REG_PHY_LINK_CTRL = 0x00;
+    /* 4. Early init */
+    REG_PCIE_CTRL_B402 &= 0xFD;
+    { uint8_t e = REG_PHY_TIMER_CTRL_E764; e &= 0xFD; REG_PHY_TIMER_CTRL_E764 = e;
+      e = REG_PHY_TIMER_CTRL_E764; e &= 0xFE; REG_PHY_TIMER_CTRL_E764 = e;
+      e = REG_PHY_TIMER_CTRL_E764; e &= 0xF7; REG_PHY_TIMER_CTRL_E764 = e;
+      e = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = (e & 0xFB) | 0x04; }
+    REG_POWER_CTRL_B432 = (REG_POWER_CTRL_B432 & 0xF8) | 0x07;
+    REG_PCIE_LINK_PARAM_B404 = (REG_PCIE_LINK_PARAM_B404 & 0xF0) | 0x01;
+    REG_SYS_CTRL_E76C &= 0xEF; REG_SYS_CTRL_E774 &= 0xEF; REG_SYS_CTRL_E77C &= 0xEF;
+    { static __code const uint8_t s[] = {0x01, 0x03, 0x07, 0x0F};
+      for (i = 0; i < 4; i++) { REG_PCIE_LINK_STATE = s[i] | (REG_PCIE_LINK_STATE & 0xF0); timer_wait(0x00, 0xC7, 0x02); } }
+    /* 5. PLL init */
+    REG_CPU_EXEC_STATUS_3 &= 0xFE;
+    REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0xF8) | 0x03;
+    REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0xC7) | 0x28;
+    REG_PHY_PLL_CFG  = (REG_PHY_PLL_CFG  & 0xFC) | 0x03;
+    REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0x3F) | 0x80;
+    REG_CPU_CLK_CFG = 0x80;
+    REG_PHY_EXT_5B = (REG_PHY_EXT_5B & 0xF7) | 0x08; REG_HDDPC_CTRL &= 0xDF;
+    REG_PHY_EXT_5B |= 0x20; REG_PHY_EXT_2D = (REG_PHY_EXT_2D & 0xE0) | 0x07;
+    REG_CPU_EXEC_STATUS = 0x00;
+    /* 6. Power + tunnel */
+    REG_HDDPC_CTRL |= 0x20; REG_PHY_EXT_5B |= 0x20;
+    REG_PCIE_LANE_CTRL_C659 |= 0x01;
+    bridge_config();
+    REG_PCIE_DMA_SIZE_A = 0x08; REG_PCIE_DMA_SIZE_B = 0x00;
+    REG_PCIE_DMA_SIZE_C = 0x08; REG_PCIE_DMA_SIZE_D = 0x08;
+    REG_PCIE_DMA_BUF_A = 0x08; REG_PCIE_DMA_BUF_B = 0x20;
+    REG_PCIE_DMA_BUF_C = 0x08; REG_PCIE_DMA_BUF_D = 0x28;
+    /* 7. PERST deassert + link training */
+    REG_PCIE_LTSSM_B455 = 0x02; REG_PCIE_LTSSM_B455 = 0x04;
+    REG_PCIE_CTRL_B2D5 = 0x01; REG_PCIE_STATUS = 0x08;
+    timer_wait(0x00, 0x32, 0x04);
+    REG_PCIE_PERST_CTRL &= 0xFE;
+    for (i = 0; i < 12; i++) XDATA_REG8(0xB210 + i) = 0x00;
+    REG_PCIE_FMT_TYPE = 0x44; REG_PCIE_TLP_CTRL = 0x01; REG_PCIE_BYTE_EN = 0x03;
+    REG_PCIE_ADDR_0 = 0x00; REG_PCIE_ADDR_1 = 0x00; REG_PCIE_ADDR_2 = 0x00; REG_PCIE_ADDR_3 = 0x04;
+    REG_PCIE_TLP_LENGTH = 0x20;
+    REG_PCIE_STATUS = 0x01; REG_PCIE_STATUS = 0x02; REG_PCIE_STATUS = 0x04; REG_PCIE_TRIGGER = 0x0F;
+    for (timeout = 30000U; timeout; timeout--) if (REG_PCIE_STATUS & 0x04) break;
+    REG_PCIE_STATUS = 0x04;
+    for (timeout = 30000U; timeout; timeout--) if (REG_PCIE_LTSSM_B455 & 0x02) break;
+    if (timeout) REG_PCIE_LTSSM_B455 = 0x02;
+    /* 8. Phase 2: Gen3 x2 retrain */
+    timer_wait(0x01, 0x2B, 0x04);
+    REG_CPU_CTRL_CA81 &= 0xFE; REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x20;
+    REG_TUNNEL_CTRL_B403 |= 0x01; REG_TUNNEL_LINK_STATUS = (REG_TUNNEL_LINK_STATUS & 0xF0) | 0x0C;
+    REG_PCIE_CTRL_B402 &= 0xFD;
+    { uint8_t cur = REG_PCIE_LINK_STATE & 0x0F, cnt = 0x01;
+      for (i = 0; i < 4 && cur != 0x0C; i++) {
+          cur = cur & (0x0C | (cnt ^ 0x0F));
+          REG_PCIE_LINK_STATE = cur | (REG_PCIE_LINK_STATE & 0xF0);
+          timer_wait(0x00, 0xC7, 0x02); cnt += cnt;
+      } }
+    { uint8_t se = REG_LINK_WIDTH_E710 & 0x1F;
+      REG_LINK_WIDTH_E710 = (REG_LINK_WIDTH_E710 & 0xE0) | 0x1F;
+      REG_PHY_POLL_E751 = 0x01;
+      tmp = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = (tmp & 0xF7) | 0x08;
+      tmp = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = tmp & 0xFB;
+      tmp = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = tmp & 0xFE;
+      tmp = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = (tmp & 0xFD) | 0x02;
+      timer_wait(0x07, 0xCF, 0x01);
+      tmp = REG_PHY_RXPLL_STATUS;
+      if (tmp & 0x10) {
+          tmp = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = (tmp & 0xFE) | 0x01;
+          tmp = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = tmp & 0xFD;
+      } else {
+          tmp = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = tmp & 0xF7;
+          tmp = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = tmp & 0xFB;
+          tmp = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = tmp & 0xFE;
+          tmp = REG_PHY_TIMER_CTRL_E764; REG_PHY_TIMER_CTRL_E764 = tmp & 0xFD;
+      }
+      REG_LINK_WIDTH_E710 = (REG_LINK_WIDTH_E710 & 0xE0) | se;
+      REG_CPU_CTRL_CA81 &= 0xFE; }
+    timer_wait(0x03, 0xE7, 0x04);
+    /* 9. Post-train */
+    REG_PCIE_LANE_CTRL_C659 |= 0x01; REG_NVME_QUEUE_CFG |= 0x20;
+    bridge_config();
+    REG_CPU_MODE_NEXT &= 0xEF; REG_PCIE_PERST_CTRL |= 0x01;
+    bank1_write(0x4084, 0x22); bank1_write(0x5084, 0x22);
+    bank1_write(0x6043, 0x70); bank1_or_bits(0x6025, 0x80);
+    REG_PCIE_LINK_CTRL_B481 = (REG_PCIE_LINK_CTRL_B481 & 0xFC) | 0x03;
+    REG_PCIE_LTSSM_B455 = 0x02; REG_PCIE_LTSSM_B455 = 0x04;
+    REG_PCIE_CTRL_B2D5 = 0x01; REG_PCIE_STATUS = 0x08;
+    for (i = 0; i < 200; i++) {
+        if (REG_PCIE_LTSSM_B455 & 0x02) { REG_PCIE_LTSSM_B455 = 0x02; break; }
+        { volatile uint16_t d; for (d = 0; d < 1000; d++) { } }
+    }
+}
 
 /*=== Hardware Init (from stock firmware trace) ===*/
 static void hw_init(void) {
@@ -697,6 +956,8 @@ void main(void) {
     uart_puts("[GO]\n");
     TCON = 0x04;  /* IT0=0 (level-triggered INT0) */
     IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
+
+    pcie_init();
 
     while (1) {
         REG_CPU_KEEPALIVE = 0x0C;
