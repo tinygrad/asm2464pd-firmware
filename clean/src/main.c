@@ -318,41 +318,6 @@ static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint8_t w
  * The old program_bulk_endpoint() function was removed — it was writing
  * to flash controller registers, which has no effect on USB endpoint setup. */
 
-static void ep_init_8fcf(void) {
-    /* Preamble (stock 0x8FCF-0x9001): Initialize state variables */
-
-    st_phy_lane_cfg_0ae4 = 0x01;
-
-    st_state_0ae8 = 0x0F;
-
-    st_flash_cfg_0aea = 0x03;
-
-    /* Skip path counter: stock loops 6x then exits (0x0A83 = 6) */
-
-    /* Exit path (stock 0x91CF-0x923E): */
-
-    /* 0x91CF: 0x0AEA |= 0x01 (already 0x03, stays 0x03) */
-    st_flash_cfg_0aea = st_flash_cfg_0aea | 0x01;
-
-    /* 0x91D6: check 0x0AE5 — nonzero path: 0x0AF0 = 0x00 */
-      /* 0x0AE5 = 1 (nonzero) → 0x0AF0 = 0x00 */
-
-    /* 0x91EA: check 0x0AE3 — nonzero path: C65A &= 0xF7 */
-    REG_PHY_CFG_C65A = REG_PHY_CFG_C65A & 0xF7;
-
-    /* 0x9205: check 0x0AE2 (=1, nonzero) and 0x0AE5 (=1, nonzero)
-     * → CC35 &= 0xFB (stock 0x9217-0x921D) */
-    REG_CPU_EXEC_STATUS_3 = REG_CPU_EXEC_STATUS_3 & 0xFB;
-
-    /* 0x921E: 0x0AE2 != 0 → skip E34D call */
-
-    /* 0x9224: 0x0AF0 bit 0 not set (0x0AF0=0x00) → skip D878 */
-    /* 0x922E: 0x0AF0 bit 2 not set → skip 0x0480 */
-
-    /* 0x9238: 905F &= 0xEF (clear bit 4) */
-    REG_USB_EP_CTRL_905F = REG_USB_EP_CTRL_905F & 0xEF;
-}
-
 /*=== SET_CONFIG ===*/
 /*
  * handle_set_config - Handle USB SET_CONFIGURATION request
@@ -1082,50 +1047,7 @@ static void handle_cbw(void) {
         EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
         EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
         send_csw(0x00);
-    } else if (opcode == 0x25) {
-        /* SCSI READ_CAPACITY(10) — return capacity info.
-         * usb-storage sends this during enumeration. Return small capacity. */
-        uint8_t vi;
-        for (vi = 0; vi < 8; vi++) EP_BUF(vi) = 0x00;
-        /* Last LBA = 0x00000000 (1 block) */
-        EP_BUF(0x00) = 0x00; EP_BUF(0x01) = 0x00;
-        EP_BUF(0x02) = 0x00; EP_BUF(0x03) = 0x00;
-        /* Block size = 512 bytes */
-        EP_BUF(0x04) = 0x00; EP_BUF(0x05) = 0x00;
-        EP_BUF(0x06) = 0x02; EP_BUF(0x07) = 0x00;
-        direct_bulk_in(8);
-        EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-        EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
-        EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
-        EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
-        send_csw(0x00);
-    } else if (opcode == 0x1A) {
-        /* SCSI MODE_SENSE(6) — return minimal response */
-        EP_BUF(0x00) = 0x03; EP_BUF(0x01) = 0x00;
-        EP_BUF(0x02) = 0x00; EP_BUF(0x03) = 0x00;
-        direct_bulk_in(4);
-        EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-        EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
-        EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
-        EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
-        send_csw(0x00);
-    } else if (opcode == 0x03) {
-        /* SCSI REQUEST_SENSE — return "not ready, medium not present" */
-        uint8_t alloc_len = REG_USB_CBWCB_4;
-        uint8_t resp_len = (alloc_len < 18) ? alloc_len : 18;
-        uint8_t vi;
-        for (vi = 0; vi < resp_len; vi++) EP_BUF(vi) = 0x00;
-        EP_BUF(0x00) = 0x70;  /* Response code: current */
-        EP_BUF(0x02) = 0x02;  /* Sense key: NOT READY */
-        EP_BUF(0x07) = 0x0A;  /* Additional sense length */
-        EP_BUF(0x0C) = 0x3A;  /* ASC: MEDIUM NOT PRESENT */
-        EP_BUF(0x0D) = 0x00;  /* ASCQ */
-        direct_bulk_in(resp_len);
-        EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-        EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
-        EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
-        EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
-        send_csw(0x00);
+
     } else if (opcode == 0x8A) {
         /* SCSI WRITE(16) — receive bulk OUT data from host.
          * Tinygrad sends 64KB chunks: CBW → 64KB data OUT → CSW.
@@ -1144,13 +1066,6 @@ static void handle_cbw(void) {
                    ((uint32_t)REG_USB_CBW_XFER_LEN_2 << 16) |
                    ((uint32_t)REG_USB_CBW_XFER_LEN_1 << 8) |
                    REG_USB_CBW_XFER_LEN_0;
-
-        uart_puts("[W16:"); uart_puthex((uint8_t)(xfer_len >> 16));
-        uart_puthex((uint8_t)(xfer_len >> 8)); uart_puthex((uint8_t)xfer_len);
-        uart_puts(" 93="); uart_puthex(REG_USB_EP_CFG1);
-        uart_puts(" 94="); uart_puthex(REG_USB_EP_CFG2);
-        uart_puts(" 5A="); uart_puthex(REG_USB_EP_CFG_905A);
-        uart_puts("]\n");
 
         /* Reset bulk endpoint state before bulk OUT data phase.
          * After E4 data-IN ops, the endpoint may be left in bulk IN mode.
@@ -1177,16 +1092,6 @@ static void handle_cbw(void) {
                     REG_CPU_KEEPALIVE = 0x0C;
                 }
                 if (!wt) {
-                    /* Timed out — dump diagnostic state */
-                    uart_puts("[W:STUCK@");
-                    uart_puthex((uint8_t)(received >> 8));
-                    uart_puts("KB 9101=");
-                    uart_puthex(REG_USB_PERIPH_STATUS);
-                    uart_puts(" 905A=");
-                    uart_puthex(REG_USB_EP_CFG_905A);
-                    uart_puts(" C8D4=");
-                    uart_puthex(REG_DMA_CONFIG);
-                    uart_puts("]\n");
                     /* Try to recover — send error CSW */
                     send_csw(0x01);
                     return;
@@ -1205,13 +1110,6 @@ static void handle_cbw(void) {
             received += chunk;
         }
 
-        uart_puts("[W:OK]\n");
-        send_csw(0x00);
-    } else if (opcode == 0x1E) {
-        /* PREVENT_ALLOW_MEDIUM_REMOVAL — no-data, just ack */
-        send_csw(0x00);
-    } else if (opcode == 0x1B) {
-        /* START_STOP_UNIT — no-data, just ack */
         send_csw(0x00);
     } else {
         send_csw(0x01);
@@ -1534,10 +1432,6 @@ void timer2_isr(void) __interrupt(5) { }
 static void delay_short(void) {
     volatile uint16_t d;
     for (d = 0; d < 1000; d++) { }
-}
-static void delay_long(void) {
-    volatile uint16_t d;
-    for (d = 0; d < 60000U; d++) { }
 }
 
 /*=== PHY link training (from stock firmware 0xD702-0xD743) ===*/
