@@ -1287,7 +1287,13 @@ static void handle_usb_reset(void) {
         is_usb3 = (link >= USB_SPEED_SUPER) ? 1 : 0;
     }
 
-    bulk_out_state = 0; need_cbw_process = 0; need_dma_setup = 0; need_bulk_init = 0; bulk_ready = 0; config_done = 0;
+    bulk_out_state = 0;
+    need_cbw_process = 0;
+    need_bulk_init = 0;
+    need_dma_setup = 0;
+    bulk_ready = 0;
+    config_done = 0;
+
 }
 
 /*=== Interrupt Handlers ===*/
@@ -3148,8 +3154,19 @@ static void hw_init(void) {
 
 void main(void) {
     IE = 0;
-    is_usb3 = 0; need_bulk_init = 0; need_dma_setup = 0; bulk_ready = 0; bulk_out_state = 0;
-    pcie_initialized = 0; need_pcie_init = 0; config_done = 0; need_rearm = 0; need_state_init = 0; pcie_cfg_pending = 0; cbw_active = 0;
+    is_usb3 = 0;
+    need_bulk_init = 0;
+    need_cbw_process = 0;
+    need_dma_setup = 0;
+    bulk_ready = 0;
+    bulk_out_state = 0;
+    pcie_initialized = 0;
+    need_pcie_init = 0;
+    config_done = 0;
+    need_rearm = 0;
+    need_state_init = 0;
+    pcie_cfg_pending = 0;
+    cbw_active = 0;
     REG_UART_LCR &= 0xF7;
     uart_puts("\n[BOOT]\n");
 

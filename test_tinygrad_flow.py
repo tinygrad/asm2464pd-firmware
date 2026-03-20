@@ -80,6 +80,18 @@ def scsi_write_raw(dev, data, lba=0, timeout=5000):
     residue, status, _ = bot_send(dev, cdb, send_data=padded, timeout=timeout)
     return status
 
+def bar_addr_size(bar):
+    """Normalize BAR value across tinygrad versions.
+
+    Old versions return objects with .addr/.size.
+    Newer versions return (addr, size) tuples.
+    """
+    if hasattr(bar, 'addr') and hasattr(bar, 'size'):
+        return bar.addr, bar.size
+    if isinstance(bar, tuple) and len(bar) >= 2:
+        return bar[0], bar[1]
+    raise TypeError(f"Unsupported BAR format: {type(bar)}")
+
 # ============================================================
 # Tests
 # ============================================================
@@ -239,7 +251,7 @@ def test_14_pcie_setup_bars(dev):
 
     from tinygrad.runtime.support.system import System
     bars = System.pci_setup_usb_bars(usb, gpu_bus=4, mem_base=0x10000000, pref_mem_base=(32 << 30))
-    print(f"  BARs: { {k: f'addr=0x{v.addr:X} size=0x{v.size:X}' for k,v in bars.items()} }")
+    print(f"  BARs: { {k: f'addr=0x{bar_addr_size(v)[0]:X} size=0x{bar_addr_size(v)[1]:X}' for k,v in bars.items()} }")
     assert 0 in bars, "BAR 0 not found"
     assert 5 in bars, "BAR 5 not found"
     return True
@@ -254,7 +266,7 @@ def test_15_pcie_mem_read(dev):
 
     from tinygrad.runtime.support.system import System
     bars = System.pci_setup_usb_bars(usb, gpu_bus=4, mem_base=0x10000000, pref_mem_base=(32 << 30))
-    bar5_addr = bars[5].addr
+    bar5_addr, _ = bar_addr_size(bars[5])
 
     # Read first dword of BAR5 (MMIO config space mirror or IP discovery)
     val = usb.pcie_mem_req(bar5_addr, size=4)
@@ -272,7 +284,7 @@ def test_16_pcie_mem_multi_reads(dev):
 
     from tinygrad.runtime.support.system import System
     bars = System.pci_setup_usb_bars(usb, gpu_bus=4, mem_base=0x10000000, pref_mem_base=(32 << 30))
-    bar5_addr = bars[5].addr
+    bar5_addr, _ = bar_addr_size(bars[5])
 
     # Read 10 consecutive dwords
     for i in range(10):
@@ -331,7 +343,7 @@ def test_21_scsi_write_pcie_readback(dev):
 
     from tinygrad.runtime.support.system import System
     bars = System.pci_setup_usb_bars(usb, gpu_bus=4, mem_base=0x10000000, pref_mem_base=(32 << 30))
-    bar0_addr = bars[0].addr  # GPU VRAM base (e.g. 0x800000000)
+    bar0_addr, _ = bar_addr_size(bars[0])  # GPU VRAM base (e.g. 0x800000000)
     dma_target = bar0_addr + 0x200000
 
     # Write known pattern
@@ -370,7 +382,7 @@ def test_22_scsi_write_buffer_location(dev):
 
     from tinygrad.runtime.support.system import System
     bars = System.pci_setup_usb_bars(usb, gpu_bus=4, mem_base=0x10000000, pref_mem_base=(32 << 30))
-    bar0_addr = bars[0].addr
+    bar0_addr, _ = bar_addr_size(bars[0])
 
     # Write distinctive pattern
     pattern = b'\xDE\xAD\xBE\xEF' + b'\x00' * 508
@@ -427,7 +439,7 @@ def test_24_firmware_copy_pcie_verify(dev):
 
     from tinygrad.runtime.support.system import System
     bars = System.pci_setup_usb_bars(usb, gpu_bus=4, mem_base=0x10000000, pref_mem_base=(32 << 30))
-    bar0_addr = bars[0].addr
+    bar0_addr, _ = bar_addr_size(bars[0])
     dma_target = bar0_addr + 0x200000
 
     # Distinctive pattern that's easy to verify
