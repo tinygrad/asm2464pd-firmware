@@ -823,12 +823,22 @@ static void send_csw(uint8_t status) {
 
     /* Disable interrupts during DMA trigger → EP_COMPLETE critical section */
     IE &= ~0x80;  /* EA = 0 */
+    if (REG_USB_EP_CFG1 & USB_EP_CFG1_BULK_DONE) {
+        REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_DONE;
+    }
     REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_IN;
     REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
     /* Clear stale EP_COMPLETE BEFORE triggering DMA */
     if (REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE) {
         REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
+        {
+            uint16_t clr;
+            for (clr = 0xFFFF; clr; clr--) {
+                if (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) break;
+            }
+        }
     }
+    REG_USB_MSC_LENGTH = 0x0D;
     REG_USB_BULK_DMA_TRIGGER = 0x01;
     while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
     /* Clear EP_COMPLETE from CSW DMA + reset DMA engine
@@ -871,11 +881,20 @@ static uint8_t direct_bulk_in(uint8_t len) {
 
     saved_ie = IE;
     IE &= ~0x80;  /* EA = 0 */
+    if (REG_USB_EP_CFG1 & USB_EP_CFG1_BULK_DONE) {
+        REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_DONE;
+    }
     REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_IN;
     REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
     /* Clear stale EP_COMPLETE */
     if (REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE) {
         REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
+        {
+            uint16_t clr;
+            for (clr = 0xFFFF; clr; clr--) {
+                if (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) break;
+            }
+        }
     }
     REG_USB_BULK_DMA_TRIGGER = 0x01;
     /* Wait for EP_COMPLETE with timeout */
@@ -1086,13 +1105,33 @@ static void scsi_write16_prepare_target(void) {
 /*=== CBW Handler (from master, proven working) ===*/
 static void handle_cbw(void) {
     uint8_t opcode;
+    uint8_t cbw_flags;
+    uint8_t cbw_xfer_len_0;
+    uint8_t cbwcb_1;
+    uint8_t cbwcb_3;
+    uint8_t cbwcb_4;
 
-    if (!(REG_USB_MODE & 0x01)) return;
     REG_USB_MODE = 0x01;
 
     /* CE88/CE89 DMA handshake */
     REG_BULK_DMA_HANDSHAKE = 0x00;
     while (!(REG_USB_DMA_STATE & USB_DMA_STATE_READY)) { }
+
+    {
+        uint16_t cbw_to;
+        for (cbw_to = 0xFFFF; cbw_to; cbw_to--) {
+            if (REG_USB_CBW_SIG0 == 0x55 &&
+                REG_USB_CBW_SIG1 == 0x53 &&
+                REG_USB_CBW_SIG2 == 0x42 &&
+                REG_USB_CBW_SIG3 == 0x43) {
+                break;
+            }
+        }
+        if (!cbw_to) {
+            send_csw(0x01);
+            return;
+        }
+    }
 
     cbw_tag[0] = REG_CBW_TAG_0; cbw_tag[1] = REG_CBW_TAG_1;
     cbw_tag[2] = REG_CBW_TAG_2; cbw_tag[3] = REG_CBW_TAG_3;
@@ -1100,14 +1139,21 @@ static void handle_cbw(void) {
     EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
     EP_BUF(0x0C) = 0x00;
 
+    cbw_flags = REG_USB_CBW_FLAGS;
+    cbw_xfer_len_0 = REG_USB_CBW_XFER_LEN_0;
+    cbwcb_1 = REG_USB_CBWCB_1;
+    cbwcb_3 = REG_USB_CBWCB_3;
+    cbwcb_4 = REG_USB_CBWCB_4;
+    REG_USB_STATUS_909E = 0x01;
+
     opcode = REG_USB_CBWCB_0;
     if (opcode != 0xE4 && opcode != 0xE5) {
         uart_puts("[CBW:"); uart_puthex(opcode); uart_puts("]\n");
     }
 
     if (opcode == 0xE5) {
-        uint8_t val = REG_USB_CBWCB_1;
-        uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
+        uint8_t val = cbwcb_1;
+        uint16_t addr = ((uint16_t)cbwcb_3 << 8) | cbwcb_4;
         XDATA_REG8(addr) = val;
 
         send_csw(0x00);
@@ -1115,21 +1161,22 @@ static void handle_cbw(void) {
         /* Read XDATA — two modes based on dCBWDataTransferLength:
          *   xfer_len=0: embed up to 4 bytes in CSW residue field (test_bulk.py)
          *   xfer_len>0: data IN phase via direct_bulk_in (tinygrad ReadOp) */
-        uint8_t sz = REG_USB_CBWCB_1;
-        uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
-        uint32_t xfer_len = ((uint32_t)REG_USB_CBW_XFER_LEN_3 << 24) |
-                            ((uint32_t)REG_USB_CBW_XFER_LEN_2 << 16) |
-                            ((uint32_t)REG_USB_CBW_XFER_LEN_1 << 8) |
-                            (uint32_t)REG_USB_CBW_XFER_LEN_0;
+        uint8_t sz = cbwcb_1;
+        uint16_t addr = ((uint16_t)cbwcb_3 << 8) | cbwcb_4;
         if (sz == 0) sz = 1;
-        if (xfer_len == 0) {
+        if (!(cbw_flags & CBW_FLAGS_DIRECTION) && cbw_xfer_len_0 == 0) {
             /* No data phase — embed in CSW residue (max 4 bytes) */
             uint8_t saved_ie2;
+            EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
+            EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
+            EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
+            EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
             EP_BUF(0x08) = XDATA_REG8(addr);
             EP_BUF(0x09) = (sz >= 2) ? XDATA_REG8(addr + 1) : 0x00;
             EP_BUF(0x0A) = (sz >= 3) ? XDATA_REG8(addr + 2) : 0x00;
             EP_BUF(0x0B) = (sz >= 4) ? XDATA_REG8(addr + 3) : 0x00;
             EP_BUF(0x0C) = 0x00;
+            REG_USB_MSC_LENGTH = 0x0D;
             saved_ie2 = IE;
             IE &= ~0x80;  /* Disable interrupts during DMA trigger */
             /* Clear stale EP_COMPLETE before triggering DMA */
@@ -1162,8 +1209,8 @@ static void handle_cbw(void) {
             send_csw(0x00);
         }
     } else if (opcode == 0xE6) {
-        uint8_t len = REG_USB_CBWCB_1;
-        uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
+        uint8_t len = cbwcb_1;
+        uint16_t addr = ((uint16_t)cbwcb_3 << 8) | cbwcb_4;
         uint8_t i;
         if (len == 0) len = 64;
         for (i = 0; i < len; i++) EP_BUF(i) = XDATA_REG8(addr + i);
@@ -1178,8 +1225,8 @@ static void handle_cbw(void) {
         send_csw(0x00);
     } else if (opcode == 0xE7) {
         /* Bulk OUT: receive data synchronously, copy to XDATA[addr] */
-        uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
-        uint8_t len = REG_USB_CBWCB_1;
+        uint16_t addr = ((uint16_t)cbwcb_3 << 8) | cbwcb_4;
+        uint8_t len = cbwcb_1;
         uint8_t ci;
         if (len == 0) len = 64;
 
@@ -1216,7 +1263,7 @@ static void handle_cbw(void) {
     } else if (opcode == 0x12) {
         /* SCSI INQUIRY — return minimal response matching stock firmware.
          * This is needed so usb-storage stays bound (keeps interface configured). */
-        uint8_t alloc_len = REG_USB_CBWCB_4;
+        uint8_t alloc_len = cbwcb_4;
         uint8_t resp_len = (alloc_len < 36) ? alloc_len : 36;
         uint8_t vi;
         /* Clear response buffer */
@@ -1284,6 +1331,11 @@ static void handle_cbw(void) {
             REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_OUT;
             REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
 
+            /* Clear stale BULK_DATA latch before waiting for next chunk. */
+            if (REG_USB_PERIPH_STATUS & USB_PERIPH_BULK_DATA) {
+                REG_USB_STATUS_909E = 0x01;
+            }
+
             {
                 uint16_t wt;
                 for (wt = 60000U; wt; wt--) {
@@ -1345,6 +1397,7 @@ static void handle_cbw(void) {
 
             received += chunk;
             bulk_out_received = received;
+            REG_USB_STATUS_909E = 0x01;
         }
 
         scsi_write_active = 0;
