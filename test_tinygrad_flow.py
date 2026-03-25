@@ -584,6 +584,49 @@ def test_34_dma_in_order_stress(dev):
         print(f"  iter {it}: OK ({checked} offsets)")
     return True
 
+def test_32_dma_minimal_rewrite_repro(dev):
+    """Minimal fast repro: second 64KB write must update key sentinel offsets."""
+    usb, dma_target = _dma_target_ctx(dev)
+
+    pattern_a = bytes([((i * 29) + 0x55) & 0xFF for i in range(0x10000)])
+    status = scsi_write_raw(dev, pattern_a, lba=0, timeout=_dma_scsi_timeout_ms())
+    assert status == 0, f"pattern_a SCSI WRITE failed: status={status}"
+    _doorbell_kick(dev)
+    _ = usb.pcie_mem_req(dma_target + 0x000, size=4)
+
+    pattern_b = bytes([((i * 29) + 0x31 + 0x55) & 0xFF for i in range(0x10000)])
+    status = scsi_write_raw(dev, pattern_b, lba=0, timeout=_dma_scsi_timeout_ms())
+    assert status == 0, f"pattern_b SCSI WRITE failed: status={status}"
+    _doorbell_kick(dev)
+
+    errors = _verify_dma_offsets(usb, dma_target, pattern_b, [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC])
+    assert not errors, f"minimal rewrite mismatches: {errors}"
+    print("  minimal fast rewrite path OK")
+    return True
+
+def test_33_dma_fast_rewrite_repro(dev):
+    """Fast repro: two consecutive 64KB writes should match latest pattern."""
+    usb, dma_target = _dma_target_ctx(dev)
+
+    pattern_a = bytes([((i * 29) + 0x55) & 0xFF for i in range(0x10000)])
+    status = scsi_write_raw(dev, pattern_a, lba=0, timeout=_dma_scsi_timeout_ms())
+    assert status == 0, f"pattern_a SCSI WRITE failed: status={status}"
+    _doorbell_kick(dev)
+
+    # Keep this light so it fails faster than test_34's heavy 2048-read stress.
+    baseline = _verify_dma_offsets(usb, dma_target, pattern_a, [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC])
+    assert not baseline, f"pattern_a baseline mismatch: {baseline}"
+
+    pattern_b = bytes([((i * 29) + 0x31 + 0x55) & 0xFF for i in range(0x10000)])
+    status = scsi_write_raw(dev, pattern_b, lba=0, timeout=_dma_scsi_timeout_ms())
+    assert status == 0, f"pattern_b SCSI WRITE failed: status={status}"
+    _doorbell_kick(dev)
+
+    errors = _verify_dma_offsets(usb, dma_target, pattern_b, [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC])
+    assert not errors, f"fast rewrite mismatches: {errors}"
+    print("  fast rewrite path OK")
+    return True
+
 def test_35_dma_out_of_order_doorbell(dev):
     """DMA should still complete when doorbell bytes are written out of order."""
     usb, dma_target = _dma_target_ctx(dev)
@@ -792,6 +835,8 @@ TESTS = [
     ("22 SCSI WRITE buffer location", test_22_scsi_write_buffer_location),
     ("23 SCSI WRITE CE8x state",    test_23_scsi_write_ce8x_state),
     ("24 Firmware copy PCIe verify", test_24_firmware_copy_pcie_verify),
+    ("32 DMA minimal rewrite repro", test_32_dma_minimal_rewrite_repro),
+    ("33 DMA fast rewrite repro",    test_33_dma_fast_rewrite_repro),
     ("34 DMA in-order stress",        test_34_dma_in_order_stress),
     ("35 DMA out-of-order kick",      test_35_dma_out_of_order_doorbell),
     ("36 DMA paused kick",            test_36_dma_pause_between_doorbells),

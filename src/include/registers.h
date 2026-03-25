@@ -55,6 +55,11 @@
 //=============================================================================
 #define FLASH_BUFFER_BASE       0x7000
 #define FLASH_BUFFER_SIZE       0x1000
+/*
+ * Flash staging buffer window (0x7000-0x7FFF)
+ * Used as USB bulk OUT landing area before firmware copies/transforms data.
+ */
+#define REG_FLASH_BUF_BYTE(off) XDATA_REG8(FLASH_BUFFER_BASE + (off))
 
 // Flash buffer control registers (0x7041, 0x78AF-0x78B2)
 #define REG_FLASH_BUF_CTRL_7041 XDATA_REG8(0x7041)  /* Flash buffer control */
@@ -156,6 +161,11 @@
 #define NVME_DATA_BUF_BASE      0xF000
 #define NVME_DATA_BUF_SIZE      0x1000
 #define NVME_DATA_BUF_DMA_ADDR  0x00200000
+/*
+ * NVMe data mirror window (0xF000-0xFFFF)
+ * Firmware uses this as a software shadow of host-visible DMA payloads.
+ */
+#define REG_NVME_DATA_BYTE(off) XDATA_REG8(NVME_DATA_BUF_BASE + (off))
 
 //=============================================================================
 // USB Interface Registers (0x9000-0x93FF)
@@ -802,10 +812,13 @@
 #define PCIE_EXT_REG(offset)  XDATA_REG8(0xB200 + (offset))
 
 // PCIe TLP registers (0xB210-0xB284)
+/* Raw byte access to B210-B21B request header window (12 bytes). */
+#define REG_PCIE_TLP_BYTE(off)  XDATA_REG8V(0xB210 + (off))
 #define REG_PCIE_FMT_TYPE       XDATA_REG8V(0xB210)
 #define REG_PCIE_TLP_CTRL       XDATA_REG8V(0xB213)
 #define REG_PCIE_TLP_LENGTH     XDATA_REG8V(0xB216)
 #define REG_PCIE_BYTE_EN        XDATA_REG8V(0xB217)
+#define   PCIE_BYTE_EN_DWORD      0x0F  /* Enable all 4 byte lanes */
 #define REG_PCIE_ADDR_0         XDATA_REG8V(0xB218)
 #define REG_PCIE_ADDR_1         XDATA_REG8V(0xB219)
 #define REG_PCIE_ADDR_2         XDATA_REG8V(0xB21A)
@@ -854,6 +867,7 @@
 #define REG_PCIE_DMA_CFG_51     XDATA_REG8(0xB251)   // DMA config byte 1
 #define REG_PCIE_DOORBELL_CMD   XDATA_REG8(0xB251)   // Byte 1 of doorbell - command byte
 #define REG_PCIE_TRIGGER        XDATA_REG8V(0xB254)
+#define   PCIE_TRIGGER_EXEC       0x0F  /* Trigger PCIe request execution */
 #define REG_PCIE_DMA_SIZE_A     XDATA_REG8(0xB264)   // DMA size config A
 #define REG_PCIE_DMA_SIZE_B     XDATA_REG8(0xB265)   // DMA size config B
 #define REG_PCIE_DMA_SIZE_C     XDATA_REG8(0xB266)   // DMA size config C
@@ -872,6 +886,8 @@
 #define   PCIE_STATUS_ERROR       0x01  // Bit 0: Error flag
 #define   PCIE_STATUS_COMPLETE    0x02  // Bit 1: Completion status
 #define   PCIE_STATUS_BUSY        0x04  // Bit 2: Busy flag
+#define   PCIE_STATUS_KICK        0x04  /* Command kick/write strobe value */
+#define   PCIE_STATUS_RESET       0x08  /* Request engine reset/re-arm value */
 #define REG_PCIE_TUNNEL_CFG     XDATA_REG8(0xB298)  // TLP control (bit 4 = tunnel enable)
 #define   PCIE_TLP_CTRL_TUNNEL    0x10  // Bit 4: Tunnel enable
 #define REG_PCIE_CTRL_B2D5      XDATA_REG8(0xB2D5)  /* PCIe control */
@@ -1748,6 +1764,8 @@
 #define REG_USB_EP_CTRL_0E      XDATA_REG8(0xD80E)  // Control 0E
 #define REG_USB_EP_DMA_LEN      XDATA_REG8(0xD80F)  // DMA data length (90A1 path)
 #define REG_USB_EP_DATA_BASE    XDATA_REG8(0xD810)  // Start of payload (90A1 path)
+/* Linear byte access for CSW/data payload region rooted at 0xD800. */
+#define REG_USB_EP_BUF_BYTE(off) XDATA_REG8(0xD800 + (off))
 // USB Endpoint buffers at 0xDE30, 0xDE36 (extended region)
 #define REG_USB_EP_BUF_DE30     XDATA_REG8(0xDE30)  // EP buf extended ctrl (init: 0x03)
 #define REG_USB_EP_BUF_DE36     XDATA_REG8(0xDE36)  // EP buf extended cfg (init: 0x00)
@@ -1941,6 +1959,9 @@
 //=============================================================================
 #define PCIE_FMT_MEM_READ       0x00
 #define PCIE_FMT_MEM_WRITE      0x40
+#define PCIE_FMT_MEM_READ64     0x20
+#define PCIE_FMT_MEM_WRITE64    0x60
+#define PCIE_FMT_MEM_WRITE64_ALT 0x70
 #define PCIE_FMT_CFG_READ_0     0x04
 #define PCIE_FMT_CFG_WRITE_0    0x44
 #define PCIE_FMT_CFG_READ_1     0x05

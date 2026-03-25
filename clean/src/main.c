@@ -22,7 +22,7 @@ __sfr __at(0xE0) ACC;  /* Accumulator */
 #define IP_PT0  0x02    /* Timer0 high priority */
 
 #define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
-#define EP_BUF(n) XDATA_REG8(0xD800 + (n))
+#define EP_BUF(n) REG_USB_EP_BUF_BYTE(n)
 
 static void desc_copy(__code const uint8_t *src, uint8_t len) {
     uint8_t i;
@@ -459,19 +459,19 @@ static void post_csw_cleanup(void) {
     uint8_t i;
 
     /* Stock 0xC16C-0xC178: Clear state variables */
-    XDATA_REG8(0x000B) = 0x00;
+    G_POST_CSW_SCRATCH_000B = 0x00;
 
     /* Stock 0xC179-0xC1A7: Clear state arrays (32 entries) */
     for (i = 0; i < 32; i++) {
-        XDATA_REG8(0x0108 + i) = 0x00;
-        XDATA_REG8(0x0171 + i) = 0xFF;
-        XDATA_REG8(0x0518 + i) = 0x00;
+        G_USB_INIT_STATE_BASE[i] = 0x00;
+        G_SCSI_SLOT_71_BASE[i] = 0xFF;
+        G_EP_STATE_0518_BASE[i] = 0x00;
     }
 
     /* Stock 0xC1AA-0xC1C6: Additional state init */
 
-    XDATA_REG8(0x002E) = 0x22;
-    XDATA_REG8(0x0050) = 0x21;
+    G_POST_CSW_CONST_002E = 0x22;
+    G_POST_CSW_CONST_0050 = 0x21;
 
     /* Stock 0xC1C4: IDATA[0x0D] = 0x22 */
     __asm
@@ -505,10 +505,10 @@ static void state_init(void) {
 
       /* stock sets to 0x05, not 0 */
 
-    XDATA_REG8(0x07E6) = 0x00;
-    XDATA_REG8(0x07E7) = 0x00;
+    G_LINK_SCRATCH_07E6 = 0x00;
+    G_LINK_SCRATCH_07E7 = 0x00;
 
-    XDATA_REG8(0x07E2) = 0x00;
+    G_LINK_SCRATCH_07E2 = 0x00;
 
     /* Stock 0xBDFA: call 0x54BB (clear_pcie_enum_done) */
 
@@ -611,12 +611,12 @@ static void state_init(void) {
     if (st_usb_state_clear_06e3) {
         uint16_t j;
         st_usb_state_clear_06e3 = 0x00;
-        XDATA_REG8(0x06E4) = 0x01;
+        G_USB_STATE_ARM_06E4 = 0x01;
 
-        XDATA_REG8(0x05A4) = 0x00;
+        G_VENDOR_SLOT_STATE_05A4 = 0x00;
 
-        XDATA_REG8(0x05A9) = 0x00;
-        XDATA_REG8(0x05AA) = 0x00;
+        G_VENDOR_SLOT_STATE_05A9 = 0x00;
+        G_VENDOR_SLOT_STATE_05AA = 0x00;
           /* 54BB again */
         /* Clear 0x05B0-0x0632 area (stock C24C loop via 0x0BBE helper) */
         for (j = 0x05B0; j <= 0x0631; j++) XDATA_REG8(j) = 0x00;
@@ -719,7 +719,7 @@ static void do_bulk_init(void) {
     REG_USB_STATUS = 0x01; REG_USB_CTRL_924C = 0x05;
 
     /* Clear endpoint buffer D800-DE5F */
-    for (j = 0; j < 0x0660; j++) XDATA_REG8(0xD800 + j) = 0x00;
+    for (j = 0; j < 0x0660; j++) REG_USB_EP_BUF_BYTE(j) = 0x00;
     REG_USB_EP_BUF_DE30 = 0x03; REG_USB_EP_BUF_DE36 = 0x00;
 
     /* 9200 toggle + MSC reset */
@@ -818,6 +818,10 @@ static void send_csw(uint8_t status) {
     EP_BUF(0x0A) = 0x00; EP_BUF(0x0B) = 0x00;
     REG_USB_MSC_LENGTH = 0x0D;
     REG_USB_MODE = 0x01;
+    REG_USB_EP_BUF_HI = 0xD8;
+    REG_USB_EP_BUF_LO = 0x00;
+    REG_USB_EP_BUF_DATA = 0x00;
+    REG_USB_EP_BUF_PTR_LO = 0xD8;
 
     /* Doorbell dance to transition MSC state machine */
     doorbell_dance();
@@ -1024,7 +1028,7 @@ static uint8_t pcie_read_completion32(uint32_t *out) {
                          ((uint32_t)REG_PCIE_DATA_1 << 16) |
                          ((uint32_t)REG_PCIE_DATA_2 << 8) |
                          (uint32_t)REG_PCIE_EXT_STATUS;
-            REG_PCIE_STATUS = 0x04;
+            REG_PCIE_STATUS = PCIE_STATUS_KICK;
             *out = v;
             return 1;
         }
@@ -1048,22 +1052,22 @@ static uint8_t pcie_cfg_read32_gpu(uint16_t reg, uint32_t *out) {
     REG_PCIE_ADDR_HIGH_2 = 0x00;
     REG_PCIE_ADDR_HIGH_3 = 0x00;
 
-    REG_PCIE_STATUS = 0x08;
+    REG_PCIE_STATUS = PCIE_STATUS_RESET;
     REG_PCIE_TLP_CTRL = 0x01;
-    REG_PCIE_BYTE_EN = 0x0F;
+    REG_PCIE_BYTE_EN = PCIE_BYTE_EN_DWORD;
     REG_PCIE_TLP_LENGTH = 0x20;
     REG_PCIE_FMT_TYPE = 0x05;
 
     REG_PCIE_STATUS = 0x01;
     REG_PCIE_STATUS = 0x02;
-    REG_PCIE_STATUS = 0x04;
-    REG_PCIE_TRIGGER = 0x0F;
+    REG_PCIE_STATUS = PCIE_STATUS_KICK;
+    REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
 
     return pcie_read_completion32(out);
 }
 
 static void pcie_mem_write32_dma(uint32_t addr_lo, uint32_t addr_hi, uint32_t value) {
-    REG_PCIE_STATUS = 0x08;
+    REG_PCIE_STATUS = PCIE_STATUS_RESET;
 
     REG_PCIE_DATA = (uint8_t)(value >> 24);
     REG_PCIE_DATA_1 = (uint8_t)(value >> 16);
@@ -1079,21 +1083,13 @@ static void pcie_mem_write32_dma(uint32_t addr_lo, uint32_t addr_hi, uint32_t va
     REG_PCIE_ADDR_HIGH_2 = (uint8_t)(addr_hi >> 8);
     REG_PCIE_ADDR_HIGH_3 = (uint8_t)(addr_hi >> 0);
 
-    REG_PCIE_BYTE_EN = 0x0F;
-    REG_PCIE_FMT_TYPE = 0x60;
-    REG_PCIE_TRIGGER = 0x0F;
-    REG_PCIE_STATUS = 0x04;
+    REG_PCIE_TLP_CTRL = 0x01;
+    REG_PCIE_BYTE_EN = PCIE_BYTE_EN_DWORD;
+    REG_PCIE_TLP_LENGTH = 0x20;
+    REG_PCIE_FMT_TYPE = PCIE_FMT_MEM_WRITE64;
+    REG_PCIE_STATUS = PCIE_STATUS_KICK;
+    REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
 
-    __asm
-        nop
-        nop
-        nop
-        nop
-        nop
-        nop
-        nop
-        nop
-    __endasm;
 }
 
 static void scsi_write16_prepare_target(void) {
@@ -1199,7 +1195,9 @@ static void handle_cbw(void) {
         uint8_t sz = cbwcb_1;
         uint16_t addr = ((uint16_t)cbwcb_3 << 8) | cbwcb_4;
         if (sz == 0) sz = 1;
-        if (!(cbw_flags & CBW_FLAGS_DIRECTION) && cbw_xfer_len_0 == 0) {
+        /* Guard against transient stale CBW flags/length reads:
+         * for E4, non-zero CDB size implies a data-IN phase. */
+        if (!(cbw_flags & CBW_FLAGS_DIRECTION) && cbw_xfer_len_0 == 0 && cbwcb_1 == 0) {
             /* No data phase — embed in CSW residue (max 4 bytes) */
             uint8_t saved_ie2;
             EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
@@ -1290,7 +1288,7 @@ static void handle_cbw(void) {
 
         /* Copy from DMA buffer to target address */
         for (ci = 0; ci < len; ci++)
-            XDATA_REG8(addr + ci) = XDATA_REG8(0x7000 + ci);
+            XDATA_REG8(addr + ci) = REG_FLASH_BUF_BYTE(ci);
 
         send_csw(0x00);
     } else if (opcode == 0xE8) {
@@ -1422,7 +1420,7 @@ static void handle_cbw(void) {
             if (received == 0) {
                 uint16_t si;
                 for (si = 0; si < 0x0200; si++) {
-                    XDATA_REG8(0xF000 + si) = XDATA_REG8(0x7000 + si);
+                    REG_NVME_DATA_BYTE(si) = REG_FLASH_BUF_BYTE(si);
                 }
             }
 
@@ -1433,10 +1431,10 @@ static void handle_cbw(void) {
                 if (base_lo < dma_target_lo) base_hi++;
 
                 for (i = 0; i < chunk; i += 4) {
-                    uint32_t v = (uint32_t)XDATA_REG8(0x7000 + i) |
-                                 ((uint32_t)XDATA_REG8(0x7000 + i + 1) << 8) |
-                                 ((uint32_t)XDATA_REG8(0x7000 + i + 2) << 16) |
-                                 ((uint32_t)XDATA_REG8(0x7000 + i + 3) << 24);
+                    uint32_t v = (uint32_t)REG_FLASH_BUF_BYTE(i) |
+                                 ((uint32_t)REG_FLASH_BUF_BYTE(i + 1) << 8) |
+                                 ((uint32_t)REG_FLASH_BUF_BYTE(i + 2) << 16) |
+                                 ((uint32_t)REG_FLASH_BUF_BYTE(i + 3) << 24);
                     uint32_t a_lo = base_lo + (uint32_t)i;
                     uint32_t a_hi = base_hi;
                     if (a_lo < base_lo) a_hi++;
@@ -1473,7 +1471,7 @@ static void handle_cbw(void) {
         REG_USB_EP_CFG_905A = ep_cfg_905a_saved;
 
         /* Re-arm PCIe request engine state after DMA write burst. */
-        REG_PCIE_STATUS = 0x08;
+        REG_PCIE_STATUS = PCIE_STATUS_RESET;
 
         send_csw(0x00);
     } else {
@@ -3032,12 +3030,12 @@ static uint8_t pcie_phy_channel_config(uint8_t mode) {
     uint8_t i;
 
     /* Set mode flag (stock: E65F sets 0x05AB=1, E656 sets 0x05AB=0) */
-    XDATA_REG8(0x05AB) = mode;
+    G_PCIE_PHY_ACCESS_MODE_05AB = mode;
 
     /* Step 1: Clear 12 PHY channel registers (stock: BF96-BFA4 loop)
      * 0x99B0 helper: XDATA[0xB210 + i] = 0 for i=0..11 */
     for (i = 0; i < 12; i++) {
-        XDATA_REG8(0xB210 + i) = 0x00;
+        REG_PCIE_TLP_BYTE(i) = 0x00;
     }
 
     /* Step 2: Set format type based on mode (stock: BFA5-BFB5)
@@ -3054,7 +3052,7 @@ static uint8_t pcie_phy_channel_config(uint8_t mode) {
 
     /* Step 4: B217=0x0F, B216=0x20 (stock: BFBE calling 0x998D)
      * 0x998D: B217=A (0x0F), B216=0x20 */
-    REG_PCIE_BYTE_EN = 0x0F;
+    REG_PCIE_BYTE_EN = PCIE_BYTE_EN_DWORD;
     REG_PCIE_TLP_LENGTH = 0x20;
 
     /* Step 5: Copy 32-bit address from 0x05AC-0x05AF to B218-B21B
@@ -3068,8 +3066,8 @@ static uint8_t pcie_phy_channel_config(uint8_t mode) {
      * B296=0x01, 0x02, 0x04; B254=0x0F */
     REG_PCIE_STATUS = 0x01;
     REG_PCIE_STATUS = 0x02;
-    REG_PCIE_STATUS = 0x04;
-    REG_PCIE_TRIGGER = 0x0F;
+    REG_PCIE_STATUS = PCIE_STATUS_KICK;
+    REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
 
     /* Step 7: Poll B296 bit 2 for completion (stock: BFD0-BFD3 calling 0x9948) */
     {
@@ -3081,7 +3079,7 @@ static uint8_t pcie_phy_channel_config(uint8_t mode) {
 
     /* Step 8: Acknowledge completion (stock: BFD5 calling 0x99F2)
      * B296 = 0x04 */
-    REG_PCIE_STATUS = 0x04;
+    REG_PCIE_STATUS = PCIE_STATUS_KICK;
 
     /* Step 9: Check result based on mode */
     if (mode & 0x01) {
@@ -3181,7 +3179,7 @@ static uint8_t pcie_link_train_trigger(void) {
     /* Step 1: Clear B210-B21B (stock: 0xAC0F loop calling 0x99B0)
      * 0x99B0: adds 0x10 to loop index, writes 0 to B2(10+i) */
     for (i = 0; i < 12; i++) {
-        XDATA_REG8(0xB210 + i) = 0x00;
+        REG_PCIE_TLP_BYTE(i) = 0x00;
     }
 
     /* Step 2: B210 = link speed (stock: 0xAC34)
@@ -3219,8 +3217,8 @@ static uint8_t pcie_link_train_trigger(void) {
      * B296=0x01 (reset), B296=0x02 (start), B296=0x04 (trigger), B254=0x0F (mask) */
     REG_PCIE_STATUS = 0x01;
     REG_PCIE_STATUS = 0x02;
-    REG_PCIE_STATUS = 0x04;
-    REG_PCIE_TRIGGER = 0x0F;
+    REG_PCIE_STATUS = PCIE_STATUS_KICK;
+    REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
 
     uart_puts("[LT1]\n");
 
@@ -3232,7 +3230,7 @@ static uint8_t pcie_link_train_trigger(void) {
 
     /* Step 10: Acknowledge completion (stock: 0xAC88 calling 0x99F2)
      * B296 = 0x04 */
-    REG_PCIE_STATUS = 0x04;
+    REG_PCIE_STATUS = PCIE_STATUS_KICK;
 
     /* Step 11: Check result (stock: 0xAC8B-0xACDC)
      * Poll B296 for bit 1 (success) or bit 0 (failure) */
@@ -3297,7 +3295,7 @@ static uint8_t pcie_perst_deassert(void) {
     REG_PCIE_LTSSM_B455 = 0x02;  /* Clear link detect status */
     REG_PCIE_LTSSM_B455 = 0x04;  /* Trigger status clear */
     REG_PCIE_CTRL_B2D5 = 0x01;  /* PCIe config enable */
-    REG_PCIE_STATUS = 0x08;  /* PCIe trigger reset */
+    REG_PCIE_STATUS = PCIE_STATUS_RESET;  /* PCIe trigger reset */
 
     /* Step 2: Set config space address to 0x00D00014 (stock: 0x361E, E4C8(0x14))
      * E4C8 with r7=0x14: stores {r4=0x00, r5=0xD0, r6=0x00, r7=0x14} to 0x05AC */
@@ -3389,7 +3387,7 @@ static uint8_t pcie_perst_deassert(void) {
     if (REG_PCIE_CTRL_B2D5 & 0x01) {
         REG_PCIE_CTRL_B2D5 = 0x01;
     }
-    REG_PCIE_STATUS = 0x08;
+    REG_PCIE_STATUS = PCIE_STATUS_RESET;
 
     return 1;
 }
@@ -3526,7 +3524,7 @@ static void pcie_post_train(void) {
     REG_PCIE_LTSSM_B455 = 0x02;   /* Clear pending */
     REG_PCIE_LTSSM_B455 = 0x04;   /* Trigger */
     REG_PCIE_CTRL_B2D5 = 0x01;   /* Enable config routing */
-    REG_PCIE_STATUS = 0x08;   /* Ack */
+    REG_PCIE_STATUS = PCIE_STATUS_RESET;   /* Ack */
 
     /* Poll B455 bit 1 for completion (stock: 0x366B-0x3673) */
     for (i = 0; i < 200; i++) {
@@ -3888,7 +3886,7 @@ void main(void) {
                 while (!(REG_USB_DMA_STATE & USB_DMA_STATE_READY)) { }
                 { uint8_t ci;
                   for (ci = 0; ci < bulk_out_len; ci++)
-                      XDATA_REG8(bulk_out_addr + ci) = XDATA_REG8(0x7000 + ci); }
+                      XDATA_REG8(bulk_out_addr + ci) = REG_FLASH_BUF_BYTE(ci); }
                 EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
                 EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
                 EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
@@ -3920,10 +3918,10 @@ void main(void) {
                     if (base_lo < dma_target_lo) base_hi++;
 
                     for (i = 0; i < chunk; i += 4) {
-                        uint32_t v = (uint32_t)XDATA_REG8(0x7000 + i) |
-                                     ((uint32_t)XDATA_REG8(0x7000 + i + 1) << 8) |
-                                     ((uint32_t)XDATA_REG8(0x7000 + i + 2) << 16) |
-                                     ((uint32_t)XDATA_REG8(0x7000 + i + 3) << 24);
+                        uint32_t v = (uint32_t)REG_FLASH_BUF_BYTE(i) |
+                                     ((uint32_t)REG_FLASH_BUF_BYTE(i + 1) << 8) |
+                                     ((uint32_t)REG_FLASH_BUF_BYTE(i + 2) << 16) |
+                                     ((uint32_t)REG_FLASH_BUF_BYTE(i + 3) << 24);
                         uint32_t a_lo = base_lo + (uint32_t)i;
                         uint32_t a_hi = base_hi;
                         if (a_lo < base_lo) a_hi++;
@@ -3935,7 +3933,7 @@ void main(void) {
                     uint16_t i;
                     uint16_t dst_off = (uint16_t)bulk_out_received;
                     for (i = 0; i < chunk; i++) {
-                        XDATA_REG8(0xF000 + dst_off + i) = XDATA_REG8(0x7000 + i);
+                        REG_NVME_DATA_BYTE(dst_off + i) = REG_FLASH_BUF_BYTE(i);
                     }
                 }
 
