@@ -1195,9 +1195,7 @@ static void handle_cbw(void) {
         uint8_t sz = cbwcb_1;
         uint16_t addr = ((uint16_t)cbwcb_3 << 8) | cbwcb_4;
         if (sz == 0) sz = 1;
-        /* Guard against transient stale CBW flags/length reads:
-         * for E4, non-zero CDB size implies a data-IN phase. */
-        if (!(cbw_flags & CBW_FLAGS_DIRECTION) && cbw_xfer_len_0 == 0 && cbwcb_1 == 0) {
+        if (!(cbw_flags & CBW_FLAGS_DIRECTION) && cbw_xfer_len_0 == 0) {
             /* No data phase — embed in CSW residue (max 4 bytes) */
             uint8_t saved_ie2;
             EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
