@@ -58,13 +58,6 @@ static volatile __xdata uint32_t scsi_write_stream_offset;
 static volatile __xdata uint8_t scsi_write_active;
 static volatile __xdata uint8_t scsi_write_continue;
 static volatile __xdata uint8_t scsi_write_after_8a;
-static volatile __xdata uint8_t scsi_write_nvme_cmd;
-static volatile __xdata uint8_t scsi_write_nvme_opcode;
-static volatile __xdata uint8_t scsi_write_nvme_cached;
-static volatile __xdata uint8_t scsi_write_queue_idx;
-static volatile __xdata uint8_t scsi_write_core_state_l;
-static volatile __xdata uint8_t scsi_write_core_state_h;
-static volatile __xdata uint8_t scsi_write_core_cached;
 static uint8_t pcie_addr_cache_valid;
 static uint8_t pcie_last_a0, pcie_last_a1;
 static uint8_t pcie_last_ah0, pcie_last_ah1, pcie_last_ah2, pcie_last_ah3;
@@ -95,7 +88,7 @@ static void handle_cbw(void);
 static void isr_dma_handler_32e4_min(void);
 static void timer_wait(uint8_t threshold_hi, uint8_t threshold_lo, uint8_t mode);
 static void pcie_post_train(void);
-static void direct_bulk_in(uint8_t len);
+static uint8_t direct_bulk_in(uint8_t len);
 static void pcie_tunnel_enable(void);
 static void pcie_phase2(void);
 static void pcie_early_init(void);
@@ -823,12 +816,15 @@ static void send_csw(uint8_t status) {
     EP_BUF(0x0C) = status;
     EP_BUF(0x08) = 0x00; EP_BUF(0x09) = 0x00;
     EP_BUF(0x0A) = 0x00; EP_BUF(0x0B) = 0x00;
+    REG_USB_MSC_LENGTH = 0x0D;
 
     /* Doorbell dance to transition MSC state machine */
     doorbell_dance();
 
     /* Disable interrupts during DMA trigger → EP_COMPLETE critical section */
     IE &= ~0x80;  /* EA = 0 */
+    REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_IN;
+    REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
     /* Clear stale EP_COMPLETE BEFORE triggering DMA */
     if (REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE) {
         REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
@@ -868,13 +864,15 @@ static void send_csw(uint8_t status) {
  * Data must already be in EP_BUF (D800+) before calling.
  * After return, EP_BUF is consumed — caller must restore CSW header.
  */
-static void direct_bulk_in(uint8_t len) {
+static uint8_t direct_bulk_in(uint8_t len) {
     uint8_t saved_ie;
 
     REG_USB_MSC_LENGTH = len;
 
     saved_ie = IE;
     IE &= ~0x80;  /* EA = 0 */
+    REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_IN;
+    REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
     /* Clear stale EP_COMPLETE */
     if (REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE) {
         REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
@@ -883,11 +881,15 @@ static void direct_bulk_in(uint8_t len) {
     /* Wait for EP_COMPLETE with timeout */
     {
         uint16_t to;
-        for (to = 60000; to; to--) {
+        for (to = 0xFFFF; to; to--) {
             if (REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE) break;
         }
         if (!to) {
-            uart_puts("[DBI_TO]");
+            REG_USB_CTRL_90A0 = 0x01;
+            REG_USB_BULK_DMA_TRIGGER = 0x00;
+            IE = saved_ie;
+            REG_USB_MSC_LENGTH = 0x0D;
+            return 0;
         }
     }
     /* Stock ISR EP_COMPLETE handler (0x0ED3-0x0EF1):
@@ -923,6 +925,7 @@ static void direct_bulk_in(uint8_t len) {
     IE = saved_ie;
 
     REG_USB_MSC_LENGTH = 0x0D;  /* Restore to CSW length */
+    return 1;
 }
 
 /*
@@ -935,31 +938,18 @@ static void direct_bulk_in(uint8_t len) {
 static void scsi_write16_dma_preset(void) {
     uint8_t queue_idx;
 
-    if (!scsi_write_core_cached) {
-        scsi_write_queue_idx = I_QUEUE_IDX;
-        scsi_write_core_state_l = I_CORE_STATE_L;
-        scsi_write_core_state_h = I_CORE_STATE_H;
-        scsi_write_core_cached = 1;
-    }
-
-    queue_idx = scsi_write_queue_idx;
-
-    if (!scsi_write_nvme_cached) {
-        scsi_write_nvme_cmd = G_DMA_SRC_HI;
-        scsi_write_nvme_opcode = G_DMA_SRC_LO;
-        scsi_write_nvme_cached = 1;
-    }
+    queue_idx = I_QUEUE_IDX;
 
     REG_NVME_CTRL_STATUS = (REG_NVME_CTRL_STATUS & 0xFE) | 0x01;
     REG_NVME_QUEUE_CFG &= 0xFC;
 
-    REG_NVME_COUNT_HIGH = scsi_write_core_state_l;
-    REG_NVME_ERROR = scsi_write_core_state_h;
+    REG_NVME_COUNT_HIGH = I_CORE_STATE_L;
+    REG_NVME_ERROR = I_CORE_STATE_H;
 
     REG_NVME_CONFIG = (REG_NVME_CONFIG & 0xC0) | (queue_idx & 0x3F);
 
-    REG_NVME_CMD = scsi_write_nvme_cmd;
-    REG_NVME_CMD_OPCODE = scsi_write_nvme_opcode;
+    REG_NVME_CMD = G_DMA_SRC_HI;
+    REG_NVME_CMD_OPCODE = G_DMA_SRC_LO;
 
     G_STATE_HELPER_42 = G_STATE_HELPER_42 | (REG_NVME_DEV_STATUS & 0xE0);
 
@@ -1017,7 +1007,6 @@ static uint8_t pcie_cfg_read32_gpu(uint16_t reg, uint32_t *out) {
 static void pcie_mem_write32_dma(uint32_t addr_lo, uint32_t addr_hi, uint32_t value) {
     uint8_t attempts;
     uint8_t st;
-    uint8_t i;
     uint16_t poll;
 
     attempts = 0;
@@ -1025,12 +1014,6 @@ static void pcie_mem_write32_dma(uint32_t addr_lo, uint32_t addr_hi, uint32_t va
         if (attempts) {
             REG_PCIE_STATUS = 0x01;
         }
-
-        for (i = 0; i < 12; i++) {
-            XDATA_REG8(0xB210 + i) = 0x00;
-        }
-
-        REG_PCIE_STATUS = 0x08;
 
         REG_PCIE_DATA = (uint8_t)(value >> 24);
         REG_PCIE_DATA_1 = (uint8_t)(value >> 16);
@@ -1081,7 +1064,7 @@ static void pcie_mem_write32_dma(uint32_t addr_lo, uint32_t addr_hi, uint32_t va
         }
 
         attempts++;
-    } while (((st == 0x00) || ((st & 0x01) && !(st & 0x04))) && attempts < 3);
+    } while (st == 0x00 && attempts < 3);
 
     if (dma_log_idx < 16) {
         XDATA_REG8(0x5400 + dma_log_idx) = REG_PCIE_TLP_CTRL;
@@ -1118,7 +1101,9 @@ static void handle_cbw(void) {
     EP_BUF(0x0C) = 0x00;
 
     opcode = REG_USB_CBWCB_0;
-    uart_puts("[CBW:"); uart_puthex(opcode); uart_puts("]\n");
+    if (opcode != 0xE4 && opcode != 0xE5) {
+        uart_puts("[CBW:"); uart_puthex(opcode); uart_puts("]\n");
+    }
 
     if (opcode == 0xE5) {
         uint8_t val = REG_USB_CBWCB_1;
@@ -1132,7 +1117,10 @@ static void handle_cbw(void) {
          *   xfer_len>0: data IN phase via direct_bulk_in (tinygrad ReadOp) */
         uint8_t sz = REG_USB_CBWCB_1;
         uint16_t addr = ((uint16_t)REG_USB_CBWCB_3 << 8) | REG_USB_CBWCB_4;
-        uint8_t xfer_len = REG_USB_CBW_XFER_LEN_0;
+        uint32_t xfer_len = ((uint32_t)REG_USB_CBW_XFER_LEN_3 << 24) |
+                            ((uint32_t)REG_USB_CBW_XFER_LEN_2 << 16) |
+                            ((uint32_t)REG_USB_CBW_XFER_LEN_1 << 8) |
+                            (uint32_t)REG_USB_CBW_XFER_LEN_0;
         if (sz == 0) sz = 1;
         if (xfer_len == 0) {
             /* No data phase — embed in CSW residue (max 4 bytes) */
@@ -1163,7 +1151,10 @@ static void handle_cbw(void) {
             /* Data IN phase */
             uint8_t i;
             for (i = 0; i < sz; i++) EP_BUF(i) = XDATA_REG8(addr + i);
-            direct_bulk_in(sz);
+            if (!direct_bulk_in(sz)) {
+                send_csw(0x01);
+                return;
+            }
             EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
             EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
             EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
@@ -1176,7 +1167,10 @@ static void handle_cbw(void) {
         uint8_t i;
         if (len == 0) len = 64;
         for (i = 0; i < len; i++) EP_BUF(i) = XDATA_REG8(addr + i);
-        direct_bulk_in(len);
+        if (!direct_bulk_in(len)) {
+            send_csw(0x01);
+            return;
+        }
         EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
         EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
         EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
@@ -1242,7 +1236,10 @@ static void handle_cbw(void) {
         EP_BUF(0x18) = 'E'; EP_BUF(0x19) = ' '; EP_BUF(0x1A) = ' '; EP_BUF(0x1B) = ' ';
         /* Revision: "0   " (4 bytes) */
         EP_BUF(0x20) = '0'; EP_BUF(0x21) = ' '; EP_BUF(0x22) = ' '; EP_BUF(0x23) = ' ';
-        direct_bulk_in(resp_len);
+        if (!direct_bulk_in(resp_len)) {
+            send_csw(0x01);
+            return;
+        }
         /* Restore CSW header after data-in */
         EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
         EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
@@ -1359,6 +1356,12 @@ static void handle_cbw(void) {
                 if (REG_USB_DMA_STATE & USB_DMA_STATE_READY) break;
             }
         }
+
+        if (REG_USB_EP_CFG1 & USB_EP_CFG1_BULK_DONE) {
+            REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_DONE;
+        }
+
+        REG_PCIE_STATUS = 0x01;
 
         send_csw(0x00);
     } else {
@@ -1547,8 +1550,6 @@ static void handle_usb_reset(void) {
     scsi_write_active = 0;
     scsi_write_continue = 0;
     scsi_write_after_8a = 0;
-    scsi_write_nvme_cached = 0;
-    scsi_write_core_cached = 0;
     pcie_addr_cache_valid = 0;
     need_cbw_process = 0;
     need_bulk_init = 0;
@@ -3572,8 +3573,6 @@ void main(void) {
     scsi_write_active = 0;
     scsi_write_continue = 0;
     scsi_write_after_8a = 0;
-    scsi_write_nvme_cached = 0;
-    scsi_write_core_cached = 0;
     pcie_addr_cache_valid = 0;
     pcie_initialized = 0;
     need_pcie_init = 0;

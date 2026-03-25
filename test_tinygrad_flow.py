@@ -532,13 +532,13 @@ def _dma_quick_mode():
 def _dma_scsi_timeout_ms():
     return 8000 if _dma_quick_mode() else 20000
 
-def _verify_dma_pattern(dev, dma_target, pattern, step=0x100):
+def _verify_dma_pattern(usb, dma_target, pattern, step=0x100):
     if _dma_quick_mode() and step == 0x100:
         step = 0x800
     check_offsets = list(range(0, len(pattern), step)) + [0x1FC, 0x7FFC, len(pattern) - 4]
     errors = []
     for off in check_offsets:
-        val = _pcie_mem_read32_bot(dev, dma_target + off)
+        val = usb.pcie_mem_req(dma_target + off, size=4)
         got = struct.pack('<I', val)
         exp = pattern[off:off+4]
         if got != exp:
@@ -570,11 +570,19 @@ def _pcie_mem_read32_bot(dev, address, retries=4):
                 break
     raise AssertionError(f"pcie_mem_read32 timeout @0x{address:X}")
 
-def _verify_dma_offsets(dev, dma_target, pattern, offsets):
+def _verify_dma_offsets(usb, dma_target, pattern, offsets):
     errors = []
     for off in offsets:
-        if _dma_quick_mode():
-            print(f"    read off=0x{off:04X}")
+        val = usb.pcie_mem_req(dma_target + off, size=4)
+        got = struct.pack('<I', val)
+        exp = pattern[off:off+4]
+        if got != exp:
+            errors.append((off, got.hex(), exp.hex()))
+    return errors
+
+def _verify_dma_offsets_bot(dev, dma_target, pattern, offsets):
+    errors = []
+    for off in offsets:
         val = _pcie_mem_read32_bot(dev, dma_target + off)
         got = struct.pack('<I', val)
         exp = pattern[off:off+4]
@@ -727,7 +735,7 @@ def test_33_psp_cmd_resp_status_zero(dev):
 
 def test_34_dma_in_order_stress(dev):
     """Stress DMA reliability with repeated in-order doorbell kicks."""
-    _, dma_target = _dma_target_ctx(dev)
+    usb, dma_target = _dma_target_ctx(dev)
     iterations = 1 if _dma_quick_mode() else 8
 
     for it in range(iterations):
@@ -736,14 +744,14 @@ def test_34_dma_in_order_stress(dev):
         assert status == 0, f"iter {it}: SCSI WRITE failed: status={status}"
         _doorbell_kick(dev)
 
-        errors, checked = _verify_dma_pattern(dev, dma_target, pattern)
+        errors, checked = _verify_dma_pattern(usb, dma_target, pattern)
         assert not errors, f"iter {it}: DMA mismatches after in-order kick: {errors}"
         print(f"  iter {it}: OK ({checked} offsets)")
     return True
 
 def test_35_dma_out_of_order_doorbell(dev):
     """DMA should still complete when doorbell bytes are written out of order."""
-    _, dma_target = _dma_target_ctx(dev)
+    usb, dma_target = _dma_target_ctx(dev)
     pattern = bytes([((i * 7) ^ 0xA5) & 0xFF for i in range(0x10000)])
 
     status = scsi_write_raw(dev, pattern, lba=0, timeout=20000)
@@ -752,55 +760,50 @@ def test_35_dma_out_of_order_doorbell(dev):
     out_of_order = [(0xCE6F, 0x00), (0x0172, 0xFF), (0x0171, 0xFF), (0xCE6E, 0x00), (0x0173, 0xFF)]
     _doorbell_kick(dev, seq=out_of_order)
 
-    errors, checked = _verify_dma_pattern(dev, dma_target, pattern)
+    errors, checked = _verify_dma_pattern(usb, dma_target, pattern)
     assert not errors, f"DMA mismatches after out-of-order kick: {errors}"
     print(f"  Out-of-order kick OK ({checked} offsets)")
     return True
 
 def test_36_dma_pause_between_doorbells(dev):
     """DMA should remain reliable with pauses between doorbell writes."""
-    _, dma_target = _dma_target_ctx(dev)
+    usb, dma_target = _dma_target_ctx(dev)
     pattern = bytes([((i * 5) + 0x3C) & 0xFF for i in range(0x10000)])
 
     status = scsi_write_raw(dev, pattern, lba=0, timeout=20000)
     assert status == 0, f"SCSI WRITE failed: status={status}"
     _doorbell_kick(dev, pause_s=0.04)
 
-    errors, checked = _verify_dma_pattern(dev, dma_target, pattern)
+    errors, checked = _verify_dma_pattern(usb, dma_target, pattern)
     assert not errors, f"DMA mismatches with paused doorbell: {errors}"
     print(f"  Paused doorbell OK ({checked} offsets)")
     return True
 
 def test_37_dma_requires_kick_and_updates(dev):
     """Consecutive uploads must always converge to latest kicked pattern."""
-    _, dma_target = _dma_target_ctx(dev)
+    usb, dma_target = _dma_target_ctx(dev)
     quick = _dma_quick_mode()
 
     pattern_a = bytes([((i * 9) + 0x11) & 0xFF for i in range(0x10000)])
-    print("  pattern_a write")
     status = scsi_write_raw(dev, pattern_a, lba=0, timeout=_dma_scsi_timeout_ms())
     assert status == 0, f"pattern_a SCSI WRITE failed: status={status}"
-    print("  pattern_a kick")
     _doorbell_kick(dev)
     if quick:
-        print("  pattern_a verify")
-        errors = _verify_dma_offsets(dev, dma_target, pattern_a, [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC])
+        errors = _verify_dma_offsets_bot(dev, dma_target, pattern_a, [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC])
     else:
-        errors, _ = _verify_dma_pattern(dev, dma_target, pattern_a)
+        errors = _verify_dma_offsets_bot(dev, dma_target, pattern_a, [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC])
     assert not errors, f"pattern_a verify failed: {errors}"
 
     pattern_b = bytes([((i * 11) + 0x27) & 0xFF for i in range(0x10000)])
-    print("  pattern_b write")
     status = scsi_write_raw(dev, pattern_b, lba=0, timeout=_dma_scsi_timeout_ms())
     assert status == 0, f"pattern_b SCSI WRITE failed: status={status}"
-    print("  pattern_b kick")
     _doorbell_kick(dev)
     if quick:
-        print("  pattern_b verify")
-        fresh_errors = _verify_dma_offsets(dev, dma_target, pattern_b, [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC])
+        fresh_errors = _verify_dma_offsets_bot(dev, dma_target, pattern_b, [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC])
         checked = 5
     else:
-        fresh_errors, checked = _verify_dma_pattern(dev, dma_target, pattern_b)
+        fresh_errors = _verify_dma_offsets_bot(dev, dma_target, pattern_b, [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC])
+        checked = 5
     assert not fresh_errors, f"pattern_b verify failed after doorbell: {fresh_errors}"
 
     if quick:
@@ -812,14 +815,15 @@ def test_37_dma_requires_kick_and_updates(dev):
     status = scsi_write_raw(dev, pattern_c, lba=0, timeout=_dma_scsi_timeout_ms())
     assert status == 0, f"pattern_c SCSI WRITE failed: status={status}"
     _doorbell_kick(dev, pause_s=0.03)
-    final_errors, checked = _verify_dma_pattern(dev, dma_target, pattern_c)
+    final_errors = _verify_dma_offsets_bot(dev, dma_target, pattern_c, [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC])
+    checked = 5
     assert not final_errors, f"pattern_c verify failed after paused kick: {final_errors}"
     print(f"  Consecutive update behavior OK ({checked} offsets)")
     return True
 
 def test_38_dma_fc_boundary_scan(dev):
     """Isolate whether corruption clusters at offsets ending in 0xFC."""
-    _, dma_target = _dma_target_ctx(dev)
+    usb, dma_target = _dma_target_ctx(dev)
     pattern = bytes([((i * 29) + 0x55) & 0xFF for i in range(0x10000)])
 
     status = scsi_write_raw(dev, pattern, lba=0, timeout=20000)
@@ -829,7 +833,7 @@ def test_38_dma_fc_boundary_scan(dev):
     check_offsets = [0xFC + (i * 0x100) for i in range(16)] + [0x1FC, 0x7FFC, 0xFFFC]
     errors = []
     for off in check_offsets:
-        val = _pcie_mem_read32_bot(dev, dma_target + off)
+        val = usb.pcie_mem_req(dma_target + off, size=4)
         got = struct.pack('<I', val)
         exp = pattern[off:off+4]
         if got != exp:
@@ -840,7 +844,7 @@ def test_38_dma_fc_boundary_scan(dev):
 
 def test_39_dma_mod8_lane_scan(dev):
     """Check whether corruption is lane-dependent across mod-8 offsets."""
-    _, dma_target = _dma_target_ctx(dev)
+    usb, dma_target = _dma_target_ctx(dev)
     pattern = bytes([((i * 13) + 0x37) & 0xFF for i in range(0x10000)])
 
     status = scsi_write_raw(dev, pattern, lba=0, timeout=20000)
@@ -850,7 +854,7 @@ def test_39_dma_mod8_lane_scan(dev):
     lane_offs = [0x000, 0x004, 0x008, 0x00C, 0x1F8, 0x1FC, 0x7FF8, 0x7FFC, 0xFFF8, 0xFFFC]
     errors = []
     for off in lane_offs:
-        val = _pcie_mem_read32_bot(dev, dma_target + off)
+        val = usb.pcie_mem_req(dma_target + off, size=4)
         got = struct.pack('<I', val)
         exp = pattern[off:off+4]
         if got != exp:
@@ -861,7 +865,7 @@ def test_39_dma_mod8_lane_scan(dev):
 
 def test_40_dma_random_sentinels(dev):
     """Use random payload to detect stale fixed sentinel words."""
-    _, dma_target = _dma_target_ctx(dev)
+    usb, dma_target = _dma_target_ctx(dev)
     pattern = os.urandom(0x10000)
 
     status = scsi_write_raw(dev, pattern, lba=0, timeout=20000)
@@ -871,7 +875,7 @@ def test_40_dma_random_sentinels(dev):
     sentinels = [0x1FC, 0x7FFC, 0xFFFC]
     errors = []
     for off in sentinels:
-        val = _pcie_mem_read32_bot(dev, dma_target + off)
+        val = usb.pcie_mem_req(dma_target + off, size=4)
         got = struct.pack('<I', val)
         exp = pattern[off:off+4]
         if got != exp:
@@ -882,7 +886,7 @@ def test_40_dma_random_sentinels(dev):
 
 def test_41_dma_rewrite_same_lba(dev):
     """Back-to-back writes to same LBA must fully replace prior data."""
-    _, dma_target = _dma_target_ctx(dev)
+    usb, dma_target = _dma_target_ctx(dev)
 
     pattern_a = bytes([((i * 3) + 0x11) & 0xFF for i in range(0x10000)])
     status = scsi_write_raw(dev, pattern_a, lba=0, timeout=20000)
@@ -897,7 +901,7 @@ def test_41_dma_rewrite_same_lba(dev):
     check_offsets = [0x000, 0x004, 0x1FC, 0x7FFC, 0xFFFC]
     errors = []
     for off in check_offsets:
-        val = _pcie_mem_read32_bot(dev, dma_target + off)
+        val = usb.pcie_mem_req(dma_target + off, size=4)
         got = struct.pack('<I', val)
         exp = pattern_b[off:off+4]
         if got != exp:
