@@ -17,7 +17,7 @@ Tests are ordered to match the tinygrad initialization sequence:
 Run: sudo PYTHONPATH=/home/geohot/tinygrad python3 test_tinygrad_flow.py
 """
 
-import ctypes, os, struct, sys, time, traceback
+import ctypes, os, signal, struct, sys, time, traceback
 sys.path.insert(0, '/home/geohot/tinygrad')
 from tinygrad.runtime.support.usb import USB3, ASM24Controller, WriteOp, ReadOp, ScsiWriteOp
 from tinygrad.runtime.autogen import libusb
@@ -733,6 +733,36 @@ def test_41_dma_rewrite_same_lba(dev):
     print("  same-LBA rewrite OK")
     return True
 
+def test_42_fast_csw_stability_repro(dev):
+    """Very fast repro for BOT short-CSW/hang after back-to-back writes."""
+    usb, dma_target = _dma_target_ctx(dev)
+
+    pattern_a = bytes([i & 0xFF for i in range(0x200)])
+    pattern_b = bytes([((i * 7) + 0x33) & 0xFF for i in range(0x200)])
+
+    status = scsi_write_raw(dev, pattern_a, lba=0, timeout=5000)
+    assert status == 0, f"pattern_a WRITE failed: status={status}"
+    _doorbell_kick(dev)
+    _ = usb.pcie_mem_req(dma_target, size=4)
+
+    status = scsi_write_raw(dev, pattern_b, lba=0, timeout=5000)
+    assert status == 0, f"pattern_b WRITE failed: status={status}"
+    _doorbell_kick(dev)
+
+    # This read is where the flake shows up; force fast fail if it hangs.
+    def _alarm_handler(signum, frame):
+        raise TimeoutError("pcie_mem_req hang >200ms")
+    old = signal.signal(signal.SIGALRM, _alarm_handler)
+    signal.setitimer(signal.ITIMER_REAL, 0.2)
+    try:
+        _ = usb.pcie_mem_req(dma_target, size=4)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, old)
+
+    print("  fast CSW repro path stayed stable")
+    return True
+
 # ============================================================
 # Runner
 # ============================================================
@@ -770,6 +800,7 @@ TESTS = [
     ("39 DMA mod-8 lane scan",        test_39_dma_mod8_lane_scan),
     ("40 DMA random sentinels",       test_40_dma_random_sentinels),
     ("41 DMA same-LBA rewrite",       test_41_dma_rewrite_same_lba),
+    ("42 Fast CSW repro",             test_42_fast_csw_stability_repro),
 ]
 
 def main():

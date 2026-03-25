@@ -817,39 +817,38 @@ static void send_csw(uint8_t status) {
     EP_BUF(0x08) = 0x00; EP_BUF(0x09) = 0x00;
     EP_BUF(0x0A) = 0x00; EP_BUF(0x0B) = 0x00;
     REG_USB_MSC_LENGTH = 0x0D;
+    REG_USB_MODE = 0x01;
 
     /* Doorbell dance to transition MSC state machine */
     doorbell_dance();
 
-    /* Disable interrupts during DMA trigger → EP_COMPLETE critical section */
     IE &= ~0x80;  /* EA = 0 */
     if (REG_USB_EP_CFG1 & USB_EP_CFG1_BULK_DONE) {
         REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_DONE;
     }
     REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_IN;
     REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
-    /* Clear stale EP_COMPLETE BEFORE triggering DMA */
     if (REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE) {
-        REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
-        {
-            uint16_t clr;
-            for (clr = 0xFFFF; clr; clr--) {
-                if (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) break;
-            }
+        uint16_t clr;
+        REG_USB_EP_STATUS_90E3 = 0x02;
+        REG_USB_EP_READY = 0x01;
+        for (clr = 0xFFFF; clr; clr--) {
+            if (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) break;
+        }
+        if (!clr) {
+            REG_USB_CTRL_90A0 = 0x01;
         }
     }
     REG_USB_MSC_LENGTH = 0x0D;
     REG_USB_BULK_DMA_TRIGGER = 0x01;
     while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
-    /* Clear EP_COMPLETE from CSW DMA + reset DMA engine
-     * (same as ISR EP_COMPLETE handler - see direct_bulk_in) */
 
     REG_USB_STATUS_909E = 0x01;
-    REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
+    REG_USB_EP_STATUS_90E3 = 0x02;
+    REG_USB_EP_READY = 0x01;
     REG_USB_CTRL_90A0 = 0x01;
     REG_USB_BULK_DMA_TRIGGER = 0x00;
 
-    /* CC17 DMA descriptor reset (see direct_bulk_in comment) */
     if (REG_TIMER1_CSR & 0x02) {
         REG_TIMER1_CSR = 0x02;
     }
@@ -865,19 +864,40 @@ static void send_csw(uint8_t status) {
 }
 
 /*
- * direct_bulk_in - Send data to host via bulk IN using MSC DMA engine
+ * direct_bulk_in - Send data to host via bulk IN
  *
- * Avoids SW DMA mode (DMA_CONFIG=0xA0, 905A=0x10, 90F0=0x01) which
- * poisons hardware state and breaks subsequent large bulk OUT transfers.
- * Instead, uses the same C802 bulk DMA trigger as send_csw().
+ * Uses stock-like SW DMA setup (C8D4=0xA0, 905A=0x10, 905B:905C->D800,
+ * 90E1 trigger) before C802 bulk trigger.
  *
  * Data must already be in EP_BUF (D800+) before calling.
  * After return, EP_BUF is consumed — caller must restore CSW header.
  */
 static uint8_t direct_bulk_in(uint8_t len) {
     uint8_t saved_ie;
+    uint8_t dma_cfg_saved;
+    uint8_t ep_cfg_905a_saved;
+    uint8_t ep_buf_hi_saved;
+    uint8_t ep_buf_lo_saved;
+    uint8_t ep_buf_data_saved;
+    uint8_t ep_buf_ptr_saved;
+
+    dma_cfg_saved = REG_DMA_CONFIG;
+    ep_cfg_905a_saved = REG_USB_EP_CFG_905A;
+    ep_buf_hi_saved = REG_USB_EP_BUF_HI;
+    ep_buf_lo_saved = REG_USB_EP_BUF_LO;
+    ep_buf_data_saved = REG_USB_EP_BUF_DATA;
+    ep_buf_ptr_saved = REG_USB_EP_BUF_PTR_LO;
+
+    REG_DMA_CONFIG = DMA_CONFIG_SW_MODE;
+    REG_USB_EP_CFG_905A = USB_EP_CFG_BULK_IN;
+    REG_USB_EP_BUF_HI = 0xD8;
+    REG_USB_EP_BUF_LO = 0x00;
+    REG_USB_EP_BUF_DATA = 0x00;
+    REG_USB_EP_BUF_PTR_LO = 0xD8;
+    REG_USB_SW_DMA_TRIGGER = 0x01;
 
     REG_USB_MSC_LENGTH = len;
+    REG_USB_MODE = 0x01;
 
     saved_ie = IE;
     IE &= ~0x80;  /* EA = 0 */
@@ -888,12 +908,23 @@ static uint8_t direct_bulk_in(uint8_t len) {
     REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
     /* Clear stale EP_COMPLETE */
     if (REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE) {
+        uint16_t clr;
         REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
-        {
-            uint16_t clr;
-            for (clr = 0xFFFF; clr; clr--) {
-                if (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) break;
-            }
+        for (clr = 0xFFFF; clr; clr--) {
+            if (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) break;
+        }
+        if (!clr) {
+            REG_USB_CTRL_90A0 = 0x01;
+            REG_USB_BULK_DMA_TRIGGER = 0x00;
+            IE = saved_ie;
+            REG_DMA_CONFIG = dma_cfg_saved;
+            REG_USB_EP_CFG_905A = ep_cfg_905a_saved;
+            REG_USB_EP_BUF_HI = ep_buf_hi_saved;
+            REG_USB_EP_BUF_LO = ep_buf_lo_saved;
+            REG_USB_EP_BUF_DATA = ep_buf_data_saved;
+            REG_USB_EP_BUF_PTR_LO = ep_buf_ptr_saved;
+            REG_USB_MSC_LENGTH = 0x0D;
+            return 0;
         }
     }
     REG_USB_BULK_DMA_TRIGGER = 0x01;
@@ -907,6 +938,12 @@ static uint8_t direct_bulk_in(uint8_t len) {
             REG_USB_CTRL_90A0 = 0x01;
             REG_USB_BULK_DMA_TRIGGER = 0x00;
             IE = saved_ie;
+            REG_DMA_CONFIG = dma_cfg_saved;
+            REG_USB_EP_CFG_905A = ep_cfg_905a_saved;
+            REG_USB_EP_BUF_HI = ep_buf_hi_saved;
+            REG_USB_EP_BUF_LO = ep_buf_lo_saved;
+            REG_USB_EP_BUF_DATA = ep_buf_data_saved;
+            REG_USB_EP_BUF_PTR_LO = ep_buf_ptr_saved;
             REG_USB_MSC_LENGTH = 0x0D;
             return 0;
         }
@@ -928,11 +965,7 @@ static uint8_t direct_bulk_in(uint8_t len) {
     REG_USB_MSC_CTRL = 0x01;
     REG_USB_MSC_STATUS &= ~0x01;
 
-    /* Reset CE88/CE89 DMA state after bulk IN.
-     * The C802 bulk DMA trigger may leave CE89 in a state that causes
-     * subsequent CE88 handshakes (used by bulk OUT) to fail.
-     * Doing a dummy CE88 handshake here ensures the state machine is
-     * ready for the next bulk operation. */
+    /* Re-sync CE88/CE89 handshake state for the next CBW/data phase. */
     REG_BULK_DMA_HANDSHAKE = 0x00;
     {
         uint16_t wt;
@@ -942,6 +975,12 @@ static uint8_t direct_bulk_in(uint8_t len) {
     }
 
     IE = saved_ie;
+    REG_DMA_CONFIG = dma_cfg_saved;
+    REG_USB_EP_CFG_905A = ep_cfg_905a_saved;
+    REG_USB_EP_BUF_HI = ep_buf_hi_saved;
+    REG_USB_EP_BUF_LO = ep_buf_lo_saved;
+    REG_USB_EP_BUF_DATA = ep_buf_data_saved;
+    REG_USB_EP_BUF_PTR_LO = ep_buf_ptr_saved;
 
     REG_USB_MSC_LENGTH = 0x0D;  /* Restore to CSW length */
     return 1;
@@ -1024,73 +1063,37 @@ static uint8_t pcie_cfg_read32_gpu(uint16_t reg, uint32_t *out) {
 }
 
 static void pcie_mem_write32_dma(uint32_t addr_lo, uint32_t addr_hi, uint32_t value) {
-    uint8_t attempts;
-    uint8_t st;
-    uint16_t poll;
+    REG_PCIE_STATUS = 0x08;
 
-    attempts = 0;
-    do {
-        if (attempts) {
-            REG_PCIE_STATUS = 0x01;
-        }
+    REG_PCIE_DATA = (uint8_t)(value >> 24);
+    REG_PCIE_DATA_1 = (uint8_t)(value >> 16);
+    REG_PCIE_DATA_2 = (uint8_t)(value >> 8);
+    REG_PCIE_EXT_STATUS = (uint8_t)(value >> 0);
 
-        REG_PCIE_DATA = (uint8_t)(value >> 24);
-        REG_PCIE_DATA_1 = (uint8_t)(value >> 16);
-        REG_PCIE_DATA_2 = (uint8_t)(value >> 8);
-        REG_PCIE_EXT_STATUS = (uint8_t)(value >> 0);
+    REG_PCIE_ADDR_0 = (uint8_t)(addr_lo >> 24);
+    REG_PCIE_ADDR_1 = (uint8_t)(addr_lo >> 16);
+    REG_PCIE_ADDR_2 = (uint8_t)(addr_lo >> 8);
+    REG_PCIE_ADDR_3 = (uint8_t)(addr_lo >> 0);
+    REG_PCIE_ADDR_HIGH = (uint8_t)(addr_hi >> 24);
+    REG_PCIE_ADDR_HIGH_1 = (uint8_t)(addr_hi >> 16);
+    REG_PCIE_ADDR_HIGH_2 = (uint8_t)(addr_hi >> 8);
+    REG_PCIE_ADDR_HIGH_3 = (uint8_t)(addr_hi >> 0);
 
-        REG_PCIE_ADDR_0 = (uint8_t)(addr_lo >> 24);
-        REG_PCIE_ADDR_1 = (uint8_t)(addr_lo >> 16);
-        REG_PCIE_ADDR_2 = (uint8_t)(addr_lo >> 8);
-        REG_PCIE_ADDR_3 = (uint8_t)(addr_lo >> 0);
-        REG_PCIE_ADDR_HIGH = (uint8_t)(addr_hi >> 24);
-        REG_PCIE_ADDR_HIGH_1 = (uint8_t)(addr_hi >> 16);
-        REG_PCIE_ADDR_HIGH_2 = (uint8_t)(addr_hi >> 8);
-        REG_PCIE_ADDR_HIGH_3 = (uint8_t)(addr_hi >> 0);
+    REG_PCIE_BYTE_EN = 0x0F;
+    REG_PCIE_FMT_TYPE = 0x60;
+    REG_PCIE_TRIGGER = 0x0F;
+    REG_PCIE_STATUS = 0x04;
 
-        REG_PCIE_TLP_CTRL = 0x01;
-        REG_PCIE_BYTE_EN = 0x0F;
-        REG_PCIE_TLP_LENGTH = 0x20;
-        REG_PCIE_FMT_TYPE = 0x60;
-        REG_PCIE_STATUS = 0x01;
-        REG_PCIE_STATUS = 0x02;
-        REG_PCIE_STATUS = 0x04;
-
-        REG_PCIE_TRIGGER = 0x0F;
-
-        st = 0;
-        for (poll = 4000U; poll; poll--) {
-            st = REG_PCIE_STATUS;
-            if (st & 0x04) {
-                break;
-            }
-            if (st & 0x01) {
-                break;
-            }
-        }
-
-        __asm
-            nop
-            nop
-            nop
-            nop
-        __endasm;
-
-        if (st & 0x04) {
-            REG_PCIE_STATUS = 0x04;
-        } else if (st & 0x01) {
-            REG_PCIE_STATUS = 0x01;
-        }
-
-        attempts++;
-    } while (st == 0x00 && attempts < 3);
-
-    if (dma_log_idx < 16) {
-        XDATA_REG8(0x5400 + dma_log_idx) = REG_PCIE_TLP_CTRL;
-        XDATA_REG8(0x5410 + dma_log_idx) = REG_PCIE_STATUS;
-        XDATA_REG8(0x5420 + dma_log_idx) = (uint8_t)(addr_lo & 0xFF);
-        dma_log_idx++;
-    }
+    __asm
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+    __endasm;
 }
 
 static void scsi_write16_prepare_target(void) {
@@ -1110,12 +1113,34 @@ static void handle_cbw(void) {
     uint8_t cbwcb_1;
     uint8_t cbwcb_3;
     uint8_t cbwcb_4;
+    uint8_t tag0;
+    uint8_t tag1;
+    uint8_t tag2;
+    uint8_t tag3;
+    uint8_t op0;
+    uint8_t flags0;
+    uint8_t xlen0;
+    uint8_t c1_0;
+    uint8_t c3_0;
+    uint8_t c4_0;
 
     REG_USB_MODE = 0x01;
 
     /* CE88/CE89 DMA handshake */
     REG_BULK_DMA_HANDSHAKE = 0x00;
     while (!(REG_USB_DMA_STATE & USB_DMA_STATE_READY)) { }
+
+    {
+        uint16_t len_to;
+        for (len_to = 0xFFFF; len_to; len_to--) {
+            if (REG_USB_CBW_LEN_HI == 0x00 && REG_USB_CBW_LEN_LO == 0x1F) {
+                break;
+            }
+        }
+        if (!len_to) {
+            return;
+        }
+    }
 
     {
         uint16_t cbw_to;
@@ -1128,25 +1153,35 @@ static void handle_cbw(void) {
             }
         }
         if (!cbw_to) {
-            send_csw(0x01);
             return;
         }
     }
 
-    cbw_tag[0] = REG_CBW_TAG_0; cbw_tag[1] = REG_CBW_TAG_1;
-    cbw_tag[2] = REG_CBW_TAG_2; cbw_tag[3] = REG_CBW_TAG_3;
+    tag0 = REG_CBW_TAG_0;
+    tag1 = REG_CBW_TAG_1;
+    tag2 = REG_CBW_TAG_2;
+    tag3 = REG_CBW_TAG_3;
+    op0 = REG_USB_CBWCB_0;
+    flags0 = REG_USB_CBW_FLAGS;
+    xlen0 = REG_USB_CBW_XFER_LEN_0;
+    c1_0 = REG_USB_CBWCB_1;
+    c3_0 = REG_USB_CBWCB_3;
+    c4_0 = REG_USB_CBWCB_4;
+
+    cbw_tag[0] = tag0; cbw_tag[1] = tag1;
+    cbw_tag[2] = tag2; cbw_tag[3] = tag3;
     EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
     EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
     EP_BUF(0x0C) = 0x00;
 
-    cbw_flags = REG_USB_CBW_FLAGS;
-    cbw_xfer_len_0 = REG_USB_CBW_XFER_LEN_0;
-    cbwcb_1 = REG_USB_CBWCB_1;
-    cbwcb_3 = REG_USB_CBWCB_3;
-    cbwcb_4 = REG_USB_CBWCB_4;
+    cbw_flags = flags0;
+    cbw_xfer_len_0 = xlen0;
+    cbwcb_1 = c1_0;
+    cbwcb_3 = c3_0;
+    cbwcb_4 = c4_0;
     REG_USB_STATUS_909E = 0x01;
 
-    opcode = REG_USB_CBWCB_0;
+    opcode = op0;
     if (opcode != 0xE4 && opcode != 0xE5) {
         uart_puts("[CBW:"); uart_puthex(opcode); uart_puts("]\n");
     }
@@ -1202,10 +1237,15 @@ static void handle_cbw(void) {
                 send_csw(0x01);
                 return;
             }
-            EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-            EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
-            EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
-            EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+            {
+                uint8_t saved_ie = IE;
+                IE &= ~0x80;
+                EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
+                EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
+                EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
+                EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+                IE = saved_ie;
+            }
             send_csw(0x00);
         }
     } else if (opcode == 0xE6) {
@@ -1218,10 +1258,15 @@ static void handle_cbw(void) {
             send_csw(0x01);
             return;
         }
-        EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-        EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
-        EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
-        EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+        {
+            uint8_t saved_ie = IE;
+            IE &= ~0x80;
+            EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
+            EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
+            EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
+            EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+            IE = saved_ie;
+        }
         send_csw(0x00);
     } else if (opcode == 0xE7) {
         /* Bulk OUT: receive data synchronously, copy to XDATA[addr] */
@@ -1287,11 +1332,15 @@ static void handle_cbw(void) {
             send_csw(0x01);
             return;
         }
-        /* Restore CSW header after data-in */
-        EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-        EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
-        EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
-        EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+        {
+            uint8_t saved_ie = IE;
+            IE &= ~0x80;
+            EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
+            EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
+            EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
+            EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
+            IE = saved_ie;
+        }
         send_csw(0x00);
 
     } else if (opcode == 0x8A) {
@@ -1299,6 +1348,7 @@ static void handle_cbw(void) {
         uint32_t received;
         uint32_t write_base_lo;
         uint32_t write_base_hi;
+        uint8_t ep_cfg_905a_saved;
 
         /* SCSI WRITE(16) data phase runs asynchronously from main loop.
          * Arming OUT from inside CBW handling can miss BULK_DATA transitions,
@@ -1308,6 +1358,7 @@ static void handle_cbw(void) {
                    ((uint32_t)REG_USB_CBW_XFER_LEN_1 << 8) |
                    (uint32_t)REG_USB_CBW_XFER_LEN_0;
 
+        ep_cfg_905a_saved = REG_USB_EP_CFG_905A;
         REG_USB_EP_CFG_905A = 0x00;
         REG_USB_EP_CFG1 = 0x00;
         REG_USB_EP_CFG2 = 0x00;
@@ -1414,7 +1465,15 @@ static void handle_cbw(void) {
             REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_DONE;
         }
 
-        REG_PCIE_STATUS = 0x01;
+        REG_USB_STATUS_909E = 0x01;
+        REG_USB_EP_STATUS_90E3 = 0x02;
+        REG_USB_EP_READY = 0x01;
+        REG_USB_EP_CFG1 = 0x00;
+        REG_USB_EP_CFG2 = 0x00;
+        REG_USB_EP_CFG_905A = ep_cfg_905a_saved;
+
+        /* Re-arm PCIe request engine state after DMA write burst. */
+        REG_PCIE_STATUS = 0x08;
 
         send_csw(0x00);
     } else {
@@ -3716,19 +3775,12 @@ void main(void) {
         {
             uint8_t alt = REG_USB_ALT_SETTING_L;
             if (alt != last_alt_setting) {
-                if (alt <= 0x01) {
+                if (alt == 0x00) {
                     G_SYS_FLAGS_0052 = 0x00;
-                    REG_USB_MSC_LENGTH = (alt == 0x01) ? 0x10 : 0x0D;
+                    REG_USB_MSC_LENGTH = 0x0D;
                 }
                 last_alt_setting = alt;
             }
-        }
-
-        if (REG_USB_ALT_SETTING_L == 0x01) {
-            REG_USB_MSC_LENGTH = 0x10;
-            REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_IN;
-            REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
-            REG_USB_MODE = 0x01;
         }
 
         if (need_state_init) { need_state_init = 0; state_init(); }
