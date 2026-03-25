@@ -852,9 +852,13 @@ def main():
     # Allow selecting tests by number: test_tinygrad_flow.py 1 5 17
     selected = set()
     stop_on_fail = True
+    per_test_timeout_sec = None
     for arg in sys.argv[1:]:
         if arg == '--no-stop':
             stop_on_fail = False
+        elif arg.startswith('--timeout='):
+            v = float(arg.split('=', 1)[1])
+            per_test_timeout_sec = v if v > 0 else None
         elif arg.isdigit():
             selected.add(int(arg))
         elif '-' in arg:
@@ -866,15 +870,29 @@ def main():
     time.sleep(0.2)
 
     results = []
+
+    def _per_test_timeout_handler(signum, frame):
+        raise TimeoutError(f"test exceeded {per_test_timeout_sec:.0f}s timeout")
+
     for name, fn in TESTS:
         test_num = int(name.split()[0])
         if selected and test_num not in selected:
             continue
         print(f"\n--- {name} ---")
         try:
+            prev_handler = signal.getsignal(signal.SIGALRM)
+            if per_test_timeout_sec is not None:
+                signal.signal(signal.SIGALRM, _per_test_timeout_handler)
+                signal.setitimer(signal.ITIMER_REAL, per_test_timeout_sec)
             ok = fn(dev)
+            if per_test_timeout_sec is not None:
+                signal.setitimer(signal.ITIMER_REAL, 0.0)
+                signal.signal(signal.SIGALRM, prev_handler)
             print(f"  PASS")
         except Exception as e:
+            if per_test_timeout_sec is not None:
+                signal.setitimer(signal.ITIMER_REAL, 0.0)
+                signal.signal(signal.SIGALRM, prev_handler)
             print(f"  FAIL: {e}")
             traceback.print_exc()
             ok = False
