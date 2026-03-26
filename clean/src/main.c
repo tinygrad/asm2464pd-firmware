@@ -33,7 +33,6 @@ static void uart_puthex(uint8_t val) {
 static volatile uint8_t is_usb3;
 static volatile uint8_t need_bulk_init;
 static volatile uint8_t need_cbw_process;
-
 static uint8_t cbw_tag[4];
 static volatile uint8_t bulk_out_state;
 static uint16_t bulk_out_addr;
@@ -113,17 +112,20 @@ static void handle_set_address(uint8_t addr) {
 }
 
 /* Descriptors */
+/* USB 2.0 descriptors — 512-byte bulk endpoints, no SS companion descriptors */
 static __code const uint8_t dev_desc[] = {
-    0x12, 0x01, 0x20, 0x03, 0x00, 0x00, 0x00, 0x09,
-    0xD1, 0xAD, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x01,
+    0x12, 0x01,       /* bLength, bDescriptorType */
+    0x00, 0x02,       /* bcdUSB: 2.00 */
+    0x00, 0x00, 0x00, /* class/subclass/protocol */
+    0x40,             /* bMaxPacketSize0: 64 */
+    0xD1, 0xAD, 0x01, 0x00, 0x01, 0x00,
+    0x01, 0x02, 0x03, 0x01,
 };
 static __code const uint8_t cfg_desc[] = {
-    0x09, 0x02, 0x2C, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
+    0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,  /* wTotalLength=32 */
     0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,
-    0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,
-    0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
-    0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,
-    0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
+    0x07, 0x05, 0x81, 0x02, 0x00, 0x02, 0x00,  /* EP1 IN bulk 512 */
+    0x07, 0x05, 0x02, 0x02, 0x00, 0x02, 0x00,  /* EP2 OUT bulk 512 */
 };
 static __code const uint8_t bos_desc[] = {
     0x05, 0x0F, 0x16, 0x00, 0x02,
@@ -566,34 +568,32 @@ void timer1_isr(void) __interrupt(3) { }
 void serial_isr(void) __interrupt(4) { }
 void timer2_isr(void) __interrupt(5) { }
 
-/*=== Hardware Init (USB 2.0 High Speed) ===*/
+/*=== Hardware Init (from stock firmware trace) ===*/
 static void hw_init(void) {
     uint8_t i;
 
-    /* CPU + link config */
+    /* CPU / link / timer boot config */
     REG_CPU_EXEC_STATUS = CPU_EXEC_STATUS_ACTIVE;
-    REG_CPU_MODE = CPU_MODE_USB2;
-    REG_LINK_WIDTH_E710 = LINK_RECOVERY_MODE;
+    REG_CPU_MODE = CPU_MODE_USB2;          /* USB 2.0 HS — no SS negotiation */
+    REG_LINK_WIDTH_E710 = 0x1F;           /* HS link width (stock uses 0x04 for SS, 0x1F after SS fail) */
     REG_CPU_EXEC_STATUS_2 = CPU_EXEC_STATUS_2_INT;
-
-    /* Timers + link status */
     REG_TIMER_CTRL_CC3B = 0x0C;
     REG_LINK_CTRL_E717 = 0x01;
     REG_CPU_CTRL_CC3E = 0x00;
     REG_TIMER_CTRL_CC3B = 0x0C;
     REG_TIMER_CTRL_CC3B = 0x0C;
-    REG_LINK_STATUS_E716 = LINK_STATUS_E716_MASK | 0x01;
+    REG_LINK_STATUS_E716 = 0x03;
     REG_CPU_CTRL_CC3E = 0x00;
     REG_TIMER_CTRL_CC39 = 0x06;
     REG_TIMER_ENABLE_B = 0x14;
     REG_TIMER_ENABLE_A = 0x44;
-    REG_CPU_CTRL_CC37 = 0x2C | CPU_CTRL_CC37_RXPLL_MODE;
+    REG_CPU_CTRL_CC37 = 0x2C;
     REG_SYS_CTRL_E780 = 0x00;
     REG_LINK_STATUS_E716 = 0x00;
-    REG_LINK_STATUS_E716 = LINK_STATUS_E716_MASK | 0x01;
+    REG_LINK_STATUS_E716 = 0x03;
     REG_CPU_CTRL_CC37 = 0x28;
 
-    /* PHY + system control */
+    /* PHY link init */
     REG_PHY_LINK_CTRL = 0x00;
     REG_PHY_TIMER_CTRL_E764 = 0x14;
     REG_PHY_TIMER_CTRL_E764 = 0x14;
@@ -603,58 +603,80 @@ static void hw_init(void) {
     REG_SYS_CTRL_E774 = 0x04;
     REG_SYS_CTRL_E77C = 0x04;
 
-    /* Interrupts */
+    /* Interrupt / power config */
     REG_INT_AUX_STATUS = INT_AUX_ENABLE;
     REG_CPU_EXEC_STATUS_3 = 0x00;
     REG_INT_ENABLE = INT_ENABLE_SYSTEM;
     REG_INT_STATUS_C800 = INT_STATUS_PCIE;
-    REG_INT_STATUS_C800 = INT_STATUS_PCIE | 0x01;
-    REG_TIMER_CTRL_CC3B = 0x0C | TIMER_CTRL_ENABLE;
-    REG_TIMER_CTRL_CC3B = 0x0C | TIMER_CTRL_ENABLE | TIMER_CTRL_LINK_POWER;
-
-    /* Power + USB PHY — HS only, skip SS PHY (9241=0xD0) and SS PLL */
+    REG_INT_STATUS_C800 = INT_STATUS_PCIE | POWER_ENABLE_BIT;
+    REG_TIMER_CTRL_CC3B = 0x0D;
+    REG_TIMER_CTRL_CC3B = 0x0F;
     REG_POWER_CTRL_92C6 = 0x05;
     REG_POWER_CTRL_92C7 = 0x00;
     REG_USB_CTRL_9201 = 0x0E;
     REG_USB_CTRL_9201 = 0x0C;
+
+    /* Clock / power / PHY PLL */
     REG_CLOCK_ENABLE = 0x82;
     REG_USB_CTRL_920C = 0x61;
     REG_USB_CTRL_920C = 0x60;
-    REG_POWER_ENABLE = POWER_ENABLE_MAIN | POWER_ENABLE_BIT | 0x06;
-    REG_CLOCK_ENABLE = 0x82 | CLOCK_ENABLE_BIT;
+    REG_POWER_ENABLE = POWER_ENABLE_MAIN | 0x07;
+    REG_CLOCK_ENABLE = 0x83;
     REG_PHY_POWER = 0x2F;
-    REG_USB_PHY_CONFIG_9241 = USB_PHY_CFG_INIT;  /* no SS PHY */
+    REG_USB_PHY_CONFIG_9241 = 0x10;
+    REG_USB_PHY_CONFIG_9241 = 0xD0;
+    REG_PHY_PLL_CTRL = 0x5B;
+    REG_PHY_PLL_CTRL = 0x6B;
+    REG_PHY_PLL_CFG = 0x1F;
+    REG_PHY_PLL_CTRL = 0xAB;
+    REG_PHY_PLL_CFG = 0x17;
     REG_CPU_CLK_CFG = 0x88;
 
     /* Buffer descriptor table */
-    REG_BUF_DESC_STAT0_HI = 0x00; REG_BUF_DESC_STAT0_LO = 0x00;
-    REG_BUF_DESC_STAT1_HI = 0x00; REG_BUF_DESC_STAT1_LO = 0x00;
-    REG_BUF_DESC_STAT2_HI = 0x00; REG_BUF_DESC_STAT2_LO = 0x00;
-    REG_BUF_DESC_BASE0_HI = 0x01; REG_BUF_DESC_BASE0_LO = 0x60;
-    REG_BUF_DESC_SIZE0_HI = 0x00; REG_BUF_DESC_SIZE0_LO = 0xE3;
-    REG_BUF_DESC_BASE1_HI = 0x01; REG_BUF_DESC_BASE1_LO = 0x60;
-    REG_BUF_DESC_BASE2_HI = 0x01; REG_BUF_DESC_BASE2_LO = 0x60;
-    REG_BUF_DESC_CFG0_HI = 0x00;  REG_BUF_DESC_CFG0_LO = 0x03;
-    REG_BUF_DESC_CFG1_HI = 0x00;  REG_BUF_DESC_CFG1_LO = 0xE0;
-    REG_BUF_DESC_CFG2_HI = 0x00;  REG_BUF_DESC_CFG2_LO = 0xE3;
+    REG_BUF_DESC_STAT0_HI = 0x00;
+    REG_BUF_DESC_STAT0_LO = 0x00;
+    REG_BUF_DESC_STAT1_HI = 0x00;
+    REG_BUF_DESC_STAT1_LO = 0x00;
+    REG_BUF_DESC_STAT2_HI = 0x00;
+    REG_BUF_DESC_STAT2_LO = 0x00;
+    REG_BUF_DESC_BASE0_HI = 0x01;
+    REG_BUF_DESC_BASE0_LO = 0x60;
+    REG_BUF_DESC_SIZE0_HI = 0x00;
+    REG_BUF_DESC_SIZE0_LO = 0xE3;
+    REG_BUF_DESC_BASE1_HI = 0x01;
+    REG_BUF_DESC_BASE1_LO = 0x60;
+    REG_BUF_DESC_BASE2_HI = 0x01;
+    REG_BUF_DESC_BASE2_LO = 0x60;
+    REG_BUF_DESC_CFG0_HI = 0x00;
+    REG_BUF_DESC_CFG0_LO = 0x03;
+    REG_BUF_DESC_CFG1_HI = 0x00;
+    REG_BUF_DESC_CFG1_LO = 0xE0;
+    REG_BUF_DESC_CFG2_HI = 0x00;
+    REG_BUF_DESC_CFG2_LO = 0xE3;
 
-    /* Keepalive + exec */
+    /* CPU / keepalive / interrupt */
     REG_CPU_EXEC_STATUS_3 = 0x00;
     REG_USB_EP_CTRL_905F = 0x44;
     REG_CPU_KEEPALIVE = 0x04;
     REG_CPU_KEEPALIVE_CC2C = 0xC7;
     REG_CPU_KEEPALIVE_CC2D = 0xC7;
-    REG_INT_ENABLE = INT_ENABLE_SYSTEM | 0x40;
+    REG_INT_ENABLE = INT_ENABLE_SYSTEM | USB_CTRL_9200_BIT6;
     REG_CPU_EXEC_STATUS = 0x00;
     REG_INT_DMA_CTRL = 0x04;
     REG_POWER_CTRL_92C8 = 0x24;
     REG_POWER_CTRL_92C8 = 0x24;
 
-    /* DMA channel setup */
-    REG_DMA_STATUS2 = 0x00; REG_DMA_STATUS2 = 0x00;
-    REG_DMA_STATUS2 = 0x00; REG_DMA_CTRL = 0x00;
-    REG_DMA_STATUS = 0x00;  REG_DMA_STATUS = 0x00;
-    REG_DMA_STATUS = 0x00;  REG_DMA_QUEUE_IDX = 0x00;
+    /* DMA engine reset */
+    REG_DMA_STATUS2 = 0x00;
+    REG_DMA_STATUS2 = 0x00;
+    REG_DMA_STATUS2 = 0x00;
+    REG_DMA_CTRL = 0x00;
+    REG_DMA_STATUS = 0x00;
+    REG_DMA_STATUS = 0x00;
+    REG_DMA_STATUS = 0x00;
+    REG_DMA_QUEUE_IDX = 0x00;
+
+    /* DMA channel configuration (8 channels) */
     { static __code const uint8_t dma_cfg[][4] = {
         {0x02, 0xA0, 0x0F, 0xFF}, {0x02, 0xB0, 0x01, 0xFF},
         {0x00, 0xA0, 0x0F, 0xFF}, {0x00, 0xB0, 0x01, 0xFF},
@@ -665,8 +687,10 @@ static void hw_init(void) {
         if (i < 4) REG_DMA_STATUS2 = dma_cfg[i][0];
         else       REG_DMA_STATUS = dma_cfg[i][0];
         REG_DMA_CHAN_STATUS2 = 0x00;
-        REG_DMA_CHAN_CTRL2 = 0x14; REG_DMA_CHAN_CTRL2 = 0x14;
-        REG_DMA_CHAN_CTRL2 = 0x14; REG_DMA_CHAN_CTRL2 = 0x94;
+        REG_DMA_CHAN_CTRL2 = 0x14;
+        REG_DMA_CHAN_CTRL2 = 0x14;
+        REG_DMA_CHAN_CTRL2 = 0x14;
+        REG_DMA_CHAN_CTRL2 = 0x94;
         REG_DMA_CHAN_AUX = dma_cfg[i][1];
         REG_DMA_CHAN_AUX1 = 0x00;
         REG_DMA_XFER_CNT_HI = dma_cfg[i][2];
@@ -675,13 +699,17 @@ static void hw_init(void) {
         REG_DMA_CHAN_CTRL2 = 0x14;
     }}
 
-    /* MSC engine reset */
-    REG_USB_MSC_CFG = 0x07; REG_USB_MSC_CFG = 0x07;
-    REG_USB_MSC_CFG = 0x07; REG_USB_MSC_CFG = 0x05;
-    REG_USB_MSC_CFG = 0x01; REG_USB_MSC_CFG = 0x00;
-    REG_USB_MSC_LENGTH = 0x0D;
-    /* USB peripheral config */
-    REG_POWER_ENABLE = POWER_ENABLE_MAIN | POWER_ENABLE_BIT | 0x06;
+    /* MSC engine ramp-down sequence */
+    REG_USB_MSC_CFG = 0x07;
+    REG_USB_MSC_CFG = 0x07;
+    REG_USB_MSC_CFG = 0x07;
+    REG_USB_MSC_CFG = 0x05;
+    REG_USB_MSC_CFG = 0x01;
+    REG_USB_MSC_CFG = 0x00;
+    REG_USB_MSC_LENGTH = 0x0D;  /* CSW length */
+
+    /* USB / PHY / buffer config */
+    REG_POWER_ENABLE = POWER_ENABLE_MAIN | 0x07;
     REG_USB_PHY_CTRL_91D1 = USB_91D1_ALL;
     REG_BUF_CFG_9300 = BUF_CFG_9300_MSC_INIT;
     REG_BUF_CFG_9301 = BUF_CFG_9301_MSC_INIT;
@@ -697,52 +725,82 @@ static void hw_init(void) {
     REG_USB_MODE = 0x01;
     REG_USB_EP_MGMT = 0x00;
 
-    /* Clear endpoint status */
-    REG_USB_EP_READY = 0xFF; REG_USB_EP_CTRL_9097 = 0xFF;
-    REG_USB_EP_MODE_9098 = 0xFF; REG_USB_EP_MODE_9099 = 0xFF;
-    REG_USB_EP_MODE_909A = 0xFF; REG_USB_EP_MODE_909B = 0xFF;
-    REG_USB_EP_MODE_909C = 0xFF; REG_USB_EP_MODE_909D = 0xFF;
+    /* Clear EP ready/mode registers */
+    REG_USB_EP_READY = 0xFF;
+    REG_USB_EP_CTRL_9097 = 0xFF;
+    REG_USB_EP_MODE_9098 = 0xFF;
+    REG_USB_EP_MODE_9099 = 0xFF;
+    REG_USB_EP_MODE_909A = 0xFF;
+    REG_USB_EP_MODE_909B = 0xFF;
+    REG_USB_EP_MODE_909C = 0xFF;
+    REG_USB_EP_MODE_909D = 0xFF;
     REG_USB_STATUS_909E = 0x03;
-    REG_USB_DATA_H = 0xFF; REG_USB_FIFO_STATUS = 0xFF;
-    REG_USB_FIFO_H = 0xFF; REG_USB_FIFO_4 = 0xFF;
-    REG_USB_FIFO_5 = 0xFF; REG_USB_FIFO_6 = 0xFF;
-    REG_USB_FIFO_7 = 0xFF; REG_USB_XCVR_MODE = 0x03;
+
+    /* Clear FIFO / data registers */
+    REG_USB_DATA_H = 0xFF;
+    REG_USB_FIFO_STATUS = 0xFF;
+    REG_USB_FIFO_H = 0xFF;
+    REG_USB_FIFO_4 = 0xFF;
+    REG_USB_FIFO_5 = 0xFF;
+    REG_USB_FIFO_6 = 0xFF;
+    REG_USB_FIFO_7 = 0xFF;
+    REG_USB_XCVR_MODE = 0x03;
     REG_USB_DATA_L = 0xFE;
 
-    /* PHY link control */
+    /* USB PHY init */
     REG_USB_PHY_CTRL_91C3 = 0x00;
-    /* PHY on, no SS */
-    REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_PHY_ON;
+    REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_PHY_ON;  /* 0x10: HS only, no SS link */
 
-    /* DMA + interrupt controller */
-    REG_INT_DMA_CTRL = 0x04; REG_INT_DMA_CTRL = 0x84;
+    /* DMA / transfer controllers */
+    REG_INT_DMA_CTRL = 0x04;
+    REG_INT_DMA_CTRL = 0x84;
     REG_LINK_MODE_CTRL = 0xFF;
-    REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;
+    REG_XFER2_DMA_STATUS = XFER_DMA_CFG_ENABLE;
+    REG_XFER2_DMA_STATUS = XFER_DMA_CFG_ACK;
     REG_XFER2_DMA_CTRL = 0x00;
-    REG_INT_ENABLE = INT_ENABLE_SYSTEM | 0x40;
-    REG_XFER2_DMA_CTRL = 0x04;
-    REG_XFER2_DMA_ADDR_LO = 0x00; REG_XFER2_DMA_ADDR_HI = 0xC8;
-    REG_INT_CTRL = 0x08; REG_INT_CTRL = 0x0A; REG_INT_CTRL = 0x0A;
+    REG_INT_ENABLE = INT_ENABLE_SYSTEM | USB_CTRL_9200_BIT6;
+    REG_XFER2_DMA_CTRL = XFER_DMA_CFG_ENABLE;
+    REG_XFER2_DMA_ADDR_LO = 0x00;
+    REG_XFER2_DMA_ADDR_HI = 0xC8;
+    REG_INT_CTRL = 0x08;
+    REG_INT_CTRL = 0x0A;
+    REG_INT_CTRL = 0x0A;
     REG_CPU_EXT_CTRL = 0x40;
-    REG_CPU_EXT_STATUS = 0x04; REG_CPU_EXT_STATUS = 0x02;
-    REG_XFER_DMA_CTRL = 0x10; REG_XFER_DMA_ADDR_LO = 0x00;
-    REG_XFER_DMA_ADDR_HI = 0x0A; REG_XFER_DMA_CMD = 0x01;
-    REG_XFER_DMA_CMD = 0x02;
-    REG_XFER_DMA_CTRL = 0x10; REG_XFER_DMA_ADDR_LO = 0x00;
-    REG_XFER_DMA_ADDR_HI = 0x3C; REG_XFER_DMA_CMD = 0x01;
-    REG_XFER_DMA_CMD = 0x02;
+    REG_CPU_EXT_STATUS = CPU_EXT_STATUS_ACK | 0x02;
+    REG_CPU_EXT_STATUS = CPU_EXT_STATUS_ACK;
+
+    /* Internal memory block transfers */
+    REG_XFER_DMA_CTRL = 0x10;
+    REG_XFER_DMA_ADDR_LO = 0x00;
+    REG_XFER_DMA_ADDR_HI = 0x0A;
+    REG_XFER_DMA_CMD = XFER_DMA_CMD_START;
+    REG_XFER_DMA_CMD = XFER_DMA_CMD_DONE;
+    REG_XFER_DMA_CTRL = 0x10;
+    REG_XFER_DMA_ADDR_LO = 0x00;
+    REG_XFER_DMA_ADDR_HI = 0x3C;
+    REG_XFER_DMA_CMD = XFER_DMA_CMD_START;
+    REG_XFER_DMA_CMD = XFER_DMA_CMD_DONE;
+
+    /* Final interrupt / CPU DMA config */
     REG_INT_CTRL = 0x2A;
-    REG_INT_ENABLE = INT_ENABLE_SYSTEM | 0x40;
-    REG_CPU_CTRL_CC80 = 0x00; REG_CPU_CTRL_CC80 = 0x03;
-    REG_XFER_DMA_CFG = 0x04; REG_XFER_DMA_CFG = 0x02;
-    REG_INT_ENABLE = INT_ENABLE_SYSTEM | 0x40;
-    REG_CPU_DMA_READY = 0x00; REG_CPU_DMA_READY = 0x04;
-    REG_CPU_CTRL_CC82 = 0x18; REG_CPU_CTRL_CC83 = 0x9C;
-    REG_CPU_DMA_INT = 0x04; REG_CPU_DMA_INT = 0x02;
-    REG_INT_ENABLE = INT_ENABLE_SYSTEM | 0x40;
-    REG_CPU_DMA_CTRL_CC90 = 0x00; REG_CPU_DMA_CTRL_CC90 = 0x05;
-    REG_CPU_DMA_DATA_LO = 0x00; REG_CPU_DMA_DATA_HI = 0xC8;
-    REG_CPU_DMA_INT = 0x01;
+    REG_INT_ENABLE = INT_ENABLE_SYSTEM | USB_CTRL_9200_BIT6;
+    REG_CPU_CTRL_CC80 = 0x00;
+    REG_CPU_CTRL_CC80 = CPU_CTRL_CC80_ENABLE;
+    REG_XFER_DMA_CFG = XFER_DMA_CFG_ENABLE;
+    REG_XFER_DMA_CFG = XFER_DMA_CFG_ACK;
+    REG_INT_ENABLE = INT_ENABLE_SYSTEM | USB_CTRL_9200_BIT6;
+    REG_CPU_DMA_READY = 0x00;
+    REG_CPU_DMA_READY = CPU_DMA_READY_BIT2;
+    REG_CPU_CTRL_CC82 = 0x18;
+    REG_CPU_CTRL_CC83 = 0x9C;
+    REG_CPU_DMA_INT = CPU_DMA_INT_TRIGGER;
+    REG_CPU_DMA_INT = CPU_DMA_INT_ACK;
+    REG_INT_ENABLE = INT_ENABLE_SYSTEM | USB_CTRL_9200_BIT6;
+    REG_CPU_DMA_CTRL_CC90 = 0x00;
+    REG_CPU_DMA_CTRL_CC90 = 0x05;
+    REG_CPU_DMA_DATA_LO = 0x00;
+    REG_CPU_DMA_DATA_HI = 0xC8;
+    REG_CPU_DMA_INT = XFER_DMA_CMD_START;
 }
 
 void main(void) {
@@ -753,9 +811,9 @@ void main(void) {
 
     hw_init();
 
-    { uint8_t link = REG_USB_LINK_STATUS;
-      is_usb3 = (link >= USB_SPEED_SUPER) ? 1 : 0;
-      uart_puts("[link="); uart_puthex(link); uart_puts("]\n"); }
+    uint8_t link = REG_USB_LINK_STATUS;
+    is_usb3 = (link >= USB_SPEED_SUPER) ? 1 : 0;
+    uart_puts("[link="); uart_puthex(link); uart_puts("]\n");
 
     uart_puts("[GO]\n");
     TCON = 0x04;  /* IT0=0 (level-triggered INT0) */
