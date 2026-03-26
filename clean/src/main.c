@@ -569,11 +569,7 @@ static void hw_init(void) {
 
     /* CPU / link / timer boot config */
     REG_CPU_EXEC_STATUS = CPU_EXEC_STATUS_ACTIVE;
-<<<<<<< HEAD
     REG_CPU_MODE = CPU_MODE_USB2;
-=======
-    REG_CPU_MODE = CPU_MODE_USB3;
->>>>>>> origin/master
     REG_LINK_WIDTH_E710 = LINK_RECOVERY_MODE;
     REG_CPU_EXEC_STATUS_2 = CPU_EXEC_STATUS_2_INT;
     REG_TIMER_CTRL_CC3B = 0x0C;
