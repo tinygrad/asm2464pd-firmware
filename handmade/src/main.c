@@ -310,16 +310,6 @@ static void hw_init(void) {
     REG_LINK_STATUS_E716 = 0x03;
     REG_CPU_CTRL_CC37 = 0x28;
 
-    /* PHY link init */
-    REG_PHY_LINK_CTRL = 0x00;
-    REG_PHY_TIMER_CTRL_E764 = 0x14;
-    REG_PHY_TIMER_CTRL_E764 = 0x14;
-    REG_PHY_TIMER_CTRL_E764 = 0x14;
-    REG_PHY_TIMER_CTRL_E764 = 0x14;
-    REG_SYS_CTRL_E76C = 0x04;
-    REG_SYS_CTRL_E774 = 0x04;
-    REG_SYS_CTRL_E77C = 0x04;
-
     /* Interrupt / power config */
     REG_INT_AUX_STATUS = INT_AUX_ENABLE;
     REG_CPU_EXEC_STATUS_3 = 0x00;
@@ -333,44 +323,6 @@ static void hw_init(void) {
     REG_USB_CTRL_9201 = 0x0E;
     REG_USB_CTRL_9201 = 0x0C;
 
-    /* Clock / power / PHY PLL */
-    REG_CLOCK_ENABLE = 0x82;
-    REG_USB_CTRL_920C = 0x61;
-    REG_USB_CTRL_920C = 0x60;
-    REG_POWER_ENABLE = POWER_ENABLE_MAIN | 0x07;
-    REG_CLOCK_ENABLE = 0x83;
-    REG_PHY_POWER = 0x2F;
-    REG_USB_PHY_CONFIG_9241 = 0x10;
-    REG_USB_PHY_CONFIG_9241 = 0xD0;
-    REG_PHY_PLL_CTRL = 0x5B;
-    REG_PHY_PLL_CTRL = 0x6B;
-    REG_PHY_PLL_CFG = 0x1F;
-    REG_PHY_PLL_CTRL = 0xAB;
-    REG_PHY_PLL_CFG = 0x17;
-    REG_CPU_CLK_CFG = 0x88;
-
-    /* Buffer descriptor table */
-    REG_BUF_DESC_STAT0_HI = 0x00;
-    REG_BUF_DESC_STAT0_LO = 0x00;
-    REG_BUF_DESC_STAT1_HI = 0x00;
-    REG_BUF_DESC_STAT1_LO = 0x00;
-    REG_BUF_DESC_STAT2_HI = 0x00;
-    REG_BUF_DESC_STAT2_LO = 0x00;
-    REG_BUF_DESC_BASE0_HI = 0x01;
-    REG_BUF_DESC_BASE0_LO = 0x60;
-    REG_BUF_DESC_SIZE0_HI = 0x00;
-    REG_BUF_DESC_SIZE0_LO = 0xE3;
-    REG_BUF_DESC_BASE1_HI = 0x01;
-    REG_BUF_DESC_BASE1_LO = 0x60;
-    REG_BUF_DESC_BASE2_HI = 0x01;
-    REG_BUF_DESC_BASE2_LO = 0x60;
-    REG_BUF_DESC_CFG0_HI = 0x00;
-    REG_BUF_DESC_CFG0_LO = 0x03;
-    REG_BUF_DESC_CFG1_HI = 0x00;
-    REG_BUF_DESC_CFG1_LO = 0xE0;
-    REG_BUF_DESC_CFG2_HI = 0x00;
-    REG_BUF_DESC_CFG2_LO = 0xE3;
-
     /* CPU / keepalive / interrupt */
     REG_CPU_EXEC_STATUS_3 = 0x00;
     REG_USB_EP_CTRL_905F = 0x44;
@@ -383,47 +335,6 @@ static void hw_init(void) {
     REG_POWER_CTRL_92C8 = 0x24;
     REG_POWER_CTRL_92C8 = 0x24;
 
-    /* DMA engine reset */
-    REG_DMA_STATUS2 = 0x00;
-    REG_DMA_STATUS2 = 0x00;
-    REG_DMA_STATUS2 = 0x00;
-    REG_DMA_CTRL = 0x00;
-    REG_DMA_STATUS = 0x00;
-    REG_DMA_STATUS = 0x00;
-    REG_DMA_STATUS = 0x00;
-    REG_DMA_QUEUE_IDX = 0x00;
-
-    /* DMA channel configuration (8 channels) */
-    { static __code const uint8_t dma_cfg[][4] = {
-        {0x02, 0xA0, 0x0F, 0xFF}, {0x02, 0xB0, 0x01, 0xFF},
-        {0x00, 0xA0, 0x0F, 0xFF}, {0x00, 0xB0, 0x01, 0xFF},
-        {0x02, 0xB8, 0x03, 0xFF}, {0x02, 0xBC, 0x00, 0x7F},
-        {0x00, 0xB8, 0x03, 0xFF}, {0x00, 0xBC, 0x00, 0x7F},
-    };
-    for (i = 0; i < 8; i++) {
-        if (i < 4) REG_DMA_STATUS2 = dma_cfg[i][0];
-        else       REG_DMA_STATUS = dma_cfg[i][0];
-        REG_DMA_CHAN_STATUS2 = 0x00;
-        REG_DMA_CHAN_CTRL2 = 0x14;
-        REG_DMA_CHAN_CTRL2 = 0x14;
-        REG_DMA_CHAN_CTRL2 = 0x14;
-        REG_DMA_CHAN_CTRL2 = 0x94;
-        REG_DMA_CHAN_AUX = dma_cfg[i][1];
-        REG_DMA_CHAN_AUX1 = 0x00;
-        REG_DMA_XFER_CNT_HI = dma_cfg[i][2];
-        REG_DMA_XFER_CNT_LO = dma_cfg[i][3];
-        REG_DMA_TRIGGER = DMA_TRIGGER_START;
-        REG_DMA_CHAN_CTRL2 = 0x14;
-    }}
-
-    /* MSC engine ramp-down sequence */
-    REG_USB_MSC_CFG = 0x07;
-    REG_USB_MSC_CFG = 0x07;
-    REG_USB_MSC_CFG = 0x07;
-    REG_USB_MSC_CFG = 0x05;
-    REG_USB_MSC_CFG = 0x01;
-    REG_USB_MSC_CFG = 0x00;
-    REG_USB_MSC_LENGTH = 0x0D;  /* CSW length */
 
     /* USB / PHY / buffer config */
     REG_POWER_ENABLE = POWER_ENABLE_MAIN | 0x07;
@@ -466,58 +377,8 @@ static void hw_init(void) {
 
     /* USB PHY init */
     REG_USB_PHY_CTRL_91C3 = 0x00;
-    REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_PHY_ON;
+    REG_USB_PHY_CTRL_91C0 = 0x10;
 
-    /* DMA / transfer controllers */
-    REG_INT_DMA_CTRL = 0x04;
-    REG_INT_DMA_CTRL = 0x84;
-    REG_LINK_MODE_CTRL = 0xFF;
-    REG_XFER2_DMA_STATUS = XFER_DMA_CFG_ENABLE;
-    REG_XFER2_DMA_STATUS = XFER_DMA_CFG_ACK;
-    REG_XFER2_DMA_CTRL = 0x00;
-    REG_INT_ENABLE = INT_ENABLE_SYSTEM | USB_CTRL_9200_BIT6;
-    REG_XFER2_DMA_CTRL = XFER_DMA_CFG_ENABLE;
-    REG_XFER2_DMA_ADDR_LO = 0x00;
-    REG_XFER2_DMA_ADDR_HI = 0xC8;
-    REG_INT_CTRL = 0x08;
-    REG_INT_CTRL = 0x0A;
-    REG_INT_CTRL = 0x0A;
-    REG_CPU_EXT_CTRL = 0x40;
-    REG_CPU_EXT_STATUS = CPU_EXT_STATUS_ACK | 0x02;
-    REG_CPU_EXT_STATUS = CPU_EXT_STATUS_ACK;
-
-    /* Internal memory block transfers */
-    REG_XFER_DMA_CTRL = 0x10;
-    REG_XFER_DMA_ADDR_LO = 0x00;
-    REG_XFER_DMA_ADDR_HI = 0x0A;
-    REG_XFER_DMA_CMD = XFER_DMA_CMD_START;
-    REG_XFER_DMA_CMD = XFER_DMA_CMD_DONE;
-    REG_XFER_DMA_CTRL = 0x10;
-    REG_XFER_DMA_ADDR_LO = 0x00;
-    REG_XFER_DMA_ADDR_HI = 0x3C;
-    REG_XFER_DMA_CMD = XFER_DMA_CMD_START;
-    REG_XFER_DMA_CMD = XFER_DMA_CMD_DONE;
-
-    /* Final interrupt / CPU DMA config */
-    REG_INT_CTRL = 0x2A;
-    REG_INT_ENABLE = INT_ENABLE_SYSTEM | USB_CTRL_9200_BIT6;
-    REG_CPU_CTRL_CC80 = 0x00;
-    REG_CPU_CTRL_CC80 = CPU_CTRL_CC80_ENABLE;
-    REG_XFER_DMA_CFG = XFER_DMA_CFG_ENABLE;
-    REG_XFER_DMA_CFG = XFER_DMA_CFG_ACK;
-    REG_INT_ENABLE = INT_ENABLE_SYSTEM | USB_CTRL_9200_BIT6;
-    REG_CPU_DMA_READY = 0x00;
-    REG_CPU_DMA_READY = CPU_DMA_READY_BIT2;
-    REG_CPU_CTRL_CC82 = 0x18;
-    REG_CPU_CTRL_CC83 = 0x9C;
-    REG_CPU_DMA_INT = CPU_DMA_INT_TRIGGER;
-    REG_CPU_DMA_INT = CPU_DMA_INT_ACK;
-    REG_INT_ENABLE = INT_ENABLE_SYSTEM | USB_CTRL_9200_BIT6;
-    REG_CPU_DMA_CTRL_CC90 = 0x00;
-    REG_CPU_DMA_CTRL_CC90 = 0x05;
-    REG_CPU_DMA_DATA_LO = 0x00;
-    REG_CPU_DMA_DATA_HI = 0xC8;
-    REG_CPU_DMA_INT = XFER_DMA_CMD_START;
 }
 
 void main(void) {
