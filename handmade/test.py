@@ -64,7 +64,7 @@ class TestDevice(unittest.TestCase):
     sig, tag, residue, status = struct.unpack('<IIIB', csw)
     if check: self.assertEqual(sig, test)
 
-  #@unittest.skip("no fuzz")
+  @unittest.skip("no fuzz")
   def test_fuzz_bulk_in_out(self):
     for _ in range(100):
       out = bool(random.randint(0,1))

@@ -171,8 +171,6 @@ void handle_usb_bulk(void) {
     // bulk in needed — send data from D800
     REG_USB_MSC_LENGTH = 0xd;
     REG_USB_BULK_DMA_TRIGGER = 0x1;
-    // re-arm OUT
-    REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_START) {
     // ack
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_START) {
