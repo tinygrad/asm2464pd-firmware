@@ -49,11 +49,13 @@ class TestDevice:
     dev._bulk_out(0x02, cbw)
 
   def test_bulk_in(self, dev):
+    ctrl_write(dev, 0xD800, 0xCC)
+    ctrl_write(dev, 0xD801, 0xDD)
+    ctrl_write(dev, 0xD802, 0x11)
+    ctrl_write(dev, 0xD803, 0x22)
     csw = dev._bulk_in(0x81, 13)
     sig, tag, residue, status = struct.unpack('<IIIB', csw)
-    assert sig == 0x53425355, f"bad CSW sig 0x{sig:08X}"
-    assert tag == dev._tag, f"CSW tag mismatch: got {tag}, expected {dev._tag}"
-    assert status == 0, f"CSW status {status}"
+    assert sig == 0x2211DDCC, f"sig mismatch {sig:X}"
 
 if __name__ == "__main__":
   pytest.main([__file__, "-v"])

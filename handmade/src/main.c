@@ -116,8 +116,14 @@ static void handle_usb_control(void) {
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
       // enable USB bulk mode
       REG_USB_MSC_CFG = 0x00;
-      // arm bulk endpoint 2
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+
+      // arm bulk endpoint (IN+OUT)
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN | USB_EP_CFG2_ARM_OUT;
+
+      // set length of IN to 13 (this def has to be in interrupt)
+      REG_USB_MSC_LENGTH = 0xd;
+      REG_USB_BULK_DMA_TRIGGER = 0x1;
+
       send_zlp_ack();
       uart_puts("[SET CONFIG]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
@@ -142,7 +148,7 @@ static void handle_usb_control(void) {
   } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
   } else {
-    uart_puts("[unhandled ctrl ");
+    uart_puts("[UNHANDLED CONTROL ");
     uart_puthex(phase);
     uart_puts("]\n");
   }
