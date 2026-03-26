@@ -18,51 +18,27 @@ __sfr __at(0x88) TCON;
 #define EP_BUF(n) XDATA_REG8(0xD800 + (n))
 
 static void desc_copy(__code const uint8_t *src, uint8_t len) {
-    uint8_t i;
-    for (i = 0; i < len; i++) DESC_BUF[i] = src[i];
+  uint8_t i;
+  for (i = 0; i < len; i++) DESC_BUF[i] = src[i];
 }
 
 void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {
-    static __code const char hex[] = "0123456789ABCDEF";
-    uart_putc(hex[val >> 4]);
-    uart_putc(hex[val & 0x0F]);
+  static __code const char hex[] = "0123456789ABCDEF";
+  uart_putc(hex[val >> 4]);
+  uart_putc(hex[val & 0x0F]);
 }
 
 /*=== USB Control Transfer Helpers ===*/
 
-static void complete_usb20_status(void) {
-  REG_USB_CONFIG |= USB_CTRL_PHASE_STAT_OUT;
-  REG_USB_DMA_TRIGGER = USB_DMA_RECV;
-  REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
-  REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
-  REG_USB_CONFIG &= ~USB_CTRL_PHASE_STAT_OUT;
-  REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
-}
-
-static void send_zlp_ack(void) {
-  REG_USB_EP0_STATUS = 0x00;
-  REG_USB_EP0_LEN_L = 0x00;
-  REG_USB_DMA_TRIGGER = USB_DMA_SEND;
-  REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
-}
-
-static void send_descriptor_data(uint8_t len) {
+static void send_control_data(uint8_t len) {
   REG_USB_EP0_STATUS = 0x00;
   REG_USB_EP0_LEN_L = len;
   REG_USB_DMA_TRIGGER = USB_DMA_SEND;
   REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
 }
-
-/* Re-arm MSC engine to receive next CBW */
-static void arm_msc(void) {
-  EP_BUF(0x00) = 'U'; EP_BUF(0x01) = 'S';
-  EP_BUF(0x02) = 'B'; EP_BUF(0x03) = 'S';
-  REG_USB_MSC_LENGTH = 0x0D;  /* CSW length */
-  REG_USB_MSC_CTRL = 0x01;
-  REG_USB_MSC_STATUS &= ~0x01;
-}
+static void send_zlp_ack(void) { send_control_data(0); }
 
 /*=== USB Request Handlers ===*/
 
@@ -72,7 +48,7 @@ static void handle_set_address(uint8_t addr) {
   REG_USB_INT_MASK_9090 = (tmp & USB_INT_MASK_GLOBAL) | (addr & 0x7F);
   REG_USB_EP_CTRL_91D0 = 0x02;
   send_zlp_ack();
-  uart_puts("[A]\n");
+  uart_puts("[SET ADDRESS]\n");
 }
 
 /* USB 2.0 Descriptors — no SS companion descriptors, 64-byte bulk EPs for Full Speed */
@@ -121,73 +97,27 @@ static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint8_t w
   }
 
   desc_copy(src, desc_len);
-  send_descriptor_data(wlen < desc_len ? wlen : desc_len);
+  send_control_data(wlen < desc_len ? wlen : desc_len);
 }
 
 /*=== SET_CONFIG ===*/
 static void handle_set_config(void) {
-    uint8_t t;
-    REG_USB_EP_BUF_CTRL = 'U'; REG_USB_EP_BUF_SEL = 'S';
-    REG_USB_EP_BUF_DATA = 'B'; REG_USB_EP_BUF_PTR_LO = 'S';
-    REG_USB_MSC_LENGTH = 0x0D;  /* CSW length */
-    t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
-    t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
-    REG_USB_EP_CFG2 = 0x01; REG_USB_EP_CFG2 = 0x08;
-    REG_USB_EP_STATUS_90E3 = 0x02;
-    t = REG_USB_EP_CTRL_905F; REG_USB_EP_CTRL_905F = t;
-    t = REG_USB_EP_CTRL_905D; REG_USB_EP_CTRL_905D = t;
-    REG_USB_EP_STATUS_90E3 = 0x01; REG_USB_CTRL_90A0 = 0x01;
-    REG_USB_INT_MASK_9090 |= USB_INT_MASK_GLOBAL;
-    t = REG_USB_STATUS; REG_USB_STATUS = t;
-    t = REG_USB_CTRL_924C; REG_USB_CTRL_924C = t;
-    send_zlp_ack();
-    uart_puts("[C]\n");
-}
-
-static void handle_usb_reset(void) {
-  uint8_t r91d1;
-  r91d1 = REG_USB_PHY_CTRL_91D1;
-
-  /* bit 3: power management (U1/U2). Stock: 0x9b95 */
-  if (r91d1 & USB_91D1_POWER_MGMT) {
-      REG_USB_PHY_CTRL_91D1 = USB_91D1_POWER_MGMT;
-      REG_TIMER_CTRL_CC3B &= ~TIMER_CTRL_LINK_POWER;
-  }
-
-  r91d1 = REG_USB_PHY_CTRL_91D1;
-
-  /* bit 0: link training. Stock: 0xc465 -> bda4 state reset */
-  if (r91d1 & USB_91D1_LINK_TRAIN) {
-      REG_USB_PHY_CTRL_91D1 = USB_91D1_LINK_TRAIN;
-      /* bda4: C6A8 |= 1, 92C8 &= ~3, CD31 reset */
-      REG_PHY_CFG_C6A8 |= PHY_CFG_C6A8_ENABLE;
-      REG_POWER_CTRL_92C8 &= ~POWER_CTRL_92C8_BIT0;
-      REG_POWER_CTRL_92C8 &= ~POWER_CTRL_92C8_BIT1;
-      REG_CPU_TIMER_CTRL_CD31 = CPU_TIMER_CD31_CLEAR;
-      REG_CPU_TIMER_CTRL_CD31 = CPU_TIMER_CD31_START;
-      if (!(REG_USB_PHY_CTRL_91C0 & USB_PHY_91C0_LINK_UP)) {
-          REG_LINK_WIDTH_E710 = (REG_LINK_WIDTH_E710 & LINK_WIDTH_MASK) | LINK_RECOVERY_MODE;
-          REG_TIMER_CTRL_CC3B &= ~TIMER_CTRL_LINK_POWER;
-      }
-      return;
-  }
-
-  /* bit 1: simple flag. Stock: 0xe6aa */
-  if (r91d1 & USB_91D1_FLAG) {
-      REG_USB_PHY_CTRL_91D1 = USB_91D1_FLAG;
-      return;
-  }
-
-  /* bit 2: link reset ack. Stock: 0xe682 */
-  if (r91d1 & USB_91D1_LINK_RESET) {
-      REG_PHY_CFG_C6A8 |= PHY_CFG_C6A8_ENABLE;
-      REG_USB_PHY_CTRL_91D1 = USB_91D1_LINK_RESET;
-  }
-
-  REG_USB_EP0_CONFIG |= USB_EP0_CONFIG_ENABLE;
-  REG_USB_EP0_CONFIG |= USB_EP0_CONFIG_READY;
-  REG_USB_EP_READY = 0x01;
-  uart_puts("[R]\n");
+  uint8_t t;
+  REG_USB_EP_BUF_CTRL = 'U'; REG_USB_EP_BUF_SEL = 'S';
+  REG_USB_EP_BUF_DATA = 'B'; REG_USB_EP_BUF_PTR_LO = 'S';
+  REG_USB_MSC_LENGTH = 0x0D;  /* CSW length */
+  t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
+  t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
+  REG_USB_EP_CFG2 = 0x01; REG_USB_EP_CFG2 = 0x08;
+  REG_USB_EP_STATUS_90E3 = 0x02;
+  t = REG_USB_EP_CTRL_905F; REG_USB_EP_CTRL_905F = t;
+  t = REG_USB_EP_CTRL_905D; REG_USB_EP_CTRL_905D = t;
+  REG_USB_EP_STATUS_90E3 = 0x01; REG_USB_CTRL_90A0 = 0x01;
+  REG_USB_INT_MASK_9090 |= USB_INT_MASK_GLOBAL;
+  t = REG_USB_STATUS; REG_USB_STATUS = t;
+  t = REG_USB_CTRL_924C; REG_USB_CTRL_924C = t;
+  send_zlp_ack();
+  uart_puts("[SET CONFIG]\n");
 }
 
 static void handle_usb_control(void) {
@@ -203,7 +133,8 @@ static void handle_usb_control(void) {
   }
 
   if ((phase & USB_CTRL_PHASE_STAT_OUT) && !(phase & USB_CTRL_PHASE_SETUP)) {
-    complete_usb20_status();
+    REG_USB_DMA_TRIGGER = USB_DMA_RECV;
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
   } else if ((phase & USB_CTRL_PHASE_STAT_IN) && !(phase & USB_CTRL_PHASE_SETUP)) {
     REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_IN;
@@ -222,17 +153,13 @@ static void handle_usb_control(void) {
       handle_set_config();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       send_zlp_ack();
-      uart_puts("[I]\n");
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_ENDPOINT) && bReq == USB_REQ_CLEAR_FEATURE) {
-      /* CLEAR_FEATURE(HALT) -- re-arm MSC */
-      send_zlp_ack();
-      arm_msc();
+      uart_puts("[SET INTERFACE]\n");
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
       /* Vendor read XDATA via control */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
       uint8_t vi;
       for (vi = 0; vi < wLenL; vi++) DESC_BUF[vi] = XDATA_REG8(addr + vi);
-      send_descriptor_data(wLenL);
+      send_control_data(wLenL);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE5) {
       /* Vendor write XDATA via control */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
@@ -254,8 +181,7 @@ void int0_isr(void) __interrupt(0) {
   uint8_t periph_status;
   periph_status = REG_USB_PERIPH_STATUS;
 
-  if (periph_status & USB_PERIPH_BUS_RESET) handle_usb_reset();
-  else if (periph_status & USB_PERIPH_CONTROL) handle_usb_control();
+  if (periph_status & USB_PERIPH_CONTROL) handle_usb_control();
   else {
     uart_puts("[int0] ");
     uart_puthex(periph_status);

@@ -29,10 +29,13 @@ class TestDevice:
   def test_device_opens(self, dev):
     assert dev.handle is not None
 
-  def test_link_status(self, dev):
-    link = ctrl_read(dev, 0x9100)[0]
-    # 0x00=FS, 0x01=HS, 0x03=SS
+  def test_read_regs(self, dev):
+    link = ctrl_read(dev, 0x9100)[0]          # REG_USB_LINK_STATUS
     assert link in (0x00, 0x01, 0x03), f"unexpected link 0x{link:02X}"
+    mode = ctrl_read(dev, 0xCC30)[0]          # REG_CPU_MODE
+    assert mode in (0x00, 0x01), f"unexpected cpu mode 0x{mode:02X}"
+    power = ctrl_read(dev, 0x92C0)[0]         # REG_POWER_ENABLE
+    assert power & 0x80, f"POWER_ENABLE bit 7 not set: 0x{power:02X}"
 
   def test_write_read_control(self, dev):
     ctrl_write(dev, 0xF000, 0xAB)
