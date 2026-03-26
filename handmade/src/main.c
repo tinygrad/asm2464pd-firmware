@@ -268,29 +268,20 @@ void int1_isr(void) __interrupt(1) {
 }
 
 void main(void) {
+  // without this, UART has parity
   REG_UART_LCR &= ~LCR_PARITY_MASK;
   uart_puts("\n[BOOT]\n");
 
-  /* CPU / link / timer boot config */
+  // without this, USB2 is flaky
   REG_CPU_MODE = CPU_MODE_USB2;
-  REG_LINK_WIDTH_E710 = LINK_RECOVERY_MODE;
 
-  /* Interrupt / power config */
-  REG_INT_AUX_STATUS = INT_AUX_ENABLE;
-  REG_INT_ENABLE = INT_ENABLE_SYSTEM;
+  // without this, it doesn't get an interrupt
   REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
 
-  /* USB / PHY / buffer config */
-  REG_POWER_ENABLE = POWER_ENABLE_MAIN | 0x07;
-  REG_USB_PHY_CTRL_91D1 = USB_91D1_ALL;
-  REG_USB_CTRL_PHASE = 0x1F;
-  REG_USB_EP_CFG1 = 0x0F;
+  // without this, no USB interrupts
   REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
-  REG_USB_EP0_LEN_H = 0xF0;
-  REG_USB_MODE = 0x01;
 
-  /* USB PHY init */
-  REG_USB_PHY_CTRL_91C3 = 0x00;
+  // enable USB high speed mode
   REG_USB_PHY_CTRL_91C0 = 0x10;
 
   uart_puts("[GO]\n");
