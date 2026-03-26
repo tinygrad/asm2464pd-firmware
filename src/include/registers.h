@@ -304,12 +304,12 @@
 
 /*
  * USB Control Transfer Phase Register (0x9091)
- * 
+ *
  * Controls USB control transfer state machine. Read to check current phase,
  * write to acknowledge/advance phase.
  *
  * Control Transfer Sequence (verified working):
- * 
+ *
  * 1. SETUP Phase:
  *    - Hardware sets bit 0 when SETUP packet received
  *    - Read 0x9002, write back; read 0x9220
@@ -351,7 +351,7 @@
 
 /*
  * USB EP0 DMA Control Register (0x9092)
- * 
+ *
  * Controls DMA transfers for EP0 control transfers.
  * Write to trigger operations, reads back 0 when complete.
  *
@@ -1313,6 +1313,7 @@
 // Interrupt Controller (0xC800-0xC80F)
 //=============================================================================
 #define REG_INT_STATUS_C800     XDATA_REG8(0xC800)  /* Interrupt status register */
+#define   INT_STATUS_GLOBAL       0x01
 #define   INT_STATUS_PCIE         0x04  // Bit 2: PCIe interrupt status
 #define REG_INT_ENABLE          XDATA_REG8(0xC801)  /* Interrupt enable register */
 #define   INT_ENABLE_GLOBAL       0x01  // Bit 0: Global interrupt enable
