@@ -1346,13 +1346,18 @@ static void handle_cbw(void) {
     } else if (opcode == 0x8A) {
         uint32_t xfer_len;
         uint32_t received;
-        uint32_t write_base_lo;
-        uint32_t write_base_hi;
+        uint32_t pci_addr;
         uint8_t ep_cfg_905a_saved;
 
-        /* SCSI WRITE(16) data phase runs asynchronously from main loop.
-         * Arming OUT from inside CBW handling can miss BULK_DATA transitions,
-         * so we defer the CE88 handshake loop to the non-CBW path. */
+        /* SCSI WRITE(16) - DMA USB bulk data directly to SRAM.
+         *
+         * Flow: CE88/CE89 handshake receives USB data into 0x7000,
+         * then CE00=0x03 DMA transfers each sector from 0x7000 to
+         * SRAM at PCI address CE76-CE79 (0x00200000).
+         *
+         * 0x200000 is SRAM on the ASMedia chip.  The GPU reads this
+         * SRAM via PCIe bus mastering.  The host can also read it
+         * via pcie_mem_req through the bridge. */
         xfer_len = ((uint32_t)REG_USB_CBW_XFER_LEN_3 << 24) |
                    ((uint32_t)REG_USB_CBW_XFER_LEN_2 << 16) |
                    ((uint32_t)REG_USB_CBW_XFER_LEN_1 << 8) |
@@ -1364,16 +1369,27 @@ static void handle_cbw(void) {
         REG_USB_EP_CFG2 = 0x00;
 
         scsi_write16_dma_preset();
-        scsi_write16_prepare_target();
 
-        scsi_write_stream_offset = 0;
-        write_base_lo = dma_target_lo;
-        write_base_hi = dma_target_hi;
+        /* DMA USB bulk data to SRAM at PCI address 0x00200000.
+         *
+         * Flow: CE88/CE89 handshake receives USB data into 0x7000,
+         * then CE00=0x03 DMA transfers each sector to SRAM at CE76-CE79.
+         *
+         * NOTE: CE00=0x03 makes XDATA 0xF000 inaccessible to the 8051.
+         * This is OK because tinygrad only WRITES to alloc_sysmem (never
+         * reads back via E4).  The GPU reads SRAM via bus mastering. */
+        pci_addr = 0x00200000UL;
+        REG_SCSI_BUF_ADDR0 = (uint8_t)(pci_addr >> 0);
+        REG_SCSI_BUF_ADDR1 = (uint8_t)(pci_addr >> 8);
+        REG_SCSI_BUF_ADDR2 = (uint8_t)(pci_addr >> 16);
+        REG_SCSI_BUF_ADDR3 = (uint8_t)(pci_addr >> 24);
+
+        REG_SCSI_TRANSFER_MODE = 0x00;
+        REG_SCSI_BUF_FLOW &= 0x8F;
 
         bulk_out_xfer_len = xfer_len;
         bulk_out_received = 0;
         scsi_write_active = 1;
-        dma_log_idx = 0;
 
         received = 0;
         while (received < xfer_len) {
@@ -1382,7 +1398,6 @@ static void handle_cbw(void) {
             REG_USB_EP_CFG1 = USB_EP_CFG1_ARM_OUT;
             REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
 
-            /* Clear stale BULK_DATA latch before waiting for next chunk. */
             if (REG_USB_PERIPH_STATUS & USB_PERIPH_BULK_DATA) {
                 REG_USB_STATUS_909E = 0x01;
             }
@@ -1419,31 +1434,15 @@ static void handle_cbw(void) {
             chunk = 1024;
             if (received + chunk > xfer_len) chunk = (uint16_t)(xfer_len - received);
 
-            if (received == 0) {
-                uint16_t si;
-                for (si = 0; si < 0x0200; si++) {
-                    XDATA_REG8(0xF000 + si) = XDATA_REG8(0x7000 + si);
-                }
-            }
-
+            /* DMA: CE00=0x03 transfers each sector from 0x7000 to SRAM
+             * at PCI address CE76-CE79 (auto-incremented per sector). */
             {
-                uint16_t i;
-                uint32_t base_lo = write_base_lo + received;
-                uint32_t base_hi = write_base_hi;
-                if (base_lo < dma_target_lo) base_hi++;
-
-                for (i = 0; i < chunk; i += 4) {
-                    uint32_t v = (uint32_t)XDATA_REG8(0x7000 + i) |
-                                 ((uint32_t)XDATA_REG8(0x7000 + i + 1) << 8) |
-                                 ((uint32_t)XDATA_REG8(0x7000 + i + 2) << 16) |
-                                 ((uint32_t)XDATA_REG8(0x7000 + i + 3) << 24);
-                    uint32_t a_lo = base_lo + (uint32_t)i;
-                    uint32_t a_hi = base_hi;
-                    if (a_lo < base_lo) a_hi++;
-                    pcie_mem_write32_dma(a_lo, a_hi, v);
-
+                uint8_t sectors_in_chunk = (uint8_t)((chunk + 511) / 512);
+                uint8_t s;
+                for (s = 0; s < sectors_in_chunk; s++) {
+                    REG_SCSI_DMA_CTRL = 0x03;
+                    while (REG_SCSI_DMA_CTRL != 0x00) { }
                 }
-
             }
 
             received += chunk;
@@ -1471,9 +1470,6 @@ static void handle_cbw(void) {
         REG_USB_EP_CFG1 = 0x00;
         REG_USB_EP_CFG2 = 0x00;
         REG_USB_EP_CFG_905A = ep_cfg_905a_saved;
-
-        /* Re-arm PCIe request engine state after DMA write burst. */
-        REG_PCIE_STATUS = 0x08;
 
         send_csw(0x00);
     } else {
