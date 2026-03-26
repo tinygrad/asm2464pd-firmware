@@ -112,14 +112,14 @@ static void handle_usb_control(void) {
       REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
       // does set address
       REG_USB_EP_CTRL_91D0 = 0x02;
-      // enable USB bulk mode
+      // enable USB bulk mode (bypass MSC)
       REG_USB_MSC_CFG = 0x00;
-      // enable bulk OUT (host -> device) endpoint
-      //REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       send_zlp_ack();
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       handle_get_descriptor(wValH, wValL, wLenL);
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
+      // enable bulk endpoint
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       send_zlp_ack();
       uart_puts("[SET CONFIG]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
@@ -151,10 +151,11 @@ static void handle_usb_control(void) {
 }
 
 void handle_usb_bulk(void) {
-  uint8_t bulk_cfg1;
+  uint8_t bulk_cfg1, bulk_cfg2;
   bulk_cfg1 = REG_USB_EP_CFG1;
+  bulk_cfg2 = REG_USB_EP_CFG2;
   uart_puts("[BULK ");
-  uart_puthex(bulk_cfg1);
+  uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
   uart_puts("]\n");
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
     // dump what's at 0x7000
@@ -162,12 +163,20 @@ void handle_usb_bulk(void) {
     uart_puthex(XDATA_REG8(0x7000)); uart_puthex(XDATA_REG8(0x7001));
     uart_puthex(XDATA_REG8(0x7002)); uart_puthex(XDATA_REG8(0x7003));
     uart_puts("]\n");
-    // re-arm OUT + handshake
+    // handshake DMA
+    REG_BULK_DMA_HANDSHAKE = 1;
+    // re-arm OUT
     REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
-  } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_START) {
+  } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
     // bulk in needed — send data from D800
     REG_USB_MSC_LENGTH = 0xd;
     REG_USB_BULK_DMA_TRIGGER = 0x1;
+    // re-arm OUT
+    REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+  } else if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_START) {
+    // ack
+  } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_START) {
+    // ack
   } else {
     // don't ack
     return;
@@ -183,11 +192,11 @@ void int0_isr(void) __interrupt(0) {
   if (periph_status & USB_PERIPH_BUS_RESET) {
     uart_puts("[UNHANDLED RESET]\n");
   }
-  if (periph_status & USB_PERIPH_BULK_DATA) {
-    handle_usb_bulk();
-  }
   if (periph_status & USB_PERIPH_CONTROL) {
     handle_usb_control();
+  }
+  if (periph_status & USB_PERIPH_BULK_DATA) {
+    handle_usb_bulk();
   }
 }
 
