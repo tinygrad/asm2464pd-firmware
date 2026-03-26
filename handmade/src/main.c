@@ -126,6 +126,10 @@ static void handle_usb_control(void) {
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       handle_get_descriptor(wValH, wValL, wLenL);
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
+      // enable USB bulk mode
+      REG_USB_MSC_CFG = 0x00;
+      // arm bulk endpoint 2
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       send_zlp_ack();
       uart_puts("[SET CONFIG]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
@@ -183,10 +187,6 @@ void main(void) {
 
   // enable USB high speed mode
   REG_USB_PHY_CTRL_91C0 = 0x10;
-
-  // enable bulk mode, bulk transfer gets -9 and not -7 with this
-  REG_USB_EP0_CONFIG |= USB_EP0_CONFIG_READY;
-
 
   uart_puts("[GO]\n");
 
