@@ -42,15 +42,6 @@ static void send_zlp_ack(void) { send_control_data(0); }
 
 /*=== USB Request Handlers ===*/
 
-static void handle_set_address(uint8_t addr) {
-  uint8_t tmp;
-  tmp = REG_USB_INT_MASK_9090;
-  REG_USB_INT_MASK_9090 = (tmp & USB_INT_MASK_GLOBAL) | (addr & 0x7F);
-  REG_USB_EP_CTRL_91D0 = 0x02;
-  send_zlp_ack();
-  uart_puts("[SET ADDRESS]\n");
-}
-
 /* USB 2.0 Descriptors — no SS companion descriptors, 64-byte bulk EPs for Full Speed */
 static __code const uint8_t dev_desc[] = {
   0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40,
@@ -100,26 +91,6 @@ static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint8_t w
   send_control_data(wlen < desc_len ? wlen : desc_len);
 }
 
-/*=== SET_CONFIG ===*/
-static void handle_set_config(void) {
-  uint8_t t;
-  REG_USB_EP_BUF_CTRL = 'U'; REG_USB_EP_BUF_SEL = 'S';
-  REG_USB_EP_BUF_DATA = 'B'; REG_USB_EP_BUF_PTR_LO = 'S';
-  REG_USB_MSC_LENGTH = 0x0D;  /* CSW length */
-  t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
-  t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
-  REG_USB_EP_CFG2 = 0x01; REG_USB_EP_CFG2 = 0x08;
-  REG_USB_EP_STATUS_90E3 = 0x02;
-  t = REG_USB_EP_CTRL_905F; REG_USB_EP_CTRL_905F = t;
-  t = REG_USB_EP_CTRL_905D; REG_USB_EP_CTRL_905D = t;
-  REG_USB_EP_STATUS_90E3 = 0x01; REG_USB_CTRL_90A0 = 0x01;
-  REG_USB_INT_MASK_9090 |= USB_INT_MASK_GLOBAL;
-  t = REG_USB_STATUS; REG_USB_STATUS = t;
-  t = REG_USB_CTRL_924C; REG_USB_CTRL_924C = t;
-  send_zlp_ack();
-  uart_puts("[SET CONFIG]\n");
-}
-
 static void handle_usb_control(void) {
   uint8_t phase;
   phase = REG_USB_CTRL_PHASE;
@@ -146,11 +117,17 @@ static void handle_usb_control(void) {
     wLenL = REG_USB_SETUP_WLEN_L;
 
     if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
-      handle_set_address(wValL);
+      // the USB_INT_MASK_GLOBAL enabled bulk mode, this makes it not get -1
+      REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
+      // does set address
+      REG_USB_EP_CTRL_91D0 = 0x02;
+      send_zlp_ack();
+      uart_puts("[SET ADDRESS]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       handle_get_descriptor(wValH, wValL, wLenL);
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
-      handle_set_config();
+      send_zlp_ack();
+      uart_puts("[SET CONFIG]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       send_zlp_ack();
       uart_puts("[SET INTERFACE]\n");
@@ -164,12 +141,6 @@ static void handle_usb_control(void) {
       /* Vendor write XDATA via control */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
       XDATA_REG8(addr) = REG_USB_SETUP_WIDX_L;
-      send_zlp_ack();
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE6) {
-      /* Vendor write XDATA block via control */
-      uint16_t addr = ((uint16_t)wValH << 8) | wValL;
-      uint8_t vi;
-      for (vi = 0; vi < wLenL; vi++) XDATA_REG8(addr + vi) = DESC_BUF[vi];
       send_zlp_ack();
     } else {
       send_zlp_ack();
@@ -215,6 +186,7 @@ void main(void) {
 
   // enable bulk mode, bulk transfer gets -9 and not -7 with this
   REG_USB_EP0_CONFIG |= USB_EP0_CONFIG_READY;
+
 
   uart_puts("[GO]\n");
 
