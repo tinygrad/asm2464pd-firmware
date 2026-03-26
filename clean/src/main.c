@@ -123,13 +123,6 @@ static __code const uint8_t cfg_desc[] = {
     0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,
     0x06, 0x30, 0x00, 0x00, 0x00, 0x00,
 };
-/* USB 2.0 config: no SS EP Companion descriptors, 512-byte max packet size */
-static __code const uint8_t cfg_desc_usb2[] = {
-    0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
-    0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,
-    0x07, 0x05, 0x81, 0x02, 0x00, 0x02, 0x00,
-    0x07, 0x05, 0x02, 0x02, 0x00, 0x02, 0x00,
-};
 static __code const uint8_t bos_desc[] = {
     0x05, 0x0F, 0x16, 0x00, 0x02,
     0x07, 0x10, 0x02, 0x02, 0x00, 0x00, 0x00,
@@ -150,9 +143,7 @@ static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint8_t w
         if (!is_usb3) { DESC_BUF[2] = 0x10; DESC_BUF[3] = 0x02; DESC_BUF[7] = 0x40; }
         desc_len = 18;
     } else if (desc_type == USB_DESC_TYPE_CONFIG) {
-        if (is_usb3) { src = cfg_desc; desc_len = sizeof(cfg_desc); }
-        else { src = cfg_desc_usb2; desc_len = sizeof(cfg_desc_usb2); }
-        desc_copy(src, desc_len);
+        src = cfg_desc; desc_len = sizeof(cfg_desc); desc_copy(src, desc_len);
     } else if (desc_type == USB_DESC_TYPE_BOS) {
         src = bos_desc; desc_len = sizeof(bos_desc); desc_copy(src, desc_len);
     } else if (desc_type == USB_DESC_TYPE_STRING) {
