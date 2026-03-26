@@ -234,7 +234,6 @@ void main(void) {
   uart_puts("[GO]\n");
 
   // enable interrupts and chill
-  TCON = 0x04;  /* IT0=0 (level-triggered INT0) */
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
   while (1) {

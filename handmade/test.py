@@ -68,13 +68,12 @@ class TestDevice(unittest.TestCase):
     sig, tag, residue, status = struct.unpack('<IIIB', csw)
     if check: self.assertEqual(sig, test)
 
-  @unittest.skip("no fuzz")
   def test_fuzz_bulk_in_out(self):
-    for _ in range(100):
+    for _ in range(5):
       out = bool(random.randint(0,1))
       check = bool(random.randint(0,1))
       if out: self.test_bulk_out(check=check)
       else: self.test_bulk_in(check=check)
 
 if __name__ == '__main__':
-  pytest.main([__file__, "-v"])
+  pytest.main([__file__, "-v", "-s"])
