@@ -94,27 +94,16 @@ static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint8_t w
 static void handle_usb_control(void) {
   uint8_t phase;
   phase = REG_USB_CTRL_PHASE;
-  uart_puts("[ctrl ");
-  uart_puthex(phase);
-  uart_puts("]\n");
-
-  if (phase == USB_CTRL_PHASE_DATA_OUT || phase == 0x00) {
-    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
-    return;
-  }
-
-  if ((phase & USB_CTRL_PHASE_STAT_OUT) && !(phase & USB_CTRL_PHASE_SETUP)) {
-    REG_USB_DMA_TRIGGER = USB_DMA_RECV;
-    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
-  } else if ((phase & USB_CTRL_PHASE_STAT_IN) && !(phase & USB_CTRL_PHASE_SETUP)) {
-    REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
-    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_IN;
-  } else if (phase & USB_CTRL_PHASE_SETUP) {
+  if (phase & USB_CTRL_PHASE_SETUP) {
     uint8_t bmReq, bReq, wValL, wValH, wLenL;
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
     bmReq = REG_USB_SETUP_BMREQ; bReq = REG_USB_SETUP_BREQ;
     wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
     wLenL = REG_USB_SETUP_WLEN_L;
+
+    uart_puts("[C ");
+    uart_puthex(bReq);
+    uart_puts("]\n");
 
     if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
       // the USB_INT_MASK_GLOBAL enabled bulk mode, this makes it not get -1
@@ -122,7 +111,6 @@ static void handle_usb_control(void) {
       // does set address
       REG_USB_EP_CTRL_91D0 = 0x02;
       send_zlp_ack();
-      uart_puts("[SET ADDRESS]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       handle_get_descriptor(wValH, wValL, wLenL);
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
@@ -134,7 +122,6 @@ static void handle_usb_control(void) {
       uart_puts("[SET CONFIG]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       send_zlp_ack();
-      uart_puts("[SET INTERFACE]\n");
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
       /* Vendor read XDATA via control */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
@@ -149,6 +136,15 @@ static void handle_usb_control(void) {
     } else {
       send_zlp_ack();
     }
+  } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
+    REG_USB_DMA_TRIGGER = USB_DMA_RECV;
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
+  } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
+  } else {
+    uart_puts("[unhandled ctrl ");
+    uart_puthex(phase);
+    uart_puts("]\n");
   }
 }
 
@@ -182,6 +178,9 @@ void main(void) {
   // without this, it doesn't get an interrupt
   REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
 
+  // this enables a lot of int1
+  //REG_INT_ENABLE = 0xff;
+
   // without this, no USB interrupts
   REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
 
@@ -193,5 +192,19 @@ void main(void) {
   // enable interrupts and chill
   TCON = 0x04;  /* IT0=0 (level-triggered INT0) */
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
-  while (1) {}
+  while (1) {
+    /*uint8_t t;
+    t = REG_USB_EP_CFG1;
+    if (t) {
+      uart_puts("REG_USB_EP_CFG1: ");
+      uart_puthex(REG_USB_EP_CFG1);
+      uart_puts("\n");
+    }*/
+    /*uart_puthex(REG_USB_EP_CFG1);
+    uart_puts(" ");
+    uart_puthex(REG_USB_EP_CFG2);
+    uart_puts("\n");
+    volatile int i;
+    for (int i=0; i < 10000; i++);*/
+  }
 }
