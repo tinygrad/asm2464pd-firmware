@@ -78,9 +78,9 @@ static void send_descriptor_data(uint8_t len) {
 
 /* Re-arm MSC engine to receive next CBW */
 static void arm_msc(void) {
-    EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-    EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
-    REG_USB_MSC_LENGTH = 0x0D;
+    EP_BUF(0x00) = 'U'; EP_BUF(0x01) = 'S';
+    EP_BUF(0x02) = 'B'; EP_BUF(0x03) = 'S';
+    REG_USB_MSC_LENGTH = 0x0D;  /* CSW length */
     REG_USB_MSC_CTRL = 0x01;
     REG_USB_MSC_STATUS &= ~0x01;
 }
@@ -90,7 +90,7 @@ static void arm_msc(void) {
 static void handle_set_address(uint8_t addr) {
     uint8_t tmp;
     tmp = REG_USB_INT_MASK_9090;
-    REG_USB_INT_MASK_9090 = (tmp & 0x80) | (addr & 0x7F);
+    REG_USB_INT_MASK_9090 = (tmp & USB_INT_MASK_GLOBAL) | (addr & 0x7F);
     REG_USB_EP_CTRL_91D0 = 0x02;
 
     if (is_usb3) {
@@ -164,9 +164,9 @@ static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint8_t w
 /*=== SET_CONFIG ===*/
 static void handle_set_config(void) {
     uint8_t t;
-    REG_USB_EP_BUF_CTRL = 0x55; REG_USB_EP_BUF_SEL = 0x53;
-    REG_USB_EP_BUF_DATA = 0x42; REG_USB_EP_BUF_PTR_LO = 0x53;
-    REG_USB_MSC_LENGTH = 0x0D;
+    REG_USB_EP_BUF_CTRL = 'U'; REG_USB_EP_BUF_SEL = 'S';
+    REG_USB_EP_BUF_DATA = 'B'; REG_USB_EP_BUF_PTR_LO = 'S';
+    REG_USB_MSC_LENGTH = 0x0D;  /* CSW length */
     t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
     t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
     REG_USB_EP_CFG2 = 0x01; REG_USB_EP_CFG2 = 0x08;
@@ -174,7 +174,7 @@ static void handle_set_config(void) {
     t = REG_USB_EP_CTRL_905F; REG_USB_EP_CTRL_905F = t;
     t = REG_USB_EP_CTRL_905D; REG_USB_EP_CTRL_905D = t;
     REG_USB_EP_STATUS_90E3 = 0x01; REG_USB_CTRL_90A0 = 0x01;
-    REG_USB_INT_MASK_9090 |= 0x80;
+    REG_USB_INT_MASK_9090 |= USB_INT_MASK_GLOBAL;
     t = REG_USB_STATUS; REG_USB_STATUS = t;
     t = REG_USB_CTRL_924C; REG_USB_CTRL_924C = t;
     send_zlp_ack();
@@ -218,16 +218,16 @@ static void do_bulk_init(void) {
     REG_USB_EP_BUF_DE30 = 0x03; REG_USB_EP_BUF_DE36 = 0x00;
 
     /* 9200 toggle + MSC reset */
-    REG_USB_CTRL_9200 |= 0x40;
+    REG_USB_CTRL_9200 |= USB_CTRL_9200_BIT6;
     REG_USB_MSC_CFG |= 0x01;
     REG_USB_MSC_CFG &= ~0x01;
-    REG_USB_CTRL_9200 &= ~0x40;
+    REG_USB_CTRL_9200 &= ~USB_CTRL_9200_BIT6;
 
     /* Final EP config */
     t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
     t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
     REG_USB_EP_CFG2 = 0x01; REG_USB_EP_CFG2 = 0x08;
-    REG_USB_EP_CTRL_905F |= 0x08;
+    REG_USB_EP_CTRL_905F |= USB_EP_CTRL_905F_BIT3;
     REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_CTRL_90A0 = 0x01;
 
     /* Arm MSC for first CBW */
@@ -253,10 +253,10 @@ static void do_bulk_init(void) {
     arm_msc();
 
     /* 9200 toggle (second pass) */
-    REG_USB_CTRL_9200 |= 0x40;
+    REG_USB_CTRL_9200 |= USB_CTRL_9200_BIT6;
     REG_USB_MSC_CFG |= 0x01;
     REG_USB_MSC_CFG &= ~0x01;
-    REG_USB_CTRL_9200 &= ~0x40;
+    REG_USB_CTRL_9200 &= ~USB_CTRL_9200_BIT6;
 
     /* EP reconfig (second pass) */
     t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
@@ -310,7 +310,7 @@ static void sw_dma_bulk_in(uint16_t addr, uint8_t len) {
     REG_USB_EP_STATUS_90E3 = 0x02; REG_USB_EP_READY = 0x01;
 
     REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
-    REG_USB_MSC_LENGTH = 0x0D;
+    REG_USB_MSC_LENGTH = 0x0D;  /* CSW length */
 }
 
 /*=== CBW Handler ===*/
@@ -358,8 +358,8 @@ static void handle_cbw(void) {
         if (len == 0) len = 64;
         for (i = 0; i < len; i++) EP_BUF(i) = XDATA_REG8(addr + i);
         sw_dma_bulk_in(addr, len);
-        EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-        EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
+        EP_BUF(0x00) = 'U'; EP_BUF(0x01) = 'S';
+        EP_BUF(0x02) = 'B'; EP_BUF(0x03) = 'S';
         EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
         EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
         send_csw(0x00);
@@ -444,8 +444,8 @@ static void handle_91d1_events(void) {
 
 static void handle_usb_reset(void) {
     G_STATE_FLAG_0AF1 = 0x01;
-    REG_USB_EP0_CONFIG |= 0x01;
-    REG_USB_EP0_CONFIG |= 0x80;
+    REG_USB_EP0_CONFIG |= USB_EP0_CONFIG_ENABLE;
+    REG_USB_EP0_CONFIG |= USB_EP0_CONFIG_READY;
     REG_USB_EP_READY = 0x01;
     bulk_out_state = 0; need_cbw_process = 0; need_bulk_init = 0;
     uart_puts("[R]\n");
@@ -511,32 +511,32 @@ void int0_isr(void) __interrupt(0) {
         wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
         wLenL = REG_USB_SETUP_WLEN_L;
 
-        if (bmReq == 0x00 && bReq == USB_REQ_SET_ADDRESS) {
+        if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
             handle_set_address(wValL);
-        } else if (bmReq == 0x80 && bReq == USB_REQ_GET_DESCRIPTOR) {
+        } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
             handle_get_descriptor(wValH, wValL, wLenL);
-        } else if (bmReq == 0x00 && bReq == USB_REQ_SET_CONFIGURATION) {
+        } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
             handle_set_config();
-        } else if (bmReq == 0x01 && bReq == USB_REQ_SET_INTERFACE) {
+        } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
             need_bulk_init = 1;
             send_zlp_ack();
             uart_puts("[I]\n");
-        } else if (bmReq == 0x02 && bReq == 0x01) {
+        } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_ENDPOINT) && bReq == USB_REQ_CLEAR_FEATURE) {
             /* CLEAR_FEATURE(HALT) -- re-arm MSC */
             send_zlp_ack();
             arm_msc();
-        } else if (bmReq == 0xC0 && bReq == 0xE4) {
+        } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
             /* Vendor read XDATA via control */
             uint16_t addr = ((uint16_t)wValH << 8) | wValL;
             uint8_t vi;
             for (vi = 0; vi < wLenL; vi++) DESC_BUF[vi] = XDATA_REG8(addr + vi);
             send_descriptor_data(wLenL);
-        } else if (bmReq == 0x40 && bReq == 0xE5) {
+        } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE5) {
             /* Vendor write XDATA via control */
             uint16_t addr = ((uint16_t)wValH << 8) | wValL;
             XDATA_REG8(addr) = REG_USB_SETUP_WIDX_L;
             send_zlp_ack();
-        } else if (bmReq == 0x40 && bReq == 0xE6) {
+        } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE6) {
             /* Vendor write XDATA block via control */
             uint16_t addr = ((uint16_t)wValH << 8) | wValL;
             uint8_t vi;
@@ -569,7 +569,7 @@ void timer2_isr(void) __interrupt(5) { }
 static void hw_init(void) {
     uint8_t i;
 
-    REG_CPU_EXEC_STATUS = 0x01; REG_CPU_MODE = 0x01;
+    REG_CPU_EXEC_STATUS = CPU_EXEC_STATUS_ACTIVE; REG_CPU_MODE = CPU_MODE_USB3;
     REG_LINK_WIDTH_E710 = 0x04; REG_CPU_EXEC_STATUS_2 = 0x04;
     REG_TIMER_CTRL_CC3B = 0x0C; REG_LINK_CTRL_E717 = 0x01;
     REG_CPU_CTRL_CC3E = 0x00; REG_TIMER_CTRL_CC3B = 0x0C;
@@ -633,7 +633,7 @@ static void hw_init(void) {
         REG_DMA_CHAN_AUX1 = 0x00;
         REG_DMA_XFER_CNT_HI = dma_cfg[i][2];
         REG_DMA_XFER_CNT_LO = dma_cfg[i][3];
-        REG_DMA_TRIGGER = 0x01;
+        REG_DMA_TRIGGER = DMA_TRIGGER_START;
         REG_DMA_CHAN_CTRL2 = 0x14;
     }}
     REG_USB_MSC_CFG = 0x07; REG_USB_MSC_CFG = 0x07;
@@ -641,11 +641,11 @@ static void hw_init(void) {
     REG_USB_MSC_CFG = 0x01; REG_USB_MSC_CFG = 0x00;
     REG_USB_MSC_LENGTH = 0x0D;
     REG_POWER_ENABLE = 0x87; REG_USB_PHY_CTRL_91D1 = USB_91D1_ALL;
-    REG_BUF_CFG_9300 = 0x0C; REG_BUF_CFG_9301 = 0xC0;
-    REG_BUF_CFG_9302 = 0xBF; REG_USB_CTRL_PHASE = 0x1F;
+    REG_BUF_CFG_9300 = BUF_CFG_9300_MSC_INIT; REG_BUF_CFG_9301 = BUF_CFG_9301_MSC_INIT;
+    REG_BUF_CFG_9302 = BUF_CFG_9302_MSC_INIT; REG_USB_CTRL_PHASE = 0x1F;
     REG_USB_EP_CFG1 = 0x0F; REG_USB_PHY_CTRL_91C1 = 0xF0;
     REG_BUF_CFG_9303 = 0x33; REG_BUF_CFG_9304 = 0x3F;
-    REG_BUF_CFG_9305 = 0x40; REG_USB_CONFIG = 0xE0;
+    REG_BUF_CFG_9305 = 0x40; REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
     REG_USB_EP0_LEN_H = 0xF0; REG_USB_MODE = 0x01;
     REG_USB_EP_MGMT = 0x00;
     REG_USB_EP_READY = 0xFF; REG_USB_EP_CTRL_9097 = 0xFF;
@@ -724,9 +724,9 @@ void main(void) {
                 while (!(REG_USB_DMA_STATE & USB_DMA_STATE_READY)) { }
                 { uint8_t ci;
                   for (ci = 0; ci < bulk_out_len; ci++)
-                      XDATA_REG8(bulk_out_addr + ci) = XDATA_REG8(0x7000 + ci); }
-                EP_BUF(0x00) = 0x55; EP_BUF(0x01) = 0x53;
-                EP_BUF(0x02) = 0x42; EP_BUF(0x03) = 0x53;
+                      XDATA_REG8(bulk_out_addr + ci) = XDATA_REG8(FLASH_BUFFER_BASE + ci); }
+                EP_BUF(0x00) = 'U'; EP_BUF(0x01) = 'S';
+                EP_BUF(0x02) = 'B'; EP_BUF(0x03) = 'S';
                 EP_BUF(0x04) = cbw_tag[0]; EP_BUF(0x05) = cbw_tag[1];
                 EP_BUF(0x06) = cbw_tag[2]; EP_BUF(0x07) = cbw_tag[3];
                 send_csw(0x00);
