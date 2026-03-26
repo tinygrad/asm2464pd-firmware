@@ -623,12 +623,7 @@ static void hw_init(void) {
     REG_POWER_ENABLE = POWER_ENABLE_MAIN | POWER_ENABLE_BIT | 0x06;
     REG_CLOCK_ENABLE = 0x82 | CLOCK_ENABLE_BIT;
     REG_PHY_POWER = 0x2F;
-    REG_USB_PHY_CONFIG_9241 = USB_PHY_CFG_INIT;
-    REG_USB_PHY_CONFIG_9241 = USB_PHY_CFG_SS_HS;  /* need full PHY for init, then disable SS via 91C0 */
-    /* PLL needed for 480MHz HS signaling */
-    REG_PHY_PLL_CTRL = 0x5B; REG_PHY_PLL_CTRL = 0x6B;
-    REG_PHY_PLL_CFG = 0x1F; REG_PHY_PLL_CTRL = 0xAB;
-    REG_PHY_PLL_CFG = 0x17;
+    REG_USB_PHY_CONFIG_9241 = USB_PHY_CFG_INIT;  /* no SS PHY */
     REG_CPU_CLK_CFG = 0x88;
 
     /* Buffer descriptor table */
@@ -716,9 +711,8 @@ static void hw_init(void) {
 
     /* PHY link control */
     REG_USB_PHY_CTRL_91C3 = 0x00;
-    /* PHY reset toggle — init with SS enabled so PHY PLL locks */
-    REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_PHY_ON | USB_PHY_91C0_SS_ENABLE | USB_PHY_91C0_RESET;  /* 0x13 */
-    REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_PHY_ON | USB_PHY_91C0_SS_ENABLE;                        /* 0x12 */
+    /* PHY on, no SS */
+    REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_PHY_ON;
 
     /* DMA + interrupt controller */
     REG_INT_DMA_CTRL = 0x04; REG_INT_DMA_CTRL = 0x84;
@@ -751,34 +745,6 @@ static void hw_init(void) {
     REG_CPU_DMA_INT = 0x01;
 }
 
-/*
- * USB 2.0 clock recovery ("RstRxpll").
- * Called after SS link fails. Transitions PHY from SS to HS mode.
- * Matches stock firmware trace lines 3013-3163.
- */
-static void usb20_init(void) {
-    uint8_t t;
-
-    /* Disable SS link (trace 3014: 91C0 = 0x12 → 0x10) */
-    REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_PHY_ON;
-
-    /* Clock recovery — 92CF sequence + 92C1 bit 4 toggle (trace 3111-3133) */
-    t = REG_CLOCK_CTRL_92CF; REG_CLOCK_CTRL_92CF = 0x00;
-    t = REG_CLOCK_CTRL_92CF; REG_CLOCK_CTRL_92CF = 0x04;
-    t = REG_CLOCK_ENABLE;    REG_CLOCK_ENABLE = t | CLOCK_ENABLE_PHY_TOGGLE;
-    { uint16_t dly; for (dly = 0; dly < 500; dly++) { } }
-    while (!(REG_LINK_STATUS_E712 & LINK_E712_DONE)) { }
-    t = REG_CLOCK_ENABLE;    REG_CLOCK_ENABLE = t & ~CLOCK_ENABLE_PHY_TOGGLE;
-    t = REG_CLOCK_CTRL_92CF; REG_CLOCK_CTRL_92CF = 0x07;
-    t = REG_CLOCK_CTRL_92CF; REG_CLOCK_CTRL_92CF = 0x03;
-    (void)t;
-
-    /* Post-recovery (trace 3158-3163) */
-    REG_PHY_LINK_CTRL = 0x00;
-    REG_POWER_EVENT_92E1 = 0x40;
-    REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
-}
-
 void main(void) {
     IE = 0;
     is_usb3 = 0; need_bulk_init = 0; bulk_out_state = 0;
@@ -794,12 +760,6 @@ void main(void) {
     uart_puts("[GO]\n");
     TCON = 0x04;  /* IT0=0 (level-triggered INT0) */
     IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
-
-    /* Wait for SS to fail (ISR sets is_usb3=0), then do USB 2.0 clock recovery */
-    while (is_usb3) { REG_CPU_KEEPALIVE = 0x0C; }
-    usb20_init();
-    { uint8_t link = REG_USB_LINK_STATUS;
-      uart_puts("[link="); uart_puthex(link); uart_puts("]\n"); }
 
     while (1) {
         REG_CPU_KEEPALIVE = 0x0C;
