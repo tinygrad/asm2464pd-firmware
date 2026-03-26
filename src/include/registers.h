@@ -406,7 +406,9 @@
 #define   USB_EP_CFG1_BULK_IN_START      0x08
 
 #define REG_USB_EP_CFG2         XDATA_REG8(0x9094)
+#define   USB_EP_CFG2_CLEAR_IN    0x01
 #define   USB_EP_CFG2_ARM_IN      0x02  // Bit 1: Arm bulk IN endpoint (write)
+#define   USB_EP_CFG2_CLEAR_OUT   0x08
 #define   USB_EP_CFG2_ARM_OUT     0x10  // Bit 4: Arm bulk OUT endpoint (write)
 /*
  * USB Endpoint Ready/Status Masks (0x9096-0x909E)

@@ -112,16 +112,18 @@ static void handle_usb_control(void) {
       REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
       // does set address
       REG_USB_EP_CTRL_91D0 = 0x02;
-      // enable USB bulk mode (bypass MSC)
-      REG_USB_MSC_CFG = 0x00;
-      // enable bulk endpoint
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       send_zlp_ack();
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       handle_get_descriptor(wValH, wValL, wLenL);
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
+      // enable USB bulk mode (bypass MSC)
+      REG_USB_MSC_CFG = 0x00;
+      // enable bulk endpoint (without the clear in, it'll get a spurious IN, without the clear out, it'll miss an out)
+      REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
+      REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       send_zlp_ack();
-      uart_puts("[SET CONFIG]\n");
+      uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
@@ -195,7 +197,7 @@ void int0_isr(void) __interrupt(0) {
     handle_usb_bulk_data();
   } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
     uint8_t ep = REG_USB_EP_READY;
-    uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts("]\n");
+    uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts(" "); uart_puthex(REG_USB_EP_STATUS_90E3); uart_puts("]\n");
     REG_USB_EP_READY = ep;
   } else {
     uart_puts("[UNHANDLED INT0 ");
@@ -226,7 +228,7 @@ void main(void) {
   REG_USB_PHY_CTRL_91C0 = 0x10;
 
   // enable BULK interrupt. mislabeled
-  REG_USB_EP0_LEN_H = 0xf0;
+  REG_USB_EP0_LEN_H = 0xF0;
 
   // enables EP_COMPLETE interrupts
   REG_USB_DATA_L = 0x00;

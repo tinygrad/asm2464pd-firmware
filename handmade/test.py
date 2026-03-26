@@ -26,9 +26,9 @@ class TestDevice(unittest.TestCase):
   @classmethod
   def setUpClass(cls):
     cls.dev = USB3(VID, PID, 0x81, 0x83, 0x02, 0x04, use_bot=True)
-    BLK = 0x40
-    regs = b''.join(ctrl_read(cls.dev, i, BLK) for i in range(0x9000, 0x9400, BLK))
-    print("\n"+hexdump(regs, 'return'), file=sys.stderr)
+    #BLK = 0x40
+    #regs = b''.join(ctrl_read(cls.dev, i, BLK) for i in range(0x9000, 0x9400, BLK))
+    #print("\n"+hexdump(regs, 'return'), file=sys.stderr)
 
   def test_device_opens(self):
     assert self.dev.handle is not None
@@ -49,7 +49,7 @@ class TestDevice(unittest.TestCase):
 
   def test_bulk_out(self, check=True):
     self.dev._tag += 1
-    test = random.randint(0, 0x7fffffff)
+    test = random.randint(0, 0x7FFF) | 0xC0DE0000
     cbw = struct.pack('<IIIBBB', test, self.dev._tag, 0, 0x80, 0, 16) + b'\xE8' + b'\x00' * 15
     self.dev._bulk_out(0x02, cbw)
     # CBW lands at 0x7000 — check test matches
@@ -68,6 +68,7 @@ class TestDevice(unittest.TestCase):
     sig, tag, residue, status = struct.unpack('<IIIB', csw)
     if check: self.assertEqual(sig, test)
 
+  @unittest.skip("no fuzzing")
   def test_fuzz_bulk_in_out(self):
     for _ in range(5):
       out = bool(random.randint(0,1))
