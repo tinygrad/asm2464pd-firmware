@@ -271,6 +271,9 @@
  *   Phase 11: full ramp up + teardown (re-arm MSC engine)
  */
 #define REG_USB_MSC_CFG         XDATA_REG8(0x900B)
+#define   USB_MSC_CFG_ENABLE      0x01  // Bit 0: MSC engine enable
+#define   USB_MSC_CFG_BULK_PATH   0x02  // Bit 1: MSC bulk data path enable
+#define   USB_MSC_CFG_DMA_PATH    0x04  // Bit 2: MSC DMA path enable
 #define REG_USB_ALT_SETTING_L   XDATA_REG8(0x900C)  /* Alt setting wValue low (written by SET_INTERFACE) */
 #define REG_USB_ALT_SETTING_H   XDATA_REG8(0x900D)  /* Alt setting wValue high */
 #define REG_USB_ALT_SETTING2_L  XDATA_REG8(0x900E)  /* Alt setting wValue low (duplicate) */
@@ -1662,6 +1665,24 @@
  */
 #define REG_SCSI_DMA_CTRL       XDATA_REG8(0xCE00)  /* Write 0x03 to start, poll 0x00 for done */
 #define REG_SCSI_DMA_PARAM      XDATA_REG8(0xCE01)  /* DMA parameter (upper 2 bits | tag value) */
+/*
+ * SCSI DMA SRAM Write Pointer (0xCE10-0xCE13)
+ * 32-bit PCI address, big-endian byte order.
+ * This is the SRAM address that CE00=0x03 writes to.
+ * Auto-increments by 0x4000 per CE00=0x03 trigger.
+ * Writable — can be set to target a specific SRAM offset.
+ * Must be 0x00 in CE01 for CE00=0x03 to generate a completion.
+ *
+ * Observed: the completion queue entry at 0xA000 dw6 (offset 0x18)
+ * matches this value (also big-endian PCI address).
+ *
+ * Example: to target PCI 0x00200000:
+ *   CE10=0x00, CE11=0x20, CE12=0x00, CE13=0x00
+ */
+#define REG_SCSI_DMA_SRAM_PTR_0 XDATA_REG8(0xCE10)  /* SRAM write pointer byte 0 (BE: MSB) */
+#define REG_SCSI_DMA_SRAM_PTR_1 XDATA_REG8(0xCE11)  /* SRAM write pointer byte 1 */
+#define REG_SCSI_DMA_SRAM_PTR_2 XDATA_REG8(0xCE12)  /* SRAM write pointer byte 2 */
+#define REG_SCSI_DMA_SRAM_PTR_3 XDATA_REG8(0xCE13)  /* SRAM write pointer byte 3 (BE: LSB) */
 #define REG_SCSI_DMA_CFG_CE36   XDATA_REG8(0xCE36)  // SCSI DMA config 0xCE36
 #define REG_SCSI_DMA_TAG_CE3A   XDATA_REG8(0xCE3A)  // SCSI DMA tag storage
 

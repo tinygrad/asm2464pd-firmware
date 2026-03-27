@@ -83,4 +83,4 @@ class TestDevice(unittest.TestCase):
       else: self.test_bulk_in(check=check)
 
 if __name__ == '__main__':
-  pytest.main([__file__, "-v", "-s"])
+  pytest.main([__file__, "-v", "-s", *sys.argv[1:]])
