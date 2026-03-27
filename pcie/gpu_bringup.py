@@ -150,19 +150,62 @@ def psp_sos(h, ip_ver, bases, vram_sz):
   return rd, wr, sos_fw, msg1_pa
 
 # ============================================================================
-# 3. PSP ring -> TOC -> SMU fw -> TMR -> SDMA fw
+# 2b. SOC init (doorbell aperture, strap)
 # ============================================================================
-def psp_load_sdma(h, ip_ver, bases, vram_sz, mp0r, mp0w, sos_fw, msg1):
+def soc_init(h, ip_ver, bases):
+  nbif_hwip = am.NBIF_HWIP if am.NBIF_HWIP in ip_ver else am.NBIO_HWIP
+  pfx = 'nbif' if nbif_hwip == am.NBIF_HWIP else 'nbio'
+  nbif = Regs(pfx, ip_ver[nbif_hwip], bases[nbif_hwip])
+  # Clear strap_no_soft_reset_dev0_f2
+  v = smnrd(h, nbif.smn("regRCC_DEV0_EPF2_STRAP2"))
+  r = nbif._r["regRCC_DEV0_EPF2_STRAP2"]
+  start, end = r.fields['strap_no_soft_reset_dev0_f2']
+  mask = ((1 << (end - start + 1)) - 1) << start
+  smnwr(h, nbif.smn("regRCC_DEV0_EPF2_STRAP2"), v & ~mask)
+  # Enable doorbell aperture
+  smnwr(h, nbif.smn("regRCC_DEV0_EPF0_RCC_DOORBELL_APER_EN"), 1)
+  print(f"  doorbell aperture enabled")
+
+# ============================================================================
+# 2c. GMC MMHUB init (system aperture, L1 TLB, etc.)
+# ============================================================================
+def gmc_init(h, ip_ver, bases, vram_sz):
+  mmhub = Regs('mmhub', ip_ver.get(am.MMHUB_HWIP, ip_ver[am.GC_HWIP]), bases.get(am.MMHUB_HWIP, bases[am.GC_HWIP]))
+  fb = (smnrd(h, mmhub.smn("regMMMC_VM_FB_LOCATION_BASE")) & 0xFFFFFF) << 24
+  ft = (smnrd(h, mmhub.smn("regMMMC_VM_FB_LOCATION_TOP")) & 0xFFFFFF) << 24
+  mc = lambda pa: fb + pa
+  print(f"  FB 0x{fb:X}..0x{ft:X}")
+
+  # Bump allocator
   alloc_p = [vram_sz - (80 << 20)]
   def palloc(sz, a=0x1000): alloc_p[0] = (alloc_p[0] - sz) & ~(a - 1); return alloc_p[0]
 
+  # System aperture
+  smnwr(h, mmhub.smn("regMMMC_VM_AGP_BASE"), 0)
+  smnwr(h, mmhub.smn("regMMMC_VM_AGP_BOT"), 0xFFFFFF)  # disable AGP
+  smnwr(h, mmhub.smn("regMMMC_VM_AGP_TOP"), 0)
+  smnwr(h, mmhub.smn("regMMMC_VM_SYSTEM_APERTURE_LOW_ADDR"), fb >> 18)
+  smnwr(h, mmhub.smn("regMMMC_VM_SYSTEM_APERTURE_HIGH_ADDR"), ft >> 18)
+
+  sp, dp = palloc(0x1000), palloc(0x1000)
+  smnwr(h, mmhub.smn("regMMMC_VM_SYSTEM_APERTURE_DEFAULT_ADDR_LSB"), lo32(sp >> 12))
+  smnwr(h, mmhub.smn("regMMMC_VM_SYSTEM_APERTURE_DEFAULT_ADDR_MSB"), hi32(sp >> 12))
+  smnwr(h, mmhub.smn("regMMVM_L2_PROTECTION_FAULT_DEFAULT_ADDR_LO32"), lo32(dp >> 12))
+  smnwr(h, mmhub.smn("regMMVM_L2_PROTECTION_FAULT_DEFAULT_ADDR_HI32"), hi32(dp >> 12))
+
+  # L1 TLB: enable, system_access_mode=3, advanced_driver_model
+  v = smnrd(h, mmhub.smn("regMMMC_VM_MX_L1_TLB_CNTL"))
+  v = (v | 1 | (1 << 3)) & ~(3 << 4) | (3 << 4)
+  smnwr(h, mmhub.smn("regMMMC_VM_MX_L1_TLB_CNTL"), v)
+  print("  MMHUB sys aperture ok")
+  return mc, palloc
+
+# ============================================================================
+# 3. PSP ring -> TOC -> SMU fw -> TMR -> all IP fw -> RLC autoload
+# ============================================================================
+def psp_load_sdma(h, ip_ver, bases, vram_sz, mp0r, mp0w, sos_fw, msg1, mc, palloc):
   ring_pa, cmd_pa, fence_pa = palloc(0x10000), palloc(am.PSP_CMD_BUFFER_SIZE), palloc(am.PSP_FENCE_BUFFER_SIZE)
   vwr32(h, fence_pa, 0)
-
-  mmhub = Regs('mmhub', ip_ver.get(am.MMHUB_HWIP, ip_ver[am.GC_HWIP]), bases.get(am.MMHUB_HWIP, bases[am.GC_HWIP]))
-  fb = (smnrd(h, mmhub.smn("regMMMC_VM_FB_LOCATION_BASE")) & 0xFFFFFF) << 24
-  mc = lambda pa: fb + pa
-  print(f"  fb_base=0x{fb:X}")
 
   # destroy old ring if present
   if mp0r("71"): mp0w("64", am.GFX_CTRL_CMD_ID_DESTROY_RINGS); time.sleep(0.05)
@@ -230,6 +273,25 @@ def psp_load_sdma(h, ip_ver, bases, vram_sz, mp0r, mp0w, sos_fw, msg1):
     c.cmd.cmd_setup_tmr.bitfield.virt_phy_addr = 1; c.cmd.cmd_setup_tmr.buf_size = tmr_sz
     submit(bytes(c)); print(f"  TMR ok @ 0x{tp:X}")
 
+  # SMU: EnableAllSmuFeatures + SetDriverDramAddr (must be before autoload to power GC)
+  mp1 = Regs('mp', ip_ver[am.MP1_HWIP], bases[am.MP1_HWIP])
+  def smu_msg(msg_id, param=0):
+    smnwr(h, mp1.smn("regMP1_SMN_C2PMSG_90"), 0)
+    smnwr(h, mp1.smn("regMP1_SMN_C2PMSG_82"), param)
+    smnwr(h, mp1.smn("regMP1_SMN_C2PMSG_66"), msg_id)
+    for _ in range(10000):
+      if smnrd(h, mp1.smn("regMP1_SMN_C2PMSG_90")) == 1:
+        return smnrd(h, mp1.smn("regMP1_SMN_C2PMSG_82"))
+      time.sleep(0.001)
+    raise TimeoutError(f"SMU 0x{msg_id:X}")
+
+  # SetDriverDramAddr (driver table for SMU, 16KB in VRAM)
+  drv_tbl = palloc(0x4000)
+  smu_msg(0x17, hi32(mc(drv_tbl)))  # SetDriverDramAddrHigh
+  smu_msg(0x16, lo32(mc(drv_tbl)))  # SetDriverDramAddrLow
+  smu_msg(0x18, 0)  # EnableAllSmuFeatures
+  print("  SMU features enabled")
+
   # Load all IP firmware needed for SDMA (GC block must be unclocked via RLC autoload)
   # Use tinygrad's AMFirmware to get the correct firmware descriptors
   from tinygrad.runtime.support.am.amdev import AMFirmware
@@ -255,34 +317,52 @@ def psp_load_sdma(h, ip_ver, bases, vram_sz, mp0r, mp0w, sos_fw, msg1):
   submit(bytes(am.struct_psp_gfx_cmd_resp(cmd_id=am.GFX_CMD_ID_AUTOLOAD_RLC)))
   print("ok")
 
-  return mc, palloc
+  # Wait for GC block to come alive after RLC autoload
+  print("  Waiting for GC block...", end=' ', flush=True)
+  for i in range(100):
+    wreg(h, 0x2040//4, 0xDEADBEEF)
+    if rreg(h, 0x2040//4) == 0xDEADBEEF:
+      print(f"alive ({i*0.1:.1f}s)")
+      wreg(h, 0x2040//4, 0)
+      break
+    time.sleep(0.1)
+  else:
+    print("DEAD — GC block did not wake up")
 
 # ============================================================================
-# 4. MMHUB system aperture (minimal GMC)
+# 4. GFX init (post-autoload: enable RLC, GCHUB, MEC)
 # ============================================================================
-def gmc_sys_aperture(h, ip_ver, bases, mc, palloc):
-  mmhub = Regs('mmhub', ip_ver.get(am.MMHUB_HWIP, ip_ver[am.GC_HWIP]), bases.get(am.MMHUB_HWIP, bases[am.GC_HWIP]))
-  fb = (smnrd(h, mmhub.smn("regMMMC_VM_FB_LOCATION_BASE")) & 0xFFFFFF) << 24
-  ft = (smnrd(h, mmhub.smn("regMMMC_VM_FB_LOCATION_TOP")) & 0xFFFFFF) << 24
-  print(f"  FB 0x{fb:X}..0x{ft:X}")
+def gfx_init(h, ip_ver, bases):
+  gc = Regs('gc', ip_ver[am.GC_HWIP], bases[am.GC_HWIP])
 
-  smnwr(h, mmhub.smn("regMMMC_VM_AGP_BASE"), 0)
-  smnwr(h, mmhub.smn("regMMMC_VM_AGP_BOT"), 0xFFFFFF)  # disable AGP
-  smnwr(h, mmhub.smn("regMMMC_VM_AGP_TOP"), 0)
-  smnwr(h, mmhub.smn("regMMMC_VM_SYSTEM_APERTURE_LOW_ADDR"), fb >> 18)
-  smnwr(h, mmhub.smn("regMMMC_VM_SYSTEM_APERTURE_HIGH_ADDR"), ft >> 18)
+  # Check if GC block is alive
+  wreg(h, 0x2040//4, 0xBEEF)
+  v = rreg(h, 0x2040//4)
+  print(f"  SCRATCH_REG0 test: 0x{v:08X} -> {'alive' if v == 0xBEEF else 'DEAD'}")
+  wreg(h, 0x2040//4, 0)
 
-  sp, dp = palloc(0x1000), palloc(0x1000)
-  smnwr(h, mmhub.smn("regMMMC_VM_SYSTEM_APERTURE_DEFAULT_ADDR_LSB"), lo32(sp >> 12))
-  smnwr(h, mmhub.smn("regMMMC_VM_SYSTEM_APERTURE_DEFAULT_ADDR_MSB"), hi32(sp >> 12))
-  smnwr(h, mmhub.smn("regMMVM_L2_PROTECTION_FAULT_DEFAULT_ADDR_LO32"), lo32(dp >> 12))
-  smnwr(h, mmhub.smn("regMMVM_L2_PROTECTION_FAULT_DEFAULT_ADDR_HI32"), hi32(dp >> 12))
+  if v != 0xBEEF:
+    print("  GC block is still power-gated, cannot init GFX")
+    return
 
-  # L1 TLB: enable, system_access_mode=3, advanced_driver_model
-  v = smnrd(h, mmhub.smn("regMMMC_VM_MX_L1_TLB_CNTL"))
-  v = (v | 1 | (1 << 3)) & ~(3 << 4) | (3 << 4)
-  smnwr(h, mmhub.smn("regMMMC_VM_MX_L1_TLB_CNTL"), v)
-  print("  MMHUB sys aperture ok")
+  # Enable RLC
+  smnwr(h, gc.smn("regRLC_CNTL"), 1)
+  print(f"  RLC_CNTL = 0x{smnrd(h, gc.smn('regRLC_CNTL')):08X}")
+
+  # RLC SRM + SPM
+  try:
+    r = gc._r["regRLC_SRM_CNTL"]
+    v = smnrd(h, gc.smn("regRLC_SRM_CNTL"))
+    start_srm, end_srm = r.fields['srm_enable']
+    start_ai, end_ai = r.fields['auto_incr_addr']
+    mask_srm = ((1 << (end_srm - start_srm + 1)) - 1) << start_srm
+    mask_ai = ((1 << (end_ai - start_ai + 1)) - 1) << start_ai
+    smnwr(h, gc.smn("regRLC_SRM_CNTL"), v | mask_srm | mask_ai)
+  except: pass
+  try: smnwr(h, gc.smn("regRLC_SPM_MC_CNTL"), 0xF)
+  except: pass
+
+  print("  GFX init done")
 
 # ============================================================================
 # 5. SDMA init + ring + DMA test
@@ -429,11 +509,17 @@ def main():
     print("\n--- PSP SOS ---")
     mp0r, mp0w, sos_fw, msg1 = psp_sos(h, ip_ver, bases, vram_sz)
 
-    print("\n--- PSP ring + SDMA fw ---")
-    mc, palloc = psp_load_sdma(h, ip_ver, bases, vram_sz, mp0r, mp0w, sos_fw, msg1)
+    print("\n--- SOC init ---")
+    soc_init(h, ip_ver, bases)
 
-    print("\n--- GMC ---")
-    gmc_sys_aperture(h, ip_ver, bases, mc, palloc)
+    print("\n--- GMC (MMHUB, before PSP ring) ---")
+    mc, palloc = gmc_init(h, ip_ver, bases, vram_sz)
+
+    print("\n--- PSP ring + FW + autoload ---")
+    psp_load_sdma(h, ip_ver, bases, vram_sz, mp0r, mp0w, sos_fw, msg1, mc, palloc)
+
+    print("\n--- GFX init (post-autoload) ---")
+    gfx_init(h, ip_ver, bases)
 
     print("\n--- SDMA DMA test ---")
     ok = sdma_dma_test(h, ip_ver, bases, mc, palloc)

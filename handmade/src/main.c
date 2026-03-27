@@ -175,8 +175,8 @@ static void handle_usb_control(void) {
         DESC_BUF[1] = REG_PCIE_DATA_1;
         DESC_BUF[2] = REG_PCIE_DATA_2;
         DESC_BUF[3] = REG_PCIE_DATA_3;
-        DESC_BUF[4] = REG_PCIE_LINK_STATUS_LO;
-        DESC_BUF[5] = REG_PCIE_LINK_STATUS_HI;
+        DESC_BUF[4] = REG_PCIE_CPL_HDR_HI;
+        DESC_BUF[5] = REG_PCIE_CPL_HDR_LO;
         DESC_BUF[6] = REG_PCIE_COMPL_STATUS;
       } else {
         int i;
