@@ -34,3 +34,10 @@ make -C clean flash-proxy
 
 Run it with:
 python3 emulate/emu.py --proxy --proxy-debug 2 fw_tinygrad.bin
+
+
+You can reset the device with:
+
+./ftdi_debug.py -rn
+
+If you don't need to change the code, this is faster than a reflash.
