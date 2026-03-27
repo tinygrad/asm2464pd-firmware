@@ -35,7 +35,7 @@ class TestDevice(unittest.TestCase):
 
   def test_read_regs(self):
     link = ctrl_read(self.dev, 0x9100)[0]          # REG_USB_LINK_STATUS
-    assert link in (0x00, 0x01, 0x03), f"unexpected link 0x{link:02X}"
+    assert link in (0x00, 0x01, 0x02, 0x03), f"unexpected link 0x{link:02X}"
     mode = ctrl_read(self.dev, 0xCC30)[0]          # REG_CPU_MODE
     assert mode in (0x00, 0x01), f"unexpected cpu mode 0x{mode:02X}"
     power = ctrl_read(self.dev, 0x92C0)[0]         # REG_POWER_ENABLE
