@@ -104,12 +104,6 @@ static void handle_usb_control(void) {
     wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
     wLenL = REG_USB_SETUP_WLEN_L;
 
-    uart_puts("[C ");
-    uart_puthex(bmReq);
-    uart_puts(" ");
-    uart_puthex(bReq);
-    uart_puts("]\n");
-
     if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
       // the USB_INT_MASK_GLOBAL enabled bulk mode, this makes it not get -1
       REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
@@ -160,6 +154,11 @@ static void handle_usb_control(void) {
       DPX = 0x00;
       send_control_data(wLenL);
     } else {
+      uart_puts("[C ");
+      uart_puthex(bmReq);
+      uart_puts(" ");
+      uart_puthex(bReq);
+      uart_puts("]\n");
       send_zlp_ack();
     }
   } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
