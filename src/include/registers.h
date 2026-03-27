@@ -304,12 +304,12 @@
 
 /*
  * USB Control Transfer Phase Register (0x9091)
- * 
+ *
  * Controls USB control transfer state machine. Read to check current phase,
  * write to acknowledge/advance phase.
  *
  * Control Transfer Sequence (verified working):
- * 
+ *
  * 1. SETUP Phase:
  *    - Hardware sets bit 0 when SETUP packet received
  *    - Read 0x9002, write back; read 0x9220
@@ -351,7 +351,7 @@
 
 /*
  * USB EP0 DMA Control Register (0x9092)
- * 
+ *
  * Controls DMA transfers for EP0 control transfers.
  * Write to trigger operations, reads back 0 when complete.
  *
@@ -399,9 +399,17 @@
 #define   USB_EP_CFG1_STATE_MACH  0x08  // Bit 3: State machine event
 #define   USB_EP_CFG1_ARM_IN      0x08  // Write: Arm bulk IN endpoint
 #define   USB_EP_CFG1_ARM_OUT     0x02  // Write: Arm bulk OUT endpoint / ack
+
+#define   USB_EP_CFG1_BULK_OUT_START     0x01
+#define   USB_EP_CFG1_BULK_OUT_COMPLETE  0x02
+#define   USB_EP_CFG1_BULK_IN_COMPLETE   0x04
+#define   USB_EP_CFG1_BULK_IN_START      0x08
+
 #define REG_USB_EP_CFG2         XDATA_REG8(0x9094)
-#define   USB_EP_CFG2_ARM_IN      0x02  // Write with CFG1=0x08 to arm bulk IN
-#define   USB_EP_CFG2_ARM_OUT     0x10  // Write with CFG1=0x02 to arm bulk OUT
+#define   USB_EP_CFG2_CLEAR_IN    0x01
+#define   USB_EP_CFG2_ARM_IN      0x02  // Bit 1: Arm bulk IN endpoint (write)
+#define   USB_EP_CFG2_CLEAR_OUT   0x08
+#define   USB_EP_CFG2_ARM_OUT     0x10  // Bit 4: Arm bulk OUT endpoint (write)
 /*
  * USB Endpoint Ready/Status Masks (0x9096-0x909E)
  * These 9 registers (0x9096-0x909E) control endpoint ready state.
@@ -1313,6 +1321,7 @@
 // Interrupt Controller (0xC800-0xC80F)
 //=============================================================================
 #define REG_INT_STATUS_C800     XDATA_REG8(0xC800)  /* Interrupt status register */
+#define   INT_STATUS_GLOBAL       0x01
 #define   INT_STATUS_PCIE         0x04  // Bit 2: PCIe interrupt status
 #define REG_INT_ENABLE          XDATA_REG8(0xC801)  /* Interrupt enable register */
 #define   INT_ENABLE_GLOBAL       0x01  // Bit 0: Global interrupt enable
