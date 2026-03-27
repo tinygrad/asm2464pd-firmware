@@ -221,6 +221,7 @@ static void handle_usb_control(void) {
       REG_PCIE_STATUS  = PCIE_STATUS_COMPLETE;
       REG_PCIE_STATUS  = PCIE_STATUS_KICK;
       REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
+      // TODO: there's no while loop for wait on the write path. can this happen too fast?
       send_zlp_ack();
     }
     if (REG_USB_SETUP_BREQ == 0xF1) {
