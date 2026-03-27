@@ -199,17 +199,45 @@ static void handle_usb_control(void) {
       if (bank) DPX = 0x00;
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF1) {
-      /* Test packet — on USB3, OUT data arrives with SETUP */
+      /* Debug: try to receive the data first */
+      REG_USB_EP0_LEN_L = wLenL;
+      REG_USB_DMA_TRIGGER = USB_DMA_RECV;
+      REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
+      /* Now data should be in DESC_BUF */
       uart_puts("[F1 ");
       uart_puthex(DESC_BUF[0]); uart_puthex(DESC_BUF[1]);
       uart_puthex(DESC_BUF[2]); uart_puthex(DESC_BUF[3]);
       uart_puts("]\n");
-      REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
-      REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
+      complete_usb3_status();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       REG_PCIE_FMT_TYPE = wValL;
       REG_PCIE_BYTE_EN  = wValH;
-      /* Don't send ZLP — wait for DATA_OUT phase */
+      if (is_usb3) {
+        /* USB3: receive data, then process */
+        REG_USB_EP0_LEN_L = wLenL;
+        REG_USB_DMA_TRIGGER = USB_DMA_RECV;
+        REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
+        if (wValL & PCIE_FMT_HAS_DATA) {
+          REG_PCIE_DATA_0     = DESC_BUF[8];
+          REG_PCIE_DATA_1     = DESC_BUF[9];
+          REG_PCIE_DATA_2     = DESC_BUF[10];
+          REG_PCIE_DATA_3     = DESC_BUF[11];
+        }
+        REG_PCIE_ADDR_0      = DESC_BUF[3];
+        REG_PCIE_ADDR_1      = DESC_BUF[2];
+        REG_PCIE_ADDR_2      = DESC_BUF[1];
+        REG_PCIE_ADDR_3      = DESC_BUF[0];
+        REG_PCIE_ADDR_HIGH   = DESC_BUF[7];
+        REG_PCIE_ADDR_HIGH_1 = DESC_BUF[6];
+        REG_PCIE_ADDR_HIGH_2 = DESC_BUF[5];
+        REG_PCIE_ADDR_HIGH_3 = DESC_BUF[4];
+        REG_PCIE_STATUS  = PCIE_STATUS_ERROR;
+        REG_PCIE_STATUS  = PCIE_STATUS_COMPLETE;
+        REG_PCIE_STATUS  = PCIE_STATUS_KICK;
+        REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
+        complete_usb3_status();
+      }
+      /* USB2: Don't send ZLP — wait for DATA_OUT phase */
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       uint8_t ret_status = 0xFF;
       uint16_t t;

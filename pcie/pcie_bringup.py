@@ -282,7 +282,7 @@ class ASM2464PD:
             return
         ret = libusb.libusb_control_transfer(self.dev.handle, 0x40, 0xE5, addr, val, None, 0, 1000)
         if ret < 0:
-            raise IOError(f"E5 write(0x{addr:04X}, 0x{val:02X}) failed: {ret}")
+            raise IOError(f"E5 write(0x{addr:04X}, 0x{val:02X}) failed: {ret} (USB3 link may have died — register write killed SuperSpeed PHY)")
 
     def bank1_write(self, addr, val):
         """Write byte to XDATA bank 1 via E5 with wIndex high=1 (DPX bank select)."""
@@ -385,9 +385,13 @@ def phy_soft_reset(dev):
     dev.write(CA70, 0x00)
     # E780 = 0x00
     dev.write(E780, 0x00)
-    # E716 = 0x00, then 0x03
-    dev.write(E716, 0x00)
-    dev.write(E716, 0x03)
+    # E716 = 0x00, then 0x03 — skip on USB3, kills SuperSpeed link
+    link = dev.read8(0x9100)
+    if link < 0x02:  # USB2 or unconnected
+        dev.write(E716, 0x00)
+        dev.write(E716, 0x03)
+    else:
+        print("    (skipping E716 toggle — USB3 link active)")
     # Timer wait + E712 polling
     dev.write(CC11, 0x04)
     dev.write(CC11, 0x02)
@@ -553,12 +557,18 @@ def pcie_pre_init(dev):
     # C233 &= 0xFC
     dev.clear_bits(C233, 0x03)
     # C233 = (C233 & 0xFB) | 0x04
+    # NOTE: setting bit 2 of C233 kills USB3 SuperSpeed link
     c233 = dev.read8(C233)
-    dev.write(C233, (c233 & 0xFB) | 0x04)
+    link = dev.read8(0x9100)
+    if link >= 0x02:  # USB3 active — skip PHY reset that kills link
+        print("    (skipping C233 bit2 toggle — USB3 link active)")
+    else:
+        dev.write(C233, (c233 & 0xFB) | 0x04)
     # Timer wait ~20 ticks mode 2
     timer_wait(dev, 0x00, 0x14, 0x02)
-    # C233 &= 0xFB
-    dev.clear_bits(C233, 0x04)
+    # C233 &= 0xFB — only needed if we set bit 2 above
+    if link < 0x02:
+        dev.clear_bits(C233, 0x04)
     # Timer start + E712 poll
     dev.write(CC11, 0x04)
     dev.write(CC11, 0x02)
@@ -697,12 +707,17 @@ def pcie_tunnel_setup_reinit(dev):
     phy_soft_reset(dev)
     # C233 &= 0xFC
     dev.clear_bits(C233, 0x03)
-    # C233 = (C233 & 0xFB) | 0x04
+    # C233 = (C233 & 0xFB) | 0x04 — kills USB3
     c233 = dev.read8(C233)
-    dev.write(C233, (c233 & 0xFB) | 0x04)
+    link = dev.read8(0x9100)
+    if link >= 0x02:
+        print("    (skipping C233 bit2 toggle — USB3 link active)")
+    else:
+        dev.write(C233, (c233 & 0xFB) | 0x04)
     timer_wait(dev, 0x00, 0x14, 0x02)
     # C233 &= 0xFB
-    dev.clear_bits(C233, 0x04)
+    if link < 0x02:
+        dev.clear_bits(C233, 0x04)
     # Timer start + E712 poll
     dev.write(CC11, 0x04)
     dev.write(CC11, 0x02)
