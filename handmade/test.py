@@ -41,6 +41,12 @@ class TestDevice(unittest.TestCase):
     power = ctrl_read(self.dev, 0x92C0)[0]         # REG_POWER_ENABLE
     assert power & 0x80, f"POWER_ENABLE bit 7 not set: 0x{power:02X}"
 
+  def test_control_host_to_device(self):
+    buf = b"\xaa\xbb\xcc\xdd"
+    cbuf = (ctypes.c_ubyte * len(buf))(*buf)
+    ret = libusb.libusb_control_transfer(self.dev.handle, 0x40, 0xF1, 0, 0, cbuf, len(buf), 1000)
+    assert ret >= 0, f"control host to device failed: {ret}"
+
   def test_write_read_control(self):
     ctrl_write(self.dev, 0xF000, 0xAB)
     assert ctrl_read(self.dev, 0xF000)[0] == 0xAB

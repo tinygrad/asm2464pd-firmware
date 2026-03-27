@@ -146,17 +146,92 @@ static void handle_usb_control(void) {
       XDATA_REG8(addr) = val;
       if (bank) DPX = 0x00;
       send_zlp_ack();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
+      /* PCIe TLP request — OUT phase: set fmt_type + byte_enable from wValue.
+       * DATA_OUT will carry the address and value.
+       * wValue = fmt_type | (byte_enable << 8) */
+      REG_PCIE_FMT_TYPE = wValL;
+      REG_PCIE_BYTE_EN  = wValH;
+      /* Don't send ZLP — wait for DATA_OUT phase */
+    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
+      /* PCIe TLP result — IN phase: poll B296 on-chip, return completion data.
+       * The OUT phase already triggered the TLP. */
+      uint8_t ret_status = 0xFF; // timeout fallthrough
+      uint16_t t;
+      for (t = 0; t < 50000; t++) {
+        uint8_t s = REG_PCIE_STATUS;
+        if (s & 0x02) {
+          ret_status = 0; // complete
+          break;
+        }
+        if (s & 0x01) {
+          ret_status = 1; // UR. what is this?
+          break;
+        }
+      }
+      DESC_BUF[0] = REG_PCIE_DATA;
+      DESC_BUF[1] = REG_PCIE_DATA_1;
+      DESC_BUF[2] = REG_PCIE_DATA_2;
+      DESC_BUF[3] = REG_PCIE_EXT_STATUS;
+      DESC_BUF[4] = REG_PCIE_LINK_STATUS_8;
+      DESC_BUF[5] = REG_PCIE_CPL_STATUS;
+      DESC_BUF[6] = REG_PCIE_COMPL_STATUS;
+      DESC_BUF[7] = ret_status;
+      send_control_data(8);
     } else {
       uart_puts("[C ");
       uart_puthex(bmReq);
       uart_puts(" ");
       uart_puthex(bReq);
+      uart_puts(" ");
+      uart_puthex(wLenL);
       uart_puts("]\n");
-      send_zlp_ack();
+      if (wLenL == 0) send_zlp_ack();
     }
   } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
     REG_USB_DMA_TRIGGER = USB_DMA_RECV;
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
+  } else if (phase & USB_CTRL_PHASE_DATA_IN) {
+    if (REG_USB_SETUP_BREQ == 0xF0) {
+      /* PCIe TLP DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
+       *   [0-3]  address low, little-endian
+       *   [4-7]  address high, little-endian
+       *   [8-11] value, big-endian (writes only)
+       * fmt_type/byte_enable already written to B210/B217 in SETUP phase. */
+
+      /* Write value to B220-B223 if write request (bit 6 set in fmt_type) */
+      if (REG_PCIE_FMT_TYPE & 0x40) {
+        REG_PCIE_DATA       = DESC_BUF[8];
+        REG_PCIE_DATA_1     = DESC_BUF[9];
+        REG_PCIE_DATA_2     = DESC_BUF[10];
+        REG_PCIE_EXT_STATUS = DESC_BUF[11];
+      }
+      /* Address: LE to BE swap into B218-B21F */
+      REG_PCIE_ADDR_0      = DESC_BUF[3];
+      REG_PCIE_ADDR_1      = DESC_BUF[2];
+      REG_PCIE_ADDR_2      = DESC_BUF[1];
+      REG_PCIE_ADDR_3      = DESC_BUF[0] & 0xFC;
+      REG_PCIE_ADDR_HIGH   = DESC_BUF[7];
+      REG_PCIE_ADDR_HIGH_1 = DESC_BUF[6];
+      REG_PCIE_ADDR_HIGH_2 = DESC_BUF[5];
+      REG_PCIE_ADDR_HIGH_3 = DESC_BUF[4];
+      /* Trigger */
+      REG_PCIE_TRIGGER = 0x0F;
+      REG_PCIE_STATUS  = 0x04;
+      send_zlp_ack();
+    }
+    if (REG_USB_SETUP_BREQ == 0xF1) {
+      // test packet
+      uart_puts("[F1 ");
+      uart_puthex(DESC_BUF[0]);
+      uart_puthex(DESC_BUF[1]);
+      uart_puthex(DESC_BUF[2]);
+      uart_puthex(DESC_BUF[3]);
+      uart_puts("]");
+      uart_puts("\n");
+      send_zlp_ack();
+    }
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
   } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
   } else {
