@@ -10,10 +10,10 @@
  * Organized by functional block in address order.
  *
  * Address Space Layout:
- *   0x7000-0x7FFF  Flash buffer (4KB)
- *   0x8000-0x8FFF  USB/SCSI buffers
+ *   0x7000-0x7FFF  USB bulk OUT landing buffer (read-only to CPU, written by HW)
+ *   0x8000-0x8FFF  Writable XDATA (NOT aliased with 0xF000)
  *   0x9000-0x93FF  USB Interface
- *   0xA000-0xAFFF  NVMe I/O Queue
+ *   0xA000-0xAFFF  Writable XDATA
  *   0xB000-0xB1FF  NVMe Admin Queues
  *   0xB200-0xB4FF  PCIe Passthrough / Tunnel
  *   0xC000-0xC0FF  UART Controller
@@ -31,7 +31,7 @@
  *   0xE700-0xE7FF  System Status / Link Control
  *   0xEC00-0xECFF  NVMe Event
  *   0xEF00-0xEFFF  System Control
- *   0xF000-0xFFFF  NVMe Data Buffer
+ *   0xF000-0xFFFF  Writable XDATA (NOT aliased with 0x8000)
  *
  * DMA Paths for USB Data:
  *   EP0 Control (0x9092): descriptor/control transfers via 0x9E00 buffer
@@ -56,8 +56,10 @@
 #define FLASH_BUFFER_BASE       0x7000
 #define FLASH_BUFFER_SIZE       0x1000
 /*
- * Flash staging buffer window (0x7000-0x7FFF)
- * Used as USB bulk OUT landing area before firmware copies/transforms data.
+ * USB bulk OUT landing buffer (0x7000-0x7FFF)
+ * Read-only to the 8051 CPU (E5 writes are ignored).
+ * Written by USB hardware when bulk OUT data arrives at EP 0x02.
+ * The CE00 DMA engine reads from here to move data to SRAM.
  */
 #define REG_FLASH_BUF_BYTE(off) XDATA_REG8(FLASH_BUFFER_BASE + (off))
 
@@ -162,8 +164,11 @@
 #define NVME_DATA_BUF_SIZE      0x1000
 #define NVME_DATA_BUF_DMA_ADDR  0x00200000
 /*
- * NVMe data mirror window (0xF000-0xFFFF)
- * Firmware uses this as a software shadow of host-visible DMA payloads.
+ * XDATA 0xF000-0xFFFF: Writable XDATA region (4KB).
+ * NOT aliased with 0x8000 — probing confirms they are independent.
+ * In the stock NVMe flow, the CE00 DMA engine deposits data here from
+ * the SRAM at PCI 0x200000, but the mapping requires MSC mode active.
+ * tinygrad uses address 0xF000 as the base for its SRAM copy buffer.
  */
 #define REG_NVME_DATA_BYTE(off) XDATA_REG8(NVME_DATA_BUF_BASE + (off))
 
@@ -1968,17 +1973,41 @@
 #define REG_CRITICAL_CTRL       XDATA_REG8(0xEF4E)
 
 //=============================================================================
-// PCIe TLP Format/Type Codes (for REG_PCIE_FMT_TYPE)
+// PCIe TLP Format/Type Codes (for REG_PCIE_FMT_TYPE at 0xB210)
 //=============================================================================
-#define PCIE_FMT_MEM_READ       0x00
-#define PCIE_FMT_MEM_WRITE      0x40
-#define PCIE_FMT_MEM_READ64     0x20
-#define PCIE_FMT_MEM_WRITE64    0x60
-#define PCIE_FMT_MEM_WRITE64_ALT 0x70
-#define PCIE_FMT_CFG_READ_0     0x04
-#define PCIE_FMT_CFG_WRITE_0    0x44
-#define PCIE_FMT_CFG_READ_1     0x05
-#define PCIE_FMT_CFG_WRITE_1    0x45
+/*
+ * PCIe TLP format/type byte encoding (PCIe Base Spec 3.0, Table 2-3):
+ *   Bits [7:5] = Fmt (Format):
+ *     000 = 3DW header, no data payload
+ *     001 = 4DW header, no data payload
+ *     010 = 3DW header, with data payload
+ *     011 = 4DW header, with data payload
+ *   Bits [4:0] = Type:
+ *     00000 = Memory Read/Write (MRd/MWr)
+ *     00100 = Config Read/Write Type 0 (CfgRd0/CfgWr0)
+ *     00101 = Config Read/Write Type 1 (CfgRd1/CfgWr1)
+ *
+ * Bit 6 (0x40) = data payload present (i.e., write operation)
+ * Bit 5 (0x20) = 4DW header (64-bit addressing)
+ *
+ * Use PCIE_FMT_HAS_DATA to test if a TLP type is a write.
+ */
+#define PCIE_FMT_HAS_DATA       0x40  /* Bit 6: TLP carries a data payload (write) */
+#define PCIE_FMT_4DW_HDR        0x20  /* Bit 5: 4DW header (64-bit address) */
+
+/* Memory Read/Write (Type 0x00) */
+#define PCIE_FMT_MEM_READ       0x00  /* MRd:   3DW header, no data, 32-bit addr */
+#define PCIE_FMT_MEM_WRITE      0x40  /* MWr:   3DW header, with data, 32-bit addr */
+#define PCIE_FMT_MEM_READ64     0x20  /* MRd64: 4DW header, no data, 64-bit addr */
+#define PCIE_FMT_MEM_WRITE64    0x60  /* MWr64: 4DW header, with data, 64-bit addr */
+
+/* Config Read/Write Type 0 (targets device on local bus) */
+#define PCIE_FMT_CFG_READ_0     0x04  /* CfgRd0: 3DW header, no data */
+#define PCIE_FMT_CFG_WRITE_0    0x44  /* CfgWr0: 3DW header, with data */
+
+/* Config Read/Write Type 1 (forwarded by bridges to downstream bus) */
+#define PCIE_FMT_CFG_READ_1     0x05  /* CfgRd1: 3DW header, no data */
+#define PCIE_FMT_CFG_WRITE_1    0x45  /* CfgWr1: 3DW header, with data */
 
 //=============================================================================
 // Bank-Selected Registers (0x0xxx-0x2xxx)

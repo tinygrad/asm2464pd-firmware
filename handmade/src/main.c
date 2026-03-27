@@ -200,8 +200,8 @@ static void handle_usb_control(void) {
        *   [8-11] value, big-endian (writes only)
        * fmt_type/byte_enable already written to B210/B217 in SETUP phase. */
 
-      /* Write value to B220-B223 if write request (bit 6 set in fmt_type) */
-      if (REG_PCIE_FMT_TYPE & 0x40) {
+      /* Write value to B220-B223 if write request (data payload present) */
+      if (REG_PCIE_FMT_TYPE & PCIE_FMT_HAS_DATA) {
         REG_PCIE_DATA_0     = DESC_BUF[8];
         REG_PCIE_DATA_1     = DESC_BUF[9];
         REG_PCIE_DATA_2     = DESC_BUF[10];

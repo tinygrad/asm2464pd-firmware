@@ -17,11 +17,17 @@
  *      0x00820000  Queue region (NVMe queues, can be repurposed)
  *
  *   2. 8051 XDATA Space (16-bit) - What the CPU sees:
- *      0x8000-0x8FFF  4KB window into SRAM (maps to PCI 0x00200000+)
- *      0xF000-0xFFFF  4KB window into SRAM (alternate view)
+ *      0x7000-0x7FFF  USB bulk OUT landing buffer (read-only to CPU, written by HW)
+ *      0x8000-0x8FFF  Writable XDATA (NOT aliased with 0xF000)
+ *      0xA000-0xAFFF  Writable XDATA
+ *      0xF000-0xFFFF  Writable XDATA (NOT aliased with 0x8000)
  *
- * The 8051 CPU can only see 4KB at a time through XDATA windows, but the
- * DMA engines can address the full SRAM via 32-bit PCI addresses.
+ * NOTE: Probing with the handmade firmware shows 0x8000 and 0xF000 are
+ * independent memory regions, not aliases of the same SRAM.  The SRAM
+ * is only accessible through the CE00 DMA engine, which uses 32-bit PCI
+ * addresses (CE76-CE79) and is tightly coupled to the USB MSC state machine.
+ * The 8051 CPU cannot directly read/write SRAM beyond what the DMA engine
+ * deposits into the XDATA windows.
  *
  *   USB Host                           Internal SRAM (6-8 MB)
  *       │                                    │
@@ -29,17 +35,17 @@
  *       │  (1024 bytes each)                 │  0x00200000+
  *       ▼                                    ▼
  *   ┌───────────┐                     ┌──────────────┐
- *   │ USB       │   Hardware DMA      │  Data Buffer │
- *   │ Controller│ ════════════════════│  (6+ MB)     │
- *   │           │   (CE76-79 addr)    │              │
- *   └───────────┘                     └──────────────┘
- *                                           ▲
- *                                           │ 4KB window
- *                                           ▼
- *                                     ┌──────────────┐
- *                                     │ 8051 XDATA   │
- *                                     │ 0x8000-0x8FFF│
- *                                     └──────────────┘
+ *   │ USB       │   CE00 DMA engine   │  Data Buffer │
+ *   │ Controller├────────────────────>│  (6+ MB)     │
+ *   │           │   (CE76-79 = addr)  │              │
+ *   └─────┬─────┘                     └──────────────┘
+ *         │                                 ▲
+ *         │ bulk OUT lands at               │ GPU DMA via PCIe
+ *         ▼ XDATA 0x7000                    │ bus mastering
+ *   ┌──────────────┐                  ┌──────────────┐
+ *   │ 0x7000 buf   │                  │  GPU SDMA    │
+ *   │ (staging)    │                  │  engine      │
+ *   └──────────────┘                  └──────────────┘
  *
  * ===========================================================================
  * DMA ENGINE TYPES - SOURCE/DESTINATION SUMMARY
@@ -66,15 +72,20 @@
  * ===========================================================================
  * DMA ENGINE 2: SCSI/Bulk DMA (0xCE00-0xCE9F) - THE HIGH-SPEED PATH
  * ===========================================================================
- *   Source:      USB bulk endpoint OR internal SRAM
- *   Destination: Internal SRAM OR USB bulk endpoint
+ *   Source:      USB bulk endpoint (data at 0x7000) -> SRAM
+ *   Destination: Internal SRAM at 32-bit PCI address
  *   Addressing:  32-bit PCI address (0x00200000+) via CE76-CE79
  *   Trigger:     Write 0x03 to 0xCE00
- *   Completion:  Poll 0xCE89 (state machine) or 0xCE00 (returns 0x00)
+ *   Completion:  Poll 0xCE00 until 0x00 (returns 0x00 when done)
  *
- *   THIS IS THE ONLY PATH FOR HIGH-SPEED USB TRANSFERS.
- *   The 8051 CPU never touches bulk data bytes - it only writes the
- *   32-bit PCI address to CE76-CE79 and triggers the transfer.
+ *   IMPORTANT: This engine is tightly coupled to the USB MSC state machine.
+ *   CE00=0x03 is a no-op unless data was received through the CE88/CE89
+ *   bulk handshake protocol (ARM endpoint -> wait for BULK_DATA -> CE88=0x00
+ *   -> poll CE89 ready -> poll CE55 != 0 -> THEN CE00=0x03).  In raw bulk
+ *   mode (MSC_CFG=0x00), CE00 completes instantly without moving data.
+ *
+ *   The 8051 CPU never touches bulk data bytes — it only sets the 32-bit
+ *   PCI target address in CE76-CE79 and triggers the sector transfer.
  *
  *   Address calculation (from SCSI LBA):
  *     pci_addr = 0x00200000 + (lba * 512)
@@ -223,14 +234,14 @@
  *   0x0100-0x01FF: Transfer work areas
  *   0x0400-0x04FF: DMA configuration tables
  *   0x0A00-0x0AFF: SCSI buffer management
- *   0x7000-0x7FFF: Flash DMA buffer (4KB)
- *   0x8000-0x8FFF: USB/SCSI data buffer (4KB window into SRAM)
+ *   0x7000-0x7FFF: USB bulk OUT landing buffer (4KB, read-only to CPU)
+ *   0x8000-0x8FFF: Writable XDATA (4KB, NOT aliased with 0xF000)
  *   0x9000-0x9FFF: MMIO - USB controller registers
- *   0xA000-0xAFFF: NVMe IOSQ (4KB window into SRAM @ PCI 0x00820000)
+ *   0xA000-0xAFFF: Writable XDATA (4KB)
  *   0xB000-0xBFFF: NVMe ASQ/ACQ + PCIe TLP engine registers
  *   0xC000-0xEFFF: MMIO - Various controllers
  *   0xD800-0xDFFF: USB endpoint buffer (2KB)
- *   0xF000-0xFFFF: NVMe data buffer (4KB window into SRAM)
+ *   0xF000-0xFFFF: Writable XDATA (4KB, NOT aliased with 0x8000)
  *
  * ===========================================================================
  * INTERNAL SRAM (PCI Address Space)
