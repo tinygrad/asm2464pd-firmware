@@ -10,12 +10,17 @@
  * Organized by functional block in address order.
  *
  * Address Space Layout:
- *   0x7000-0x7FFF  USB bulk OUT landing buffer (read-only to CPU, written by HW)
- *   0x8000-0x8FFF  Writable XDATA (NOT aliased with 0xF000)
- *   0x9000-0x93FF  USB Interface
- *   0xA000-0xAFFF  Writable XDATA
- *   0xB000-0xB1FF  NVMe Admin Queues
- *   0xB200-0xB4FF  PCIe Passthrough / Tunnel
+ *   0x0000-0x5FFF  Working memory, globals, tables
+ *   0x6000-0x6FFF  Reserved
+ *   0x7000-0x7FFF  Flash buffer (4KB, read-only to CPU, written by USB/flash HW)
+ *   0x8000-0x8FFF  USB data buffer (4KB window into SRAM at PCI 0x00200000+)
+ *   0x9000-0x9FFF  MMIO: USB controller
+ *   0xA000-0xAFFF  NVMe IOSQ (4KB window into SRAM at PCI 0x00820000+)
+ *   0xB000-0xB1FF  NVMe Admin Submission/Completion Queues (ASQ/ACQ)
+ *   0xB200-0xB29F  PCIe TLP Engine (fmt/type, address, data, trigger)
+ *   0xB2A0-0xB2DF  PCIe TLP Engine (secondary port, mirrors B200-B29F)
+ *   0xB300-0xB3DF  PCIe TLP Engine (port 2/3 mirrors)
+ *   0xB400-0xB4FF  PCIe Link / Bridge Config (LTSSM, PERST, lane ctrl)
  *   0xC000-0xC0FF  UART Controller
  *   0xC200-0xC2FF  Link/PHY Control
  *   0xC400-0xC5FF  NVMe / MSC Interface
@@ -24,14 +29,30 @@
  *   0xCA00-0xCAFF  CPU Mode
  *   0xCC00-0xCCFF  Timer / CPU Control
  *   0xCE00-0xCEFF  SCSI DMA / Transfer Control
- *   0xD800-0xDFFF  USB Endpoint Buffer (MSC data/CSW)
+ *   0xD000-0xD3FF  MSC Command/Data Buffer (1KB, aliases at 0xD400)
+ *   0xD800-0xDFFF  USB Endpoint Buffer (MSC data/CSW, aliases at 0xE000)
  *   0xE300-0xE3FF  PHY Completion / Debug
  *   0xE400-0xE4FF  Command Engine
  *   0xE600-0xE6FF  Debug/Interrupt
  *   0xE700-0xE7FF  System Status / Link Control
  *   0xEC00-0xECFF  NVMe Event
  *   0xEF00-0xEFFF  System Control
- *   0xF000-0xFFFF  Writable XDATA (NOT aliased with 0x8000)
+ *   0xF000-0xFFFF  NVMe data buffer (4KB window into SRAM at PCI 0x00200000+)
+ *
+ * Internal SRAM (PCI address space, accessible via DMA engines):
+ *   0x00200000  Data buffer (~6 MB) — GPU can DMA to/from here
+ *   0x00820000  Queue region — NVMe completion queue descriptors
+ *
+ * XDATA windows into SRAM:
+ *   0x8000 is a window into SRAM at PCI 0x200000+ (offset unknown)
+ *   0xF000 is a window into SRAM at PCI 0x200000+ (offset unknown)
+ *   0xA000 is a window into SRAM at PCI 0x820000+ (confirmed: CE00 DMA
+ *          completion descriptors appear here after CE00=0x03 trigger)
+ *   0x8000 and 0xF000 are NOT aliased (different offsets into SRAM).
+ *   The window base offset register has not been found — sweeping all
+ *   MMIO registers (0x9000-0xEFFF, 0x0000-0x5FFF) did not reveal a
+ *   register that moves the F000 window when changed.  The offset may
+ *   be fixed in hardware or controlled by an SFR not accessible via XDATA.
  *
  * DMA Paths for USB Data:
  *   EP0 Control (0x9092): descriptor/control transfers via 0x9E00 buffer
@@ -250,6 +271,9 @@
  *   Phase 11: full ramp up + teardown (re-arm MSC engine)
  */
 #define REG_USB_MSC_CFG         XDATA_REG8(0x900B)
+#define   USB_MSC_CFG_ENABLE      0x01  // Bit 0: MSC engine enable
+#define   USB_MSC_CFG_BULK_PATH   0x02  // Bit 1: MSC bulk data path enable
+#define   USB_MSC_CFG_DMA_PATH    0x04  // Bit 2: MSC DMA path enable
 #define REG_USB_ALT_SETTING_L   XDATA_REG8(0x900C)  /* Alt setting wValue low (written by SET_INTERFACE) */
 #define REG_USB_ALT_SETTING_H   XDATA_REG8(0x900D)  /* Alt setting wValue high */
 #define REG_USB_ALT_SETTING2_L  XDATA_REG8(0x900E)  /* Alt setting wValue low (duplicate) */
@@ -828,7 +852,39 @@
 // PCIe TLP registers (0xB210-0xB284)
 /* Raw byte access to B210-B21B request header window (12 bytes). */
 #define REG_PCIE_TLP_BYTE(off)  XDATA_REG8V(0xB210 + (off))
+/*
+ * PCIe TLP Format/Type (0xB210)
+ *
+ * PCIe TLP format/type byte encoding (PCIe Base Spec 3.0, Table 2-3):
+ *   Bits [7:5] = Fmt (Format):
+ *     000 = 3DW header, no data payload
+ *     001 = 4DW header, no data payload
+ *     010 = 3DW header, with data payload
+ *     011 = 4DW header, with data payload
+ *   Bits [4:0] = Type:
+ *     00000 = Memory Read/Write (MRd/MWr)
+ *     00100 = Config Read/Write Type 0 (CfgRd0/CfgWr0)
+ *     00101 = Config Read/Write Type 1 (CfgRd1/CfgWr1)
+ *
+ * Bit 6 (0x40) = data payload present (i.e., write operation)
+ * Bit 5 (0x20) = 4DW header (64-bit addressing)
+ *
+ * Use PCIE_FMT_HAS_DATA to test if a TLP type is a write.
+ */
 #define REG_PCIE_FMT_TYPE       XDATA_REG8V(0xB210)
+#define   PCIE_FMT_HAS_DATA       0x40  /* Bit 6: TLP carries a data payload (write) */
+#define   PCIE_FMT_4DW_HDR        0x20  /* Bit 5: 4DW header (64-bit address) */
+/* Memory Read/Write (Type 0x00) */
+#define   PCIE_FMT_MEM_READ       0x00  /* MRd:   3DW header, no data, 32-bit addr */
+#define   PCIE_FMT_MEM_WRITE      0x40  /* MWr:   3DW header, with data, 32-bit addr */
+#define   PCIE_FMT_MEM_READ64     0x20  /* MRd64: 4DW header, no data, 64-bit addr */
+#define   PCIE_FMT_MEM_WRITE64    0x60  /* MWr64: 4DW header, with data, 64-bit addr */
+/* Config Read/Write Type 0 (targets device on local bus) */
+#define   PCIE_FMT_CFG_READ_0     0x04  /* CfgRd0: 3DW header, no data */
+#define   PCIE_FMT_CFG_WRITE_0    0x44  /* CfgWr0: 3DW header, with data */
+/* Config Read/Write Type 1 (forwarded by bridges to downstream bus) */
+#define   PCIE_FMT_CFG_READ_1     0x05  /* CfgRd1: 3DW header, no data */
+#define   PCIE_FMT_CFG_WRITE_1    0x45  /* CfgWr1: 3DW header, with data */
 #define REG_PCIE_TLP_CTRL       XDATA_REG8V(0xB213)
 #define REG_PCIE_TLP_LENGTH     XDATA_REG8V(0xB216)
 #define REG_PCIE_BYTE_EN        XDATA_REG8V(0xB217)
@@ -854,10 +910,48 @@
  */
 #define REG_PCIE_EXT_STATUS     XDATA_REG8V(0xB223)
 #define   PCIE_EXT_STATUS_PLL_LOCK 0x01  // Bit 0: PLL/CDR lock confirmed
+/*
+ * PCIe Completion Header (0xB224-0xB22D)
+ *
+ * After a non-posted TLP (MRd, CfgRd, CfgWr) completes, the hardware
+ * writes the completion TLP header into these registers.
+ *
+ * B22A:B22B (16-bit, big-endian) — Completion Status + Byte Count:
+ *   Bits [15:13] = Completion Status (PCIe Base Spec 3.0, Table 2-33):
+ *     000 (0) = Successful Completion (SC)
+ *     001 (1) = Unsupported Request (UR) — no device claimed the address
+ *     010 (2) = Configuration Request Retry Status (CRS)
+ *     100 (4) = Completer Abort (CA) — device internal error
+ *   Bit  [12]   = reserved
+ *   Bits [11:0]  = Byte Count — number of data bytes in completion
+ *                  (always 4 for config requests, equals request size for mem)
+ *
+ * B284 — Completion Type:
+ *   Bit 0: CplD indicator — set if completion carries data (reads).
+ *          For config reads: bit 0 should be SET (CplD).
+ *          For config writes: bit 0 should be CLEAR (Cpl, no data).
+ *          For memory reads to unclaimed addresses, the hardware may set
+ *          PCIE_STATUS_COMPLETE in B296 even though B22A reports UR.
+ *          Always check the completion status field in B22A:B22B.
+ *
+ * IMPORTANT: B296 PCIE_STATUS_COMPLETE only indicates the TLP engine
+ * finished processing — it does NOT mean the request succeeded.
+ * The completion status in B22A bits [15:13] must be checked to detect
+ * Unsupported Request (UR) errors from unclaimed PCIe addresses.
+ */
 #define REG_PCIE_TLP_CPL_HEADER XDATA_REG32(0xB224)
+#define REG_PCIE_CPL_HDR_HI     XDATA_REG8V(0xB22A)   /* Completion header high: status[7:5], bytecount[3:0] (upper) */
+#define REG_PCIE_CPL_HDR_LO     XDATA_REG8V(0xB22B)   /* Completion header low: bytecount[7:0] (lower) */
+#define   PCIE_CPL_STATUS_MASK    0xE0  /* Bits [7:5] of B22A = completion status [15:13] */
+#define   PCIE_CPL_STATUS_SC      0x00  /* Successful Completion */
+#define   PCIE_CPL_STATUS_UR      0x20  /* Unsupported Request */
+#define   PCIE_CPL_STATUS_CRS     0x40  /* Config Request Retry */
+#define   PCIE_CPL_STATUS_CA      0x80  /* Completer Abort */
+/* Legacy aliases */
 #define REG_PCIE_LINK_STATUS    XDATA_REG16V(0xB22A)
-#define REG_PCIE_LINK_STATUS_8  XDATA_REG8V(0xB22A)
 #define REG_PCIE_CPL_STATUS     XDATA_REG8V(0xB22B)
+#define REG_PCIE_LINK_STATUS_LO XDATA_REG8V(0xB22A)
+#define REG_PCIE_LINK_STATUS_HI XDATA_REG8V(0xB22B)
 #define REG_PCIE_CPL_DATA       XDATA_REG8V(0xB22C)
 #define REG_PCIE_CPL_DATA_ALT   XDATA_REG8V(0xB22D)
 
@@ -895,7 +989,13 @@
 #define REG_PCIE_DMA_BUF_D      XDATA_REG8(0xB26F)   // DMA buffer config D
 #define REG_PCIE_DMA_CTRL_B281  XDATA_REG8(0xB281)   // DMA control
 #define REG_PCIE_PM_ENTER       XDATA_REG8(0xB255)
+/*
+ * PCIe Completion Type (0xB284)
+ * Bit 0: CplD — completion carries data (set for reads, clear for writes).
+ * See B22A:B22B documentation above for full completion validation.
+ */
 #define REG_PCIE_COMPL_STATUS   XDATA_REG8(0xB284)
+#define   PCIE_COMPL_HAS_DATA     0x01  /* Bit 0: Completion carries data (CplD) */
 #define REG_PCIE_POWER_B294     XDATA_REG8(0xB294)  /* PCIe power control */
 // PCIe status registers (0xB296-0xB298)
 #define REG_PCIE_STATUS         XDATA_REG8V(0xB296)
@@ -1086,14 +1186,40 @@
 #define REG_VENDOR_CTRL_C362    XDATA_REG8(0xC362)  /* Vendor control 2 (bit 6/7 = read control) */
 
 //=============================================================================
-// NVMe Interface Registers (0xC400-0xC5FF)
+// NVMe / DMA Interface Registers (0xC400-0xC5FF)
 //=============================================================================
+/*
+ * DMA Controller (0xC400-0xC42D)
+ *
+ * Copies data from the USB bulk OUT buffer (0x7000) to the PCIe BAR (0xF000).
+ * Empirically verified trigger sequence:
+ *
+ *   1. Set transfer descriptor (C420-C42D):
+ *        C420=0x00  C421=0x01  C422=0x02  C423=0x00
+ *        C424=0x00  C425=0x00  C426=0x00  C427=<sector_count>
+ *        C428=0x30  C429=0x00  C42A=0x00  C42B=0x00
+ *        C42C=0x00  C42D=0x00
+ *
+ *   2. Arm and trigger:
+ *        C400=1  C401=1  C402=1  C404=1  C406=1
+ *
+ *   3. After DMA completes, 0x7000 is locked (reads as 0x55).
+ *      Unlock by writing C42A=0x01 (REG_NVME_DOORBELL).
+ *
+ * C427 (REG_NVME_DMA_ADDR_C427) = sector count: 0x01 = 512 bytes, 0x08 = 4096 bytes.
+ * C406 is the final trigger; it is not clearable by CPU write.
+ * C402 and C406 are undocumented in stock firmware (not referenced by ghidra decompilation).
+ * C404 is written with value 2 in stock firmware flash init routines.
+ */
 // NVMe DMA control (0xC4ED-0xC4EF)
 #define REG_NVME_DMA_CTRL_ED    XDATA_REG8(0xC4ED)  // NVMe DMA control
 #define REG_NVME_DMA_ADDR_LO    XDATA_REG8(0xC4EE)  // NVMe DMA address low
 #define REG_NVME_DMA_ADDR_HI    XDATA_REG8(0xC4EF)  // NVMe DMA address high
-#define REG_NVME_CTRL           XDATA_REG8(0xC400)
-#define REG_NVME_STATUS         XDATA_REG8(0xC401)
+#define REG_NVME_CTRL           XDATA_REG8(0xC400)   /* DMA arm bit 0 (write 1 to arm) */
+#define REG_NVME_STATUS         XDATA_REG8(0xC401)   /* DMA arm bit 1 (write 1 to arm) */
+#define REG_NVME_DMA_ARM2       XDATA_REG8(0xC402)   /* DMA arm bit 2 (write 1 to arm) */
+#define REG_NVME_DMA_ARM3       XDATA_REG8(0xC404)   /* DMA arm bit 3 (write 1 to arm; stock writes 2) */
+#define REG_NVME_DMA_TRIGGER    XDATA_REG8(0xC406)   /* DMA trigger (write 1 to fire; not CPU-clearable) */
 #define REG_NVME_CTRL_STATUS    XDATA_REG8(0xC412)
 #define   NVME_CTRL_WRITE_DIR    0x01  // Bit 0: 1=WRITE (host→device), 0=READ
 #define   NVME_CTRL_DMA_START    0x02  // Bit 1: Start DMA transfer
@@ -1127,8 +1253,8 @@
 #define REG_NVME_LBA_MID        XDATA_REG8(0xC423)
 #define REG_NVME_LBA_HIGH       XDATA_REG8(0xC424)
 #define REG_NVME_COUNT_LOW      XDATA_REG8(0xC425)
-#define REG_NVME_DMA_ADDR_C426  XDATA_REG8(0xC426)  /* DMA sector count / buffer addr high */
-#define REG_NVME_DMA_ADDR_C427  XDATA_REG8(0xC427)  /* DMA sector count / buffer addr low */
+#define REG_NVME_DMA_ADDR_C426  XDATA_REG8(0xC426)  /* DMA descriptor byte 6 */
+#define REG_NVME_DMA_ADDR_C427  XDATA_REG8(0xC427)  /* DMA sector count (0x01=512B, 0x08=4096B) */
 #define REG_NVME_COUNT_HIGH     XDATA_REG8(0xC426)  /* Alias for compatibility */
 #define REG_NVME_ERROR          XDATA_REG8(0xC427)  /* Alias for compatibility */
 #define REG_NVME_QUEUE_CFG      XDATA_REG8(0xC428)
@@ -1138,9 +1264,13 @@
 #define   NVME_CMD_PARAM_TYPE    0xE0  // Bits 5-7: Command parameter type
 /*
  * NVMe/MSC Doorbell (0xC42A)
- * Part of 900B/C42A "doorbell dance" for bulk IN transfers.
+ * Multi-purpose register used for bulk IN transfer setup AND DMA buffer unlock.
  *
- * Pre-trigger ramp up (before C42C write):
+ * DMA buffer unlock (empirically verified):
+ *   After a DMA trigger (C406=1), the 0x7000 bulk OUT buffer is locked
+ *   (reads as 0x55). Writing C42A=0x01 unlocks it for the next transfer.
+ *
+ * Bulk IN pre-trigger ramp up (before C42C write):
  *   C42A |= 0x01, |= 0x02, |= 0x04, |= 0x08, |= 0x10
  * Post-trigger teardown:
  *   C42A &= ~0x01, &= ~0x02, &= ~0x04, &= ~0x08, &= ~0x10
@@ -1153,7 +1283,8 @@
  * the MSC init dance reads and modifies bits in specific order.
  */
 #define REG_NVME_DOORBELL       XDATA_REG8(0xC42A)
-#define   NVME_DOORBELL_BIT0      0x01  // Bit 0: MSC/queue doorbell
+#define   NVME_DOORBELL_BIT0        0x01  // Bit 0: MSC/queue doorbell
+#define   NVME_DOORBELL_DMA_UNLOCK 0x01  // Bit 0: DMA buffer unlock / MSC doorbell (alias)
 #define   NVME_DOORBELL_BIT1      0x02  // Bit 1: Queue config
 #define   NVME_DOORBELL_BIT2      0x04  // Bit 2: Queue config
 #define   NVME_DOORBELL_BIT3      0x08  // Bit 3: Queue config
@@ -1635,18 +1766,55 @@
 //=============================================================================
 /*
  * SCSI DMA Engine (0xCE00-0xCE01)
- * CE00: Write 0x03 to start sector DMA, poll until 0x00 for completion.
- *       Stock firmware uses at 0x352E-0x3538 in per-sector copy loop.
- * CE01: DMA parameter -- combined with XDATA[0x0AFF] and CE01 upper bits.
+ *
+ * CE00 triggers a hardware DMA that copies one 512-byte sector from the USB
+ * bulk landing buffer at 0x7000 to internal SRAM at the PCI address stored
+ * in CE76-CE79.  The 0x7000 buffer must have been filled by a prior
+ * CE88/CE89 handshake (see below); writing to 0x7000 via the 8051 CPU
+ * does NOT set up the DMA source correctly.
+ *
+ * NOTE: While CE00=0x03 is active, the XDATA 0xF000-0xFFFF SRAM window
+ * becomes inaccessible to the 8051 CPU (reads return stale/garbage).
+ *
+ * Observed in emulator proxy trace:
+ *   - CE00 reads 0x00 at idle
+ *   - Write CE00=0x03 starts one sector DMA, poll until CE00==0x00
+ *   - For multi-sector transfers, loop: write 0x03, poll 0x00, repeat
+ *   - CE76-CE79 auto-increments after each sector
  */
-#define REG_SCSI_DMA_CTRL       XDATA_REG8(0xCE00)  /* Write 0x03 to start, poll 0x00 for done */
+#define REG_SCSI_DMA_CTRL       XDATA_REG8(0xCE00)  /* Write 0x03 to start sector DMA, poll 0x00 for done */
 #define REG_SCSI_DMA_PARAM      XDATA_REG8(0xCE01)  /* DMA parameter (upper 2 bits | tag value) */
-#define REG_SCSI_DMA_CFG_CE36   XDATA_REG8(0xCE36)  // SCSI DMA config 0xCE36
-#define REG_SCSI_DMA_TAG_CE3A   XDATA_REG8(0xCE3A)  // SCSI DMA tag storage
+/*
+ * SCSI DMA SRAM Write Pointer (0xCE10-0xCE13)
+ *
+ * 32-bit PCI address in big-endian byte order.  Read-back of current SRAM
+ * write pointer.  Observed initial value 0x00200000 (= SRAM base).
+ *
+ * Proxy trace (fresh boot):
+ *   CE10=0x00 CE11=0x20 CE12=0x00 CE13=0x00  -> PCI 0x00200000
+ */
+#define REG_SCSI_DMA_SRAM_PTR_0 XDATA_REG8(0xCE10)  /* SRAM pointer byte 0 (BE: bits 31-24) */
+#define REG_SCSI_DMA_SRAM_PTR_1 XDATA_REG8(0xCE11)  /* SRAM pointer byte 1 (BE: bits 23-16) */
+#define REG_SCSI_DMA_SRAM_PTR_2 XDATA_REG8(0xCE12)  /* SRAM pointer byte 2 (BE: bits 15-8) */
+#define REG_SCSI_DMA_SRAM_PTR_3 XDATA_REG8(0xCE13)  /* SRAM pointer byte 3 (BE: bits 7-0) */
+#define REG_SCSI_DMA_CFG_CE36   XDATA_REG8(0xCE36)  /* SCSI DMA config */
+#define REG_SCSI_DMA_TAG_CE3A   XDATA_REG8(0xCE3A)  /* SCSI DMA tag storage */
 
 //=============================================================================
 // SCSI/Mass Storage DMA (0xCE40-0xCE97)
 //=============================================================================
+/*
+ * SCSI DMA Parameters (0xCE40-0xCE45)
+ *
+ * Firmware state variables used by the stock SCSI DMA engine.
+ * tinygrad clears CE40-CE43 after large (>16KB) scsi_write transfers.
+ * Stock firmware clears them after the 0x8A WRITE(16) handler completes.
+ *
+ * Proxy trace after 0x8A dispatch:
+ *   Write CE40=0x00, CE41=0x00, CE42=0x00, CE43=0x00
+ *
+ * Observed initial values: CE40-43=0x00, CE44=0x50, CE45=0x05
+ */
 #define REG_SCSI_DMA_PARAM0     XDATA_REG8(0xCE40)
 #define REG_SCSI_DMA_PARAM1     XDATA_REG8(0xCE41)
 #define REG_SCSI_DMA_PARAM2     XDATA_REG8(0xCE42)
@@ -1654,75 +1822,203 @@
 #define REG_SCSI_DMA_PARAM4     XDATA_REG8(0xCE44)
 #define REG_SCSI_DMA_PARAM5     XDATA_REG8(0xCE45)
 #define REG_SCSI_TAG_IDX        XDATA_REG8(0xCE51)   /* SCSI tag index */
-#define REG_SCSI_DMA_XFER_CNT  XDATA_REG8(0xCE55)   /* DMA transfer byte count (after CE88/CE89 handshake) */
+/*
+ * REG_SCSI_DMA_XFER_CNT (0xCE55)
+ *
+ * After a CE88/CE89 handshake completes, this register holds the number of
+ * bytes transferred into the 0x7000 buffer.  Poll for != 0x00 to confirm
+ * data has arrived before triggering CE00=0x03.
+ *
+ * Proxy trace: read as 0x00 at idle.  After CE88=0x00 handshake with
+ * USB data pending, becomes non-zero once data is in the 0x7000 buffer.
+ */
+#define REG_SCSI_DMA_XFER_CNT  XDATA_REG8(0xCE55)
 #define REG_SCSI_DMA_COMPL      XDATA_REG8(0xCE5C)
 #define REG_SCSI_DMA_MASK       XDATA_REG8(0xCE5D)  /* SCSI DMA mask register */
 #define REG_SCSI_DMA_QUEUE      XDATA_REG8(0xCE5F)  /* SCSI DMA queue control */
+#define REG_XFER_STATUS_CE60    XDATA_REG8(0xCE60)   /* Transfer status CE60 */
+#define   XFER_STATUS_BIT6        0x40  /* Bit 6: Status flag */
+#define REG_XFER_CTRL_CE65      XDATA_REG8(0xCE65)
+#define REG_SCSI_DMA_TAG_COUNT  XDATA_REG8(0xCE66)
+#define   SCSI_DMA_TAG_MASK       0x1F  /* Bits 0-4: Tag count (0-31) */
+#define REG_SCSI_DMA_QUEUE_STAT XDATA_REG8(0xCE67)
+#define   SCSI_DMA_QUEUE_MASK     0x0F  /* Bits 0-3: Queue status (0-15) */
+#define REG_XFER_STATUS_CE6C    XDATA_REG8(0xCE6C)   /* Transfer status CE6C (bit 7: ready) */
+/*
+ * REG_SCSI_DMA_STATUS (0xCE6E-0xCE6F)
+ *
+ * tinygrad clears this (writes 0x00, 0x00) after each scsi_write chunk.
+ * Observed initial value: 0x00 0x00.
+ */
+#define REG_SCSI_DMA_STATUS     XDATA_REG16(0xCE6E)
+#define REG_SCSI_DMA_STATUS_L   XDATA_REG8(0xCE6E)   /* SCSI DMA status low byte */
+#define REG_SCSI_DMA_STATUS_H   XDATA_REG8(0xCE6F)   /* SCSI DMA status high byte */
 #define REG_SCSI_TRANSFER_CTRL  XDATA_REG8(0xCE70)
+/*
+ * REG_SCSI_TRANSFER_MODE (0xCE72)
+ *
+ * Set to 0x00 before SCSI WRITE(16) DMA loop.
+ * Observed initial value: 0x00.
+ */
 #define REG_SCSI_TRANSFER_MODE  XDATA_REG8(0xCE72)
 #define REG_SCSI_BUF_CTRL0      XDATA_REG8(0xCE73)
 #define REG_SCSI_BUF_CTRL1      XDATA_REG8(0xCE74)
 #define REG_SCSI_BUF_LEN_LO     XDATA_REG8(0xCE75)
-#define REG_SCSI_BUF_ADDR0      XDATA_REG8(0xCE76)
-#define REG_SCSI_BUF_ADDR1      XDATA_REG8(0xCE77)
-#define REG_SCSI_BUF_ADDR2      XDATA_REG8(0xCE78)
-#define REG_SCSI_BUF_ADDR3      XDATA_REG8(0xCE79)
+/*
+ * SCSI DMA Target Address (0xCE76-0xCE79)
+ *
+ * 32-bit PCI bus address, little-endian byte order.
+ * This is where CE00=0x03 copies each 512-byte sector from 0x7000.
+ * Auto-increments after each CE00=0x03 sector transfer.
+ *
+ * For SRAM at PCI 0x00200000 (used by tinygrad scsi_write):
+ *   CE76=0x00, CE77=0x00, CE78=0x20, CE79=0x00
+ *
+ * SRAM at 0x00200000 is accessible to the 8051 CPU via the XDATA 0xF000
+ * window and to the GPU via PCIe bus mastering.
+ *
+ * Observed initial value: 0x00 0x00 0x00 0x00 (unset, must be configured).
+ */
+#define REG_SCSI_BUF_ADDR0      XDATA_REG8(0xCE76)  /* PCI addr bits 7-0  (LE: LSB) */
+#define REG_SCSI_BUF_ADDR1      XDATA_REG8(0xCE77)  /* PCI addr bits 15-8 */
+#define REG_SCSI_BUF_ADDR2      XDATA_REG8(0xCE78)  /* PCI addr bits 23-16 */
+#define REG_SCSI_BUF_ADDR3      XDATA_REG8(0xCE79)  /* PCI addr bits 31-24 (LE: MSB) */
 #define REG_SCSI_BUF_CTRL       XDATA_REG8(0xCE80)  /* SCSI buffer control global */
 #define REG_SCSI_BUF_THRESH_HI  XDATA_REG8(0xCE81)  /* SCSI buffer threshold high */
 #define REG_SCSI_BUF_THRESH_LO  XDATA_REG8(0xCE82)  /* SCSI buffer threshold low */
-#define REG_SCSI_BUF_FLOW       XDATA_REG8(0xCE83)  /* SCSI buffer flow control */
+/*
+ * REG_SCSI_BUF_FLOW (0xCE83)
+ *
+ * SCSI buffer flow control.  Firmware clears bits 4-6 before DMA loop:
+ *   CE83 &= 0x8F
+ *
+ * Observed initial value: 0xF1.  After clearing bits: 0x81.
+ */
+#define REG_SCSI_BUF_FLOW       XDATA_REG8(0xCE83)
 #define   SCSI_DMA_COMPL_MODE0    0x01  // Bit 0: Mode 0 complete
 #define   SCSI_DMA_COMPL_MODE10   0x02  // Bit 1: Mode 0x10 complete
-#define REG_XFER_STATUS_CE60    XDATA_REG8(0xCE60)  // Transfer status CE60
-#define   XFER_STATUS_BIT6        0x40  // Bit 6: Status flag
-#define REG_XFER_CTRL_CE65      XDATA_REG8(0xCE65)
-#define REG_SCSI_DMA_TAG_COUNT  XDATA_REG8(0xCE66)
-#define   SCSI_DMA_TAG_MASK       0x1F  // Bits 0-4: Tag count (0-31)
-#define REG_SCSI_DMA_QUEUE_STAT XDATA_REG8(0xCE67)
-#define   SCSI_DMA_QUEUE_MASK     0x0F  // Bits 0-3: Queue status (0-15)
-#define REG_XFER_STATUS_CE6C    XDATA_REG8(0xCE6C)  // Transfer status CE6C (bit 7: ready)
-#define REG_SCSI_DMA_STATUS     XDATA_REG16(0xCE6E)
-#define REG_SCSI_DMA_STATUS_L   XDATA_REG8(0xCE6E)   /* SCSI DMA status low byte */
-#define REG_SCSI_DMA_STATUS_H   XDATA_REG8(0xCE6F)   /* SCSI DMA status high byte */
+
 /*
- * USB/DMA State Machine Control (0xCE86-0xCE89)
+ * USB Bulk DMA Handshake (0xCE86-0xCE8A)
  *
- * REG_BULK_DMA_HANDSHAKE (0xCE88): Bulk transfer DMA handshake trigger.
- *   Write 0x00 to init/reset the DMA state machine.
- *   After writing 0x00, CE89 transitions to 0x03 (ready).
- *   Written at end of handle_set_interface_inner() to arm bulk transfers.
+ * Two-step DMA: USB hardware receives bulk OUT data into 0x7000 buffer,
+ * then firmware triggers CE00=0x03 to copy from 0x7000 to SRAM.
  *
- * REG_USB_DMA_STATE (0xCE89): DMA state machine status.
- *   Must read 0x03 for bulk DMA to work.
- *   Checked by stock firmware pre-trigger: if CE89 != 0x03, skip trigger.
- *   Value 0x03 = bits 0+1 set = ready + success = DMA path available.
+ * === CBW Reception (first handshake after USB interrupt) ===
  *
- * Sequence: write CE88=0x00 → CE89 becomes 0x03 → bulk IN enabled.
+ * When a BOT CBW arrives on the bulk OUT endpoint, the USB hardware fires
+ * INT0 with PERIPH_STATUS=0x40.  The firmware ISR does:
+ *
+ *   1. Write 0x90E2 = 0x01      (set USB mode)
+ *   2. Write CE88 = 0x00        (trigger DMA handshake)
+ *   3. Poll CE89 bit 0           (wait for ready)
+ *   4. Read 0x9119/0x911A       (CBW length: expect 0x00, 0x1F = 31 bytes)
+ *   5. Read 0x911B-0x911E       (CBW signature: "USBC" = 0x55,0x53,0x42,0x43)
+ *   6. Read 0x911F-0x9122       (CBW tag, copy to D804-D807 for CSW)
+ *   7. Read 0x9123-0x9126       (transfer length, LE)
+ *   8. Read 0x9127              (flags: 0x00=OUT, 0x80=IN)
+ *   9. Read 0x912A              (SCSI opcode)
+ *
+ * Observed CE89 values after CBW handshake:
+ *   0x05 (bits 0+2 set) -- seen after prior E4/E5 traffic
+ *   0x07 (bits 0+1+2 set) -- seen on first CBW after boot
+ *   Both indicate ready (bit 0 set); firmware checks signature regardless.
+ *
+ * === Data Reception (for SCSI WRITE(16) opcode 0x8A) ===
+ *
+ * After parsing CBW, firmware enters a data reception loop:
+ *
+ *   1. Arm OUT endpoint: EP_CFG1 = ARM_OUT, EP_CFG2 = ARM_OUT
+ *   2. Wait: poll PERIPH_STATUS for BULK_DATA bit
+ *   3. Write CE88 = 0x00        (DMA handshake for data chunk)
+ *   4. Poll CE89 bit 0           (ready)
+ *   5. Poll CE55 != 0x00         (byte count confirms data at 0x7000)
+ *   6. Settle: read CE89 ~128 times (hardware settling delay)
+ *   7. For each 512-byte sector in chunk:
+ *        Write CE00 = 0x03      (DMA one sector: 0x7000 -> SRAM @ CE76-79)
+ *        Poll CE00 == 0x00      (done)
+ *   8. Repeat until all bytes received
+ *
+ * Observed initial values (fresh boot via proxy):
+ *   CE86 = 0x08  (bit 3 set, not bit 4)
+ *   CE88 = 0x00
+ *   CE89 = 0x03  (ready, idle, no pending transfer)
+ *   CE55 = 0x00  (no transfer count)
  */
-/*
- * USB Bulk DMA Handshake Registers (0xCE86-0xCE8A)
- *
- * CE88/CE89 handshake triggers USB bulk OUT data DMA to flash buffer (0x7000).
- * Stock firmware sequence at 0x3484-0x349D:
- *   1. Write CE88 = 0x00 (init DMA state machine)
- *   2. Poll CE89 bit 0 until set (DMA triggered)
- *   3. Check CE89 bit 1: set = CBW (ljmp 0x35A1), clear = bulk data
- *   4. Check CE86 bit 4: set = error (ljmp 0x35A1), clear = OK
- *   5. Read CE55 for DMA transfer byte count
- *
- * After handshake completes, poll CE55 != 0 to confirm data at 0x7000.
- */
-#define REG_USB_DMA_ERROR       XDATA_REG8(0xCE86)  /* Bit 4: DMA error flag (stock: 0x349D) */
-#define   USB_DMA_ERROR_BIT       0x10  // Bit 4: DMA error
+#define REG_USB_DMA_ERROR       XDATA_REG8(0xCE86)  /* DMA error flags */
+#define   USB_DMA_ERROR_BIT       0x10  /* Bit 4: DMA error flag (stock check at 0x349D) */
 #define REG_BULK_DMA_HANDSHAKE  XDATA_REG8(0xCE88)  /* Write 0x00 to start bulk DMA handshake */
 #define REG_USB_DMA_STATE       XDATA_REG8(0xCE89)  /* DMA handshake status */
-#define   USB_DMA_STATE_READY     0x01  // Bit 0: DMA ready (poll this after CE88 write)
-#define   USB_DMA_STATE_CBW       0x02  // Bit 1: 1=CBW received, 0=bulk data
-#define   USB_DMA_STATE_ERROR     0x04  // Bit 2: DMA error in copy loop (stock: 0x3546)
-#define REG_USB_DMA_SECTOR_CTRL XDATA_REG8(0xCE8A)  /* Per-sector DMA control (stock: bit 2 set at 0x3251) */
+#define   USB_DMA_STATE_READY     0x01  /* Bit 0: DMA ready/complete (poll after CE88 write) */
+#define   USB_DMA_STATE_CBW       0x02  /* Bit 1: 1=CBW in registers, 0=bulk data at 0x7000 */
+#define   USB_DMA_STATE_ERROR     0x04  /* Bit 2: set after handshake (not necessarily error) */
+#define REG_USB_DMA_SECTOR_CTRL XDATA_REG8(0xCE8A)  /* Per-sector DMA control */
 #define REG_XFER_MODE_CE95      XDATA_REG8(0xCE95)
 #define REG_SCSI_DMA_CMD_REG    XDATA_REG8(0xCE96)
 #define REG_SCSI_DMA_RESP_REG   XDATA_REG8(0xCE97)
+
+/*
+ * =========================================================================
+ * USB-to-SRAM DMA: Complete Transfer Sequence (from emulator proxy trace)
+ * =========================================================================
+ *
+ * This documents the full SCSI WRITE(16) flow as observed in the emulator
+ * with --proxy --proxy-debug 2, tracing real hardware register accesses.
+ *
+ * Hardware paths (two options):
+ *
+ * === Hardware DMA: CE00 (requires MSC engine via REG_USB_MSC_CFG) ===
+ *   USB Host --[BULK OUT]--> MSC Engine --[CE88/CE89]--> 0x7000 buffer
+ *   0x7000 buffer --[CE00=0x03]--> SRAM at PCI 0x00200000
+ *   SRAM --[PCIe bus mastering]--> GPU
+ *
+ * REG_USB_MSC_CFG (0x900B) controls the MSC engine:
+ *   0x00 = MSC disabled. Bulk OUT goes directly to 0x7000 via EP buffer.
+ *          CE88/CE89 handshake completes but CE55=0x00 (no DMA capture).
+ *          CE00=0x03 fires CE10 counter but does NOT move data.
+ *   0x07 = MSC enabled. Bulk OUT is intercepted by MSC hardware.
+ *          Host bulk writes TIMEOUT unless firmware sends CSW via MSC.
+ *          CE88/CE89 handshake connects to the MSC internal FIFO.
+ *          CBW is parsed by hardware into registers 0x911B-0x9137.
+ *
+ * With MSC_CFG=0x07:
+ *   - Bulk OUT no longer triggers PERIPH_BULK_DATA interrupt directly
+ *   - The MSC engine captures CBW and data internally
+ *   - Firmware must process CBW (via 0x911x registers) and send CSW
+ *   - CE88/CE89 handshake extracts data from MSC FIFO to 0x7000
+ *   - CE00=0x03 then DMAs from 0x7000 to SRAM at CE76-79 address
+ *
+ * NOTE: REG_USB_MODE (0x90E2) reads 0x00 on real hardware even after
+ * writing 0x01.  The emulator fakes this register.  The stock firmware
+ * writes it but the value is consumed as a trigger, not stored.
+ * Similarly, REG_USB_CONFIG (0x9002) reads 0x20 after writing 0xE0.
+ *
+ * SRAM at PCI 0x00200000 is accessible to the 8051 via XDATA 0xF000-0xFFFF
+ * (4KB window).  This window is BLOCKED while CE00=0x03 is active.
+ *
+ * Register setup before the DMA loop (one-time):
+ *   CE76=0x00 CE77=0x00 CE78=0x20 CE79=0x00  (target: PCI 0x00200000)
+ *   CE72=0x00                                  (transfer mode: normal)
+ *   CE83 &= 0x8F                               (clear flow control bits 4-6)
+ *
+ * Per-chunk loop (each USB bulk transfer, up to max packet size):
+ *   EP_CFG1 = ARM_OUT; EP_CFG2 = ARM_OUT       (arm endpoint)
+ *   wait for PERIPH_STATUS & BULK_DATA          (USB data arrived)
+ *   CE88 = 0x00                                 (trigger handshake)
+ *   poll CE89 & 0x01                            (wait for ready)
+ *   poll CE55 != 0x00                           (byte count available)
+ *   settle delay (~128 reads of CE89)
+ *   for each 512-byte sector:
+ *     CE00 = 0x03                               (DMA sector to SRAM)
+ *     poll CE00 == 0x00                          (DMA done)
+ *
+ * tinygrad resets before/after each scsi_write chunk:
+ *   E5 write XDATA[0x07EF] = 0x00              (re-arm SCSI write path)
+ *   ... SCSI WRITE(16) ...
+ *   E5 write XDATA[0x0171] = 0xFF,0xFF,0xFF    (completion flags)
+ *   E5 write XDATA[0xCE6E] = 0x00,0x00         (clear DMA status)
+ * =========================================================================
+ */
 
 //=============================================================================
 // USB Descriptor Validation (0xCEB0-0xCEB3)
@@ -1971,43 +2267,6 @@
 // System Control (0xEF00-0xEFFF)
 //=============================================================================
 #define REG_CRITICAL_CTRL       XDATA_REG8(0xEF4E)
-
-//=============================================================================
-// PCIe TLP Format/Type Codes (for REG_PCIE_FMT_TYPE at 0xB210)
-//=============================================================================
-/*
- * PCIe TLP format/type byte encoding (PCIe Base Spec 3.0, Table 2-3):
- *   Bits [7:5] = Fmt (Format):
- *     000 = 3DW header, no data payload
- *     001 = 4DW header, no data payload
- *     010 = 3DW header, with data payload
- *     011 = 4DW header, with data payload
- *   Bits [4:0] = Type:
- *     00000 = Memory Read/Write (MRd/MWr)
- *     00100 = Config Read/Write Type 0 (CfgRd0/CfgWr0)
- *     00101 = Config Read/Write Type 1 (CfgRd1/CfgWr1)
- *
- * Bit 6 (0x40) = data payload present (i.e., write operation)
- * Bit 5 (0x20) = 4DW header (64-bit addressing)
- *
- * Use PCIE_FMT_HAS_DATA to test if a TLP type is a write.
- */
-#define PCIE_FMT_HAS_DATA       0x40  /* Bit 6: TLP carries a data payload (write) */
-#define PCIE_FMT_4DW_HDR        0x20  /* Bit 5: 4DW header (64-bit address) */
-
-/* Memory Read/Write (Type 0x00) */
-#define PCIE_FMT_MEM_READ       0x00  /* MRd:   3DW header, no data, 32-bit addr */
-#define PCIE_FMT_MEM_WRITE      0x40  /* MWr:   3DW header, with data, 32-bit addr */
-#define PCIE_FMT_MEM_READ64     0x20  /* MRd64: 4DW header, no data, 64-bit addr */
-#define PCIE_FMT_MEM_WRITE64    0x60  /* MWr64: 4DW header, with data, 64-bit addr */
-
-/* Config Read/Write Type 0 (targets device on local bus) */
-#define PCIE_FMT_CFG_READ_0     0x04  /* CfgRd0: 3DW header, no data */
-#define PCIE_FMT_CFG_WRITE_0    0x44  /* CfgWr0: 3DW header, with data */
-
-/* Config Read/Write Type 1 (forwarded by bridges to downstream bus) */
-#define PCIE_FMT_CFG_READ_1     0x05  /* CfgRd1: 3DW header, no data */
-#define PCIE_FMT_CFG_WRITE_1    0x45  /* CfgWr1: 3DW header, with data */
 
 //=============================================================================
 // Bank-Selected Registers (0x0xxx-0x2xxx)

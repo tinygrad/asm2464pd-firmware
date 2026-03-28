@@ -163,23 +163,28 @@ static void handle_usb_control(void) {
       uint16_t t;
       for (t = 0; t < 50000; t++) {
         uint8_t s = REG_PCIE_STATUS;
-        if (s & PCIE_STATUS_COMPLETE) {
-          ret_status = 0;
-          break;
-        }
         if (s & PCIE_STATUS_ERROR) {
           REG_PCIE_STATUS = PCIE_STATUS_ERROR;
           ret_status = 1;
           break;
         }
+        if (s & PCIE_STATUS_COMPLETE) {
+          ret_status = 0;
+          break;
+        }
       }
-      DESC_BUF[0] = REG_PCIE_DATA_0;
-      DESC_BUF[1] = REG_PCIE_DATA_1;
-      DESC_BUF[2] = REG_PCIE_DATA_2;
-      DESC_BUF[3] = REG_PCIE_DATA_3;
-      DESC_BUF[4] = REG_PCIE_LINK_STATUS_8;
-      DESC_BUF[5] = REG_PCIE_CPL_STATUS;
-      DESC_BUF[6] = REG_PCIE_COMPL_STATUS;
+      if (ret_status == 0) {
+        DESC_BUF[0] = REG_PCIE_DATA_0;
+        DESC_BUF[1] = REG_PCIE_DATA_1;
+        DESC_BUF[2] = REG_PCIE_DATA_2;
+        DESC_BUF[3] = REG_PCIE_DATA_3;
+        DESC_BUF[4] = REG_PCIE_CPL_HDR_HI;
+        DESC_BUF[5] = REG_PCIE_CPL_HDR_LO;
+        DESC_BUF[6] = REG_PCIE_COMPL_STATUS;
+      } else {
+        int i;
+        for (i = 0; i < 7; i++) DESC_BUF[i] = 0;
+      }
       DESC_BUF[7] = ret_status;
       send_control_data(8);
     } else {

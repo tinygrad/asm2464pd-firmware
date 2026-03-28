@@ -31,6 +31,7 @@ typedef unsigned int uint16_t;
 #define REG_UART_RBR    (*(__xdata volatile uint8_t *)0xC000)
 #define REG_UART_THR    (*(__xdata volatile uint8_t *)0xC001)
 #define REG_UART_RFBR   (*(__xdata volatile uint8_t *)0xC005)
+#define REG_UART_TFBF   (*(__xdata volatile uint8_t *)0xC006)
 #define REG_UART_LCR    (*(__xdata volatile uint8_t *)0xC007)
 
 /* Protocol commands */
@@ -46,14 +47,12 @@ typedef unsigned int uint16_t;
  * and int_mask high bits are never set */
 #define INT_SIGNAL      0x7E
 
-/* Pending interrupt bitmask - set by ISRs */
-volatile uint8_t pending_int_mask = 0;
-
-/* Interrupts that have been sent to emulator but not yet ACKed (waiting for RETI) */
-volatile uint8_t sent_int_mask = 0;
-
-/* Shadow IE - what the emulator thinks IE is */
-uint8_t shadow_ie = 0x00;
+/* Place proxy variables at high XDATA addresses so firmware writes to low
+ * XDATA (0x0000+) don't corrupt them. XDATA 0x5FF0-0x5FFF is safe since
+ * MMIO starts at 0x6000 and firmware RAM typically uses lower addresses. */
+volatile __xdata __at(0x5FF0) uint8_t pending_int_mask;
+volatile __xdata __at(0x5FF1) uint8_t sent_int_mask;
+__xdata __at(0x5FF2) uint8_t shadow_ie;
 
 /*
  * SFR access - SFRs are at 0x80-0xFF and require direct addressing.
@@ -80,16 +79,22 @@ static uint8_t uart_getc(void)
     return REG_UART_RBR;
 }
 
+static void uart_putc(uint8_t val)
+{
+    while (REG_UART_TFBF == 0);
+    REG_UART_THR = val;
+}
+
 static void send_response(uint8_t val)
 {
-    REG_UART_THR = val;
-    REG_UART_THR = ~val;
+    uart_putc(val);
+    uart_putc(~val);
 }
 
 static void send_ack(void)
 {
-    REG_UART_THR = 0x00;
-    REG_UART_THR = 0xFF;
+    uart_putc(0x00);
+    uart_putc(0xFF);
 }
 
 static uint8_t is_uart_addr(uint16_t addr)
@@ -181,9 +186,9 @@ void main(void)
     REG_UART_LCR &= 0xF7;
 
     /* Hello */
-    REG_UART_THR = 'P';
-    REG_UART_THR = 'K';
-    REG_UART_THR = '\n';
+    uart_putc('P');
+    uart_putc('K');
+    uart_putc('\n');
 
     /* Proxy loop */
     while (1) {
@@ -248,8 +253,8 @@ void main(void)
             break;
 
         default:
-            REG_UART_THR = '?';
-            REG_UART_THR = '?';
+            uart_putc('?');
+            uart_putc('?');
             break;
         }
 
@@ -257,8 +262,8 @@ void main(void)
         mask = pending_int_mask & ~sent_int_mask;
         if (mask) {
             sent_int_mask |= mask;
-            REG_UART_THR = INT_SIGNAL;  /* 0x7E */
-            REG_UART_THR = mask;        /* 0x00-0x3F, never 0x81 (~0x7E) */
+            uart_putc(INT_SIGNAL);  /* 0x7E */
+            uart_putc(mask);        /* 0x00-0x3F, never 0x81 (~0x7E) */
         }
 
     }

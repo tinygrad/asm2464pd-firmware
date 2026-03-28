@@ -3161,14 +3161,12 @@ def create_hardware_hooks(memory: 'Memory', hw: HardwareState, proxy: 'UARTProxy
             # UART (0xC000-0xC00F) - proxy uses these for communication
             if 0xC000 <= addr <= 0xC00F:
                 return True
-            # PHY register 0xC65A - causes bus hang on real hardware
-            if addr == 0xC65A:
-                return True
             # CPU interrupt/DMA control - may cause reset when written via proxy
             if addr == 0xCC81:
                 return True
-            # some USB thing, causes hang with USB 2.0
-            if addr == 0x9E5A:
+            # CPU bus mode control - writing bit 0 changes bus access mode,
+            # causing subsequent MMIO reads (e.g. 0xC65A) to hang the proxy CPU
+            if addr == 0xCA2E:
                 return True
             # Check user-specified mask ranges
             for mask_start, mask_end in proxy_mask:

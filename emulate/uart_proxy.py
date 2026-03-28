@@ -39,7 +39,7 @@ INT_SIGNAL = 0x7E
 # Interrupt numbers (matches 8051 interrupt vectors)
 INT_NAMES = {
     0: 'INT0',
-    1: 'Timer0', 
+    1: 'Timer0',
     2: 'INT1',
     3: 'Timer1',
     4: 'Serial',
@@ -50,7 +50,7 @@ INT_NAMES = {
 class InterruptPending(Exception):
     """
     Raised when an interrupt signal is received instead of a command response.
-    
+
     The proxy is now inside the ISR handler, waiting for commands.
     The caller must:
     1. Handle the interrupt (run ISR in emulator)
@@ -88,7 +88,7 @@ class UARTProxy:
 
         # Pending interrupts from hardware (queue of interrupt numbers)
         self.pending_interrupts = []
-        
+
         # Interrupt statistics
         self.interrupt_count = 0
 
@@ -97,7 +97,7 @@ class UARTProxy:
     def _open(self):
         """Open FTDI connection."""
         from pyftdi.eeprom import FtdiEeprom
-        
+
         self.ftdi = Ftdi()
         self.ftdi.open_from_url(self.device_url)
         self.ftdi.set_baudrate(921600)
@@ -109,9 +109,9 @@ class UARTProxy:
         # CBUS1 = GPIO (bootloader), CBUS2 = GPIO (reset)
         self.CBUS_RESET = (1 << 2)
         self.CBUS_BOOTLOADER = (1 << 1)
-        
+
         # Setup GPIO direction
-        self.ftdi.set_cbus_direction(self.CBUS_RESET | self.CBUS_BOOTLOADER, 
+        self.ftdi.set_cbus_direction(self.CBUS_RESET | self.CBUS_BOOTLOADER,
                                      self.CBUS_RESET | self.CBUS_BOOTLOADER)
         self.ftdi.set_cbus_gpio(0x00)
 
@@ -122,16 +122,16 @@ class UARTProxy:
         """Reset the target device and wait for proxy firmware to boot."""
         # Purge before reset
         self.ftdi.purge_buffers()
-        
+
         # Clear any pending interrupts from before reset
         self.pending_interrupts = []
-        
+
         # Assert reset
         self.ftdi.set_cbus_gpio(self.CBUS_RESET)
         time.sleep(0.1)
         # Release reset
         self.ftdi.set_cbus_gpio(0)
-        
+
         # Wait for "PK\n" hello message (don't purge - we want to read it!)
         hello = b''
         start = time.monotonic()
@@ -142,10 +142,10 @@ class UARTProxy:
                 if b'PK' in hello:
                     break
             time.sleep(0.01)
-        
+
         if b'PK' not in hello:
             raise RuntimeError(f"Proxy firmware did not respond with 'PK' after reset (got: {hello!r})")
-        
+
         # Purge again and clear any pending interrupts that might have been
         # detected during boot (hardware interrupts may be active)
         time.sleep(0.05)  # Let any pending data arrive
@@ -182,17 +182,17 @@ class UARTProxy:
     def _read_response(self, context: str = None) -> int:
         """
         Read 2-byte response, handling interrupt signals.
-        
+
         Protocol:
           - Normal response: <value> <~value>
           - Interrupt signal: 0x7E <int_mask> (mask is 0x00-0x3F)
-        
+
         Args:
             context: Description of what operation we're waiting for (for debug)
-        
+
         Returns:
             The value from the response
-            
+
         When an interrupt signal is received:
           - The interrupt is queued in pending_interrupts
           - We continue reading for the actual response
@@ -200,26 +200,26 @@ class UARTProxy:
         while True:
             data = self._read_bytes(2, context)
             byte0, byte1 = data[0], data[1]
-            
+
             # Check for interrupt signal (0x7E followed by int_mask 0x00-0x3F)
             # byte1 is the int_mask, which can never be 0x81 (~0x7E)
             if byte0 == INT_SIGNAL and (byte1 & 0xC0) == 0:
                 # byte1 is the interrupt bitmask (0x00-0x3F)
                 int_mask = byte1
-                
+
                 # Queue each interrupt that's set in the bitmask
                 for i in range(6):
                     if int_mask & (1 << i):
                         self.pending_interrupts.append(i)
                         self.interrupt_count += 1
-                
+
                 if self.debug >= 1:
                     int_names = [INT_NAMES.get(i, f'?{i}') for i in range(6) if int_mask & (1 << i)]
                     print(f"[PROXY] >>> INTERRUPT mask=0x{int_mask:02X} ({', '.join(int_names)})")
-                
+
                 # Continue to read actual response
                 continue
-            
+
             # Verify complement
             expected_complement = (~byte0) & 0xFF
             if byte1 != expected_complement:
@@ -230,13 +230,13 @@ class UARTProxy:
                                        f"'{chr(byte1) if 32 <= byte1 < 127 else '?'}')")
                 raise RuntimeError(f"Response verification failed: got 0x{byte0:02X} 0x{byte1:02X}, "
                                    f"expected complement 0x{expected_complement:02X}")
-            
+
             return byte0
-    
+
     def get_pending_interrupt(self) -> Optional[int]:
         """
         Get next pending interrupt if any.
-        
+
         Returns:
             Interrupt number or None if no interrupts pending
         """
@@ -247,10 +247,10 @@ class UARTProxy:
     def ack_interrupt(self, int_mask: int):
         """
         Send acknowledgment that emulator finished running ISR (RETI).
-        
+
         This tells the proxy firmware to clear the pending_int_mask for
         the specified interrupts, allowing them to fire again.
-        
+
         Args:
             int_mask: Bitmask of interrupts being acknowledged (same as received)
         """
