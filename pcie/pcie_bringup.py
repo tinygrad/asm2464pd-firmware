@@ -1146,6 +1146,9 @@ def pcie_post_train(dev):
     dev.clear_bits(CA06, 0x40)
     # Bridge config
     pcie_bridge_config_init(dev)
+    # Deassert PERST — bridge_config_init re-asserts it for internal config
+    dev.clear_bits(B480, 0x01)
+    time.sleep(0.1)  # Wait for GPU to exit reset
     # B455 trigger for TLP forwarding
     dev.write(B455, 0x02); dev.write(B455, 0x04)
     dev.write(B2D5, 0x01); dev.write(B296, 0x08)

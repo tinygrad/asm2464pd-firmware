@@ -217,6 +217,8 @@ static void handle_usb_control(void) {
         REG_USB_EP0_LEN_L = wLenL;
         REG_USB_DMA_TRIGGER = USB_DMA_RECV;
         REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
+        /* Wait for data to arrive in DESC_BUF */
+        { volatile uint8_t i; for (i = 0; i < 200; i++) ; }
         if (wValL & PCIE_FMT_HAS_DATA) {
           REG_PCIE_DATA_0     = DESC_BUF[8];
           REG_PCIE_DATA_1     = DESC_BUF[9];
