@@ -61,8 +61,10 @@ def main():
         # === Gen3 link training ===
         dev.write(0xE764, (dev.read8(0xE764) & 0xF7) | 0x08)  # 5. PHY training prep (set bit 3)
         dev.write(0xE764, (dev.read8(0xE764) & 0xFD) | 0x02)  # 6. start training (set bit 1)
+        print(hex(dev.read8(0xE764)))
 
         # === Wait for RXPLL lock ===
+        """
         t0 = time.monotonic()
         for i in range(500):
             if dev.read8(0xE762) & 0x10: break
@@ -70,6 +72,7 @@ def main():
         else:
             raise RuntimeError(f"RXPLL never locked after {time.monotonic()-t0:.3f}s (E762=0x{dev.read8(0xE762):02X})")
         print(f"  RXPLL locked: {(time.monotonic()-t0)*1000:.1f}ms ({i+1} polls)")
+        """
 
         dev.set_bits(0xB403, 0x01)                       # 4. enable tunnel
         # === Post-train (do before LTSSM poll so link stays stable) ===
