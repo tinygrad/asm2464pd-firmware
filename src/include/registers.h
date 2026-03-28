@@ -1283,7 +1283,8 @@
  * the MSC init dance reads and modifies bits in specific order.
  */
 #define REG_NVME_DOORBELL       XDATA_REG8(0xC42A)
-#define   NVME_DOORBELL_DMA_UNLOCK 0x01  // Bit 0: DMA buffer unlock / MSC doorbell
+#define   NVME_DOORBELL_BIT0        0x01  // Bit 0: MSC/queue doorbell
+#define   NVME_DOORBELL_DMA_UNLOCK 0x01  // Bit 0: DMA buffer unlock / MSC doorbell (alias)
 #define   NVME_DOORBELL_BIT1      0x02  // Bit 1: Queue config
 #define   NVME_DOORBELL_BIT2      0x04  // Bit 2: Queue config
 #define   NVME_DOORBELL_BIT3      0x08  // Bit 3: Queue config
@@ -1894,6 +1895,8 @@
  * Observed initial value: 0xF1.  After clearing bits: 0x81.
  */
 #define REG_SCSI_BUF_FLOW       XDATA_REG8(0xCE83)
+#define   SCSI_DMA_COMPL_MODE0    0x01  // Bit 0: Mode 0 complete
+#define   SCSI_DMA_COMPL_MODE10   0x02  // Bit 1: Mode 0x10 complete
 
 /*
  * USB Bulk DMA Handshake (0xCE86-0xCE8A)
