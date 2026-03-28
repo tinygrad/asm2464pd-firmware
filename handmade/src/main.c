@@ -7,6 +7,9 @@
 #include "registers.h"
 #include "globals.h"
 
+#define USB3
+static uint8_t is_usb3;
+
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
 __sfr __at(0x88) TCON;
@@ -238,6 +241,10 @@ static void handle_usb_control(void) {
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
   } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
+  } else if (phase & USB_CTRL_PHASE_STAT_IN) {
+    uart_puts("[USB_CTRL_PHASE_STAT_IN]\n");
+    REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_IN;
   } else {
     uart_puts("[UNHANDLED CONTROL ");
     uart_puthex(phase);
@@ -306,10 +313,20 @@ void int1_isr(void) __interrupt(1) {
 void main(void) {
   // without this, UART has parity
   REG_UART_LCR &= ~LCR_PARITY_MASK;
-  uart_puts("\n[BOOT]\n");
 
-  // without this, USB2 is flaky
-  REG_CPU_MODE = CPU_MODE_USB2;
+  #ifdef USB3
+    uart_puts("\n[BOOT USB3]\n");
+    // clear this to get USB3 interrupts
+    REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
+  #else
+    uart_puts("\n[BOOT]\n");
+
+    // without this, USB2 is flaky
+    REG_CPU_MODE = CPU_MODE_USB2;
+
+    // enable USB high speed mode
+    REG_USB_PHY_CTRL_91C0 = 0x10;
+  #endif
 
   // without this, it doesn't get an interrupt
   REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
@@ -317,16 +334,15 @@ void main(void) {
   // without this, no USB interrupts
   REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
 
-  // enable USB high speed mode
-  REG_USB_PHY_CTRL_91C0 = 0x10;
-
   // enable BULK interrupt. mislabeled
   REG_USB_EP0_LEN_H = 0xF0;
 
   // enables EP_COMPLETE interrupts
   REG_USB_DATA_L = 0x00;
 
-  uart_puts("[GO]\n");
+  uint8_t link = REG_USB_LINK_STATUS;
+  is_usb3 = (link >= USB_SPEED_SUPER) ? 1 : 0;
+  uart_puts("[GO link="); uart_puthex(link); uart_puts("]\n");
 
   // enable interrupts and chill
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
