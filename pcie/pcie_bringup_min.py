@@ -46,6 +46,19 @@ class ASM2464PD:
         libusb.libusb_control_transfer(self.dev.handle, 0x40, 0xE5, addr, (buf[0] | mask) | (1 << 8), None, 0, 1000)
 
 
+def poll(dev, addr, expected, timeout_s=5.0, interval_s=0.01, mask=0xFF, name=None):
+    """Poll register until (value & mask) == expected. Returns value. Raises on timeout."""
+    label = name or f"0x{addr:04X}"
+    t0 = time.monotonic()
+    for i in range(int(timeout_s / interval_s)):
+        v = dev.read8(addr)
+        if (v & mask) == expected:
+            print(f"  {label}: {(time.monotonic()-t0)*1000:.1f}ms ({i+1} polls, 0x{v:02X})")
+            return v
+        time.sleep(interval_s)
+    raise RuntimeError(f"{label} timeout after {time.monotonic()-t0:.3f}s (0x{addr:04X}=0x{dev.read8(addr):02X}, wanted 0x{expected:02X} mask 0x{mask:02X})")
+
+
 def main():
     dev = ASM2464PD()
     dev.open()
@@ -54,40 +67,20 @@ def main():
         assert dev.read8(0xB213) == 0x01, f"B213=0x{dev.read8(0xB213):02X}, firmware didn't set TLP_CTRL"
 
         # === Power + Deassert PERST# ===
-        dev.set_bits(0xC656, 0x20)                       # 1. enable 3.3V
-        dev.set_bits(0xC659, 0x01)                       # 2. enable 12V
-        dev.clear_bits(0xB480, 0x01)                     # 3. deassert PERST#
+        dev.write(0xB480, 0x01)                          # 0. assert PERST#
+        dev.write(0xC656, 0x20)                          # 1. enable 3.3V
+        dev.write(0xC659, 0x01)                          # 2. enable 12V
 
         # === Gen3 link training ===
-        dev.write(0xE764, (dev.read8(0xE764) & 0xF7) | 0x08)  # 5. PHY training prep (set bit 3)
-        dev.write(0xE764, (dev.read8(0xE764) & 0xFD) | 0x02)  # 6. start training (set bit 1)
-        print(hex(dev.read8(0xE764)))
+        dev.write(0xE764, 0x1E)                          # 4. training trigger
+        poll(dev, 0xE762, 0x10, mask=0x10, name="RXPLL lock")
 
-        # === Wait for RXPLL lock ===
-        """
-        t0 = time.monotonic()
-        for i in range(500):
-            if dev.read8(0xE762) & 0x10: break
-            time.sleep(0.01)
-        else:
-            raise RuntimeError(f"RXPLL never locked after {time.monotonic()-t0:.3f}s (E762=0x{dev.read8(0xE762):02X})")
-        print(f"  RXPLL locked: {(time.monotonic()-t0)*1000:.1f}ms ({i+1} polls)")
-        """
+        # === Post-train ===
+        dev.write(0xB430, 0x04)                          # 5. set tunnel link state
+        dev.bank1_or_bits(0x6025, 0x80)                  # 6. TLP routing enable
+        dev.write(0xB480, 0x00)                          # 3. deassert PERST#
 
-        dev.set_bits(0xB403, 0x01)                       # 4. enable tunnel
-        # === Post-train (do before LTSSM poll so link stays stable) ===
-        dev.clear_bits(0xB430, 0x01)                     # 7. clear tunnel link state
-        dev.bank1_or_bits(0x6025, 0x80)                  # 8. TLP routing enable
-
-        # === Wait for LTSSM Gen3 L0 (0x78) ===
-        t0 = time.monotonic()
-        for i in range(500):
-            v = dev.read8(0xB450)
-            if v == 0x78: break
-            time.sleep(0.01)
-        else:
-            raise RuntimeError(f"LTSSM never reached Gen3 L0 after {time.monotonic()-t0:.3f}s (B450=0x{dev.read8(0xB450):02X})")
-        print(f"  LTSSM Gen3 L0: {(time.monotonic()-t0)*1000:.1f}ms ({i+1} polls)")
+        poll(dev, 0xB450, 0x78, name="LTSSM Gen3 L0")
 
         # === Status (reads don't count) ===
         print(f"\nTotal: {dev._wc} writes, {dev._rc} reads")
@@ -95,9 +88,9 @@ def main():
         print(f"  LTSSM state (B450): 0x{dev.read8(0xB450):02X}")
         print(f"  Link detect (B455): 0x{dev.read8(0xB455):02X}")
         print(f"  PERST ctrl  (B480): 0x{dev.read8(0xB480):02X}")
+        print(f"  3.3V enable (C656): 0x{dev.read8(0xC656):02X}")
         print(f"  12V enable  (C659): 0x{dev.read8(0xC659):02X}")
         print(f"  RXPLL       (E762): 0x{dev.read8(0xE762):02X}")
-        print(f"  LINK        (E763): 0x{dev.read8(0xE763):02X}")
         print(f"  PHY timer   (E764): 0x{dev.read8(0xE764):02X}")
         print(f"  Tunnel link (B430): 0x{dev.read8(0xB430):02X}")
         print(f"  Tunnel ctrl (B403): 0x{dev.read8(0xB403):02X}")
