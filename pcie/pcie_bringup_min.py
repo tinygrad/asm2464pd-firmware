@@ -66,10 +66,10 @@ def main():
         # verify firmware set B213
         assert dev.read8(0xB213) == 0x01, f"B213=0x{dev.read8(0xB213):02X}, firmware didn't set TLP_CTRL"
 
-        # === PCIe setup + Assert PERST# to force clean state ===
-        dev.clear_bits(0xB430, 0x01)                     # clear tunnel link state
+        # === Assert PERST# + PCIe setup ===
+        dev.write(0xB480, 0x01)                          # assert PERST#
+        dev.write(0xB430, 0x00)                          # clear tunnel link state
         dev.bank1_or_bits(0x6025, 0x80)                  # TLP routing enable
-        dev.set_bits(0xB480, 0x01)                       # assert PERST#
 
         # === Power ===
         dev.set_bits(0xC656, 0x20)                       # enable 3.3V
@@ -82,7 +82,7 @@ def main():
         poll(dev, 0xB450, 0x78, name="LTSSM Gen3 L0")
 
         # === Re-assert/deassert PERST# to re-enumerate through bridge ===
-        dev.clear_bits(0xB480, 0x01)                     # deassert PERST#
+        dev.write(0xB480, 0x00)                          # deassert PERST#
 
         # === Status (reads don't count) ===
         print(f"\nTotal: {dev._wc} writes, {dev._rc} reads")
