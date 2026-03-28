@@ -224,7 +224,9 @@ static void handle_usb_control(void) {
   } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
     REG_USB_DMA_TRIGGER = USB_DMA_RECV;
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
-  } else if (phase & USB_CTRL_PHASE_DATA_IN) {
+  } else if (phase & USB_CTRL_PHASE_DATA_IN || phase & USB_CTRL_PHASE_STAT_IN) {
+    // USB_CTRL_PHASE_DATA_IN on USB 2.0, USB_CTRL_PHASE_STAT_IN on USB 3.0
+    if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
     if (REG_USB_SETUP_BREQ == 0xF0) {
       /* PCIe TLP DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
        *   [0-3]  address low, little-endian
@@ -267,13 +269,9 @@ static void handle_usb_control(void) {
       uart_puts("\n");
       send_zlp_ack();
     }
-    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
   } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
-  } else if (phase & USB_CTRL_PHASE_STAT_IN) {
-    //uart_puts("[USB_CTRL_PHASE_STAT_IN]\n");
-    REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
-    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_IN;
   } else {
     uart_puts("[UNHANDLED CONTROL ");
     uart_puthex(phase);

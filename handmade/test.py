@@ -46,6 +46,7 @@ class TestDevice(unittest.TestCase):
     cbuf = (ctypes.c_ubyte * len(buf))(*buf)
     ret = libusb.libusb_control_transfer(self.dev.handle, 0x40, 0xF1, 0, 0, cbuf, len(buf), 1000)
     assert ret >= 0, f"control host to device failed: {ret}"
+    self.assertEqual(ctrl_read(self.dev, 0x9E00, size=4), buf)
 
   def test_write_read_control(self):
     ctrl_write(self.dev, 0xF000, 0xAB)
