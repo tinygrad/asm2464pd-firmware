@@ -1210,39 +1210,165 @@
  * C406 is the final trigger; it is not clearable by CPU write.
  * C402 and C406 are undocumented in stock firmware (not referenced by ghidra decompilation).
  * C404 is written with value 2 in stock firmware flash init routines.
+ *
+ * === Minimal DMA trigger (empirically verified on handmade firmware) ===
+ *
+ * Minimal DMA — three register writes:
+ *   C403 = N      (transfer size: N*0x100 bytes, max 0x04 = 1KB)
+ *   C42A = 0x00   (clear doorbell — REQUIRED)
+ *   C406 = 0x01   (trigger — REQUIRED)
+ *
+ * C427 (sector count) has NO effect on C400 DMA size.
+ * The arm bits (C400, C401, C402, C404) are NOT required.
+ * The descriptor (C420-C42D) retains values from prior configuration.
+ * After DMA completes, write C42A=0x01 to unlock the 0x7000 buffer.
+ *
+ * For transfers >1KB, use multiple triggers with C403=0x04 each.
+ * The SRAM write pointer auto-advances between triggers.
+ *
+ * Minimal firmware DMA sequence:
+ *   1. Receive bulk OUT data (hardware places it at 0x7000)
+ *   2. Write C42A=0x00 (clear doorbell)
+ *   3. Write C406=0x01 (trigger DMA: 0x7000 → SRAM at PCI 0x200000)
+ *   4. Data appears at XDATA 0xF000 (4KB SRAM window)
+ *   5. Write C42A=0x01 (unlock 0x7000 for next transfer)
+ *
+ * Target address: Starts at PCI 0x200000 (XDATA 0xF000) and advances
+ * sequentially through SRAM for multi-sector transfers.
+ *
+ * Multi-sector DMA (empirically verified on stock firmware):
+ *   The stock firmware sets C427 to the sector count before triggering.
+ *   The C400 DMA hardware copies that many 512-byte sectors from the
+ *   0x7000 bulk OUT buffer to sequential SRAM addresses starting at
+ *   PCI 0x200000:
+ *
+ *     C427=0x01 (512B):   copies 0x7000[0..511]   → PCI 0x200000
+ *     C427=0x02 (1KB):    copies 0x7000[0..1023]  → PCI 0x200000-0x2003FF
+ *     C427=0x08 (4KB):    copies 0x7000[0..4095]  → PCI 0x200000-0x200FFF
+ *     C427=0x80 (64KB):   copies 0x7000[0..65535] → PCI 0x200000-0x20FFFF
+ *
+ *   The C420-C421 descriptor also tracks transfer size:
+ *     512B:  C420=0x00 C421=0x01
+ *     4KB:   C420=0x00 C421=0x04  (C421 = size in 1KB units?)
+ *     64KB:  C420=0x00 C421=0x01  (wraps? or different encoding)
+ *
+ *   CE10-CE13 (SRAM write pointer) advances after each transfer:
+ *     512B-16KB: CE10 advances by 0x4000 (16KB granularity)
+ *     64KB:      CE10 advances by 0x10000
+ *
+ * IMPORTANT: The stock firmware uses MSC_CFG=0x00 (MSC disabled).
+ * The SCSI WRITE(16) data arrives via UAS (USB Attached SCSI), not
+ * BOT/MSC.  Data accumulates in 0x7000 via the USB hardware, then
+ * the C400 DMA engine copies it all to SRAM in one trigger.
+ *
+ * NOTE: CPU-written data to 0x7000 (via E5) is NOT valid for C400 DMA.
+ * Only data placed by the USB bulk OUT hardware can be DMA'd.
  */
 // NVMe DMA control (0xC4ED-0xC4EF)
 #define REG_NVME_DMA_CTRL_ED    XDATA_REG8(0xC4ED)  // NVMe DMA control
 #define REG_NVME_DMA_ADDR_LO    XDATA_REG8(0xC4EE)  // NVMe DMA address low
 #define REG_NVME_DMA_ADDR_HI    XDATA_REG8(0xC4EF)  // NVMe DMA address high
-#define REG_NVME_CTRL           XDATA_REG8(0xC400)   /* DMA arm bit 0 (write 1 to arm) */
-#define REG_NVME_STATUS         XDATA_REG8(0xC401)   /* DMA arm bit 1 (write 1 to arm) */
-#define REG_NVME_DMA_ARM2       XDATA_REG8(0xC402)   /* DMA arm bit 2 (write 1 to arm) */
-#define REG_NVME_DMA_ARM3       XDATA_REG8(0xC404)   /* DMA arm bit 3 (write 1 to arm; stock writes 2) */
-#define REG_NVME_DMA_TRIGGER    XDATA_REG8(0xC406)   /* DMA trigger (write 1 to fire; not CPU-clearable) */
-#define REG_NVME_CTRL_STATUS    XDATA_REG8(0xC412)
+/*
+ * DMA Arm/Trigger (0xC400-0xC41F)
+ *
+ * Writable register masks (write 0xFF, read back):
+ *   C400: mask=0x01  (1 bit)   - DMA arm/ctrl
+ *   C401: mask=0x07  (3 bits)  - DMA mode (bit1 changes address behavior!)
+ *   C402: mask=0xFF  (8 bits)  - DMA config
+ *   C403: mask=0xFF  (8 bits)  - DMA transfer size
+ *   C404: mask=0xFF  (8 bits)  - DMA config
+ *   C405: mask=0xFF  (8 bits)  - DMA config
+ *   C406: TRIGGER (write-only)
+ *   C407: mask=0x00  (R/O)
+ *   C408: mask=0xFF  (8 bits)
+ *   C409: mask=0xFF  (8 bits)
+ *   C40A: mask=0x00  (R/O)
+ *   C40B: mask=0x00  (R/O)
+ *   C40C: mask=0xFF  (8 bits)
+ *   C40D: mask=0xFF  (8 bits)
+ *   C40E-C40F: mask=0x00  (R/O)
+ *   C410-C411: mask=0x00  (R/O)
+ *   C412: mask=0x03  (2 bits)  - DMA control/status
+ *   C413: mask=0x3F  (6 bits)  - DMA config
+ *   C414: mask=0xBF  (7 bits)  - DMA data control
+ *   C415: mask=0x3F  (6 bits)  - DMA device status
+ *   C416: mask=0xFF  (8 bits)  - DMA address byte 0
+ *   C417: mask=0xFF  (8 bits)  - DMA address byte 1
+ *   C418: mask=0xFF  (8 bits)  - DMA address byte 2
+ *   C419: mask=0xFF  (8 bits)  - DMA address byte 3
+ *   C41A-C41F: mask=0x00  (R/O)
+ *
+ * C403: DMA TRANSFER SIZE (R/W). Controls how many bytes the C400 DMA
+ *   engine copies from 0x7000 to SRAM per trigger.
+ *
+ *   Empirically verified DMA sizes:
+ *     C403=0x00:  16 bytes (0x010)
+ *     C403=0x01: 256 bytes (0x100)
+ *     C403=0x02: 512 bytes (0x200)
+ *     C403=0x03: 768 bytes (0x300)
+ *     C403=0x04: 1024 bytes (0x400) — MAXIMUM per trigger
+ *     C403=0x05+: 1024 bytes (capped at 0x400)
+ *
+ *   Formula: min(C403 * 0x100, 0x400) bytes, except C403=0 → 0x10.
+ *
+ * C416-C419: DMA target address (4 bytes, encoding TBD).
+ *   Default 0x00000000. Writing 0 to C416-C419 breaks DMA targeting
+ *   until device reset. Stock firmware after 4KB write has
+ *   C416=0, C417=0, C418=0, C419=0 (but these are outputs, not inputs).
+ *   On handmade firmware, C418=0x02 appears to encode PCI 0x200000.
+ */
+#define REG_NVME_CTRL           XDATA_REG8(0xC400)   /* mask=0x01 DMA arm */
+#define REG_NVME_STATUS         XDATA_REG8(0xC401)   /* mask=0x07 DMA mode (bit1=addr mode?) */
+#define REG_NVME_DMA_ARM2       XDATA_REG8(0xC402)   /* mask=0xFF DMA config */
+#define REG_NVME_DMA_LEN        XDATA_REG8(0xC403)   /* mask=0xFF DMA transfer size (N*0x100, max 0x400) */
+#define REG_NVME_DMA_ARM3       XDATA_REG8(0xC404)   /* mask=0xFF DMA config */
+#define REG_NVME_DMA_CFG5       XDATA_REG8(0xC405)   /* mask=0xFF DMA config */
+#define REG_NVME_DMA_TRIGGER    XDATA_REG8(0xC406)   /* DMA trigger (write 1 to fire) */
+#define REG_NVME_DMA_CFG8       XDATA_REG8(0xC408)   /* mask=0xFF */
+#define REG_NVME_DMA_CFG9       XDATA_REG8(0xC409)   /* mask=0xFF */
+#define REG_NVME_DMA_CFGC       XDATA_REG8(0xC40C)   /* mask=0xFF */
+#define REG_NVME_DMA_CFGD       XDATA_REG8(0xC40D)   /* mask=0xFF */
+/*
+ * DMA Control/Status (0xC410-0xC41F)
+ *
+ * Empirically verified (stock firmware, E4/E5 probing):
+ *   C410-C411: Always 0x00. R/W.
+ *   C412: 0x00 after boot, 0x03 after first scsi_write. PARTIAL write (0xAA->0x02).
+ *   C413: 0x00 after boot. PARTIAL write (0xAA->0x2A, mask 0x2A).
+ *   C414: 0x00 after boot, 0x80 after first scsi_write. R/W.
+ *   C415: 0x00 after boot, 0x01 after first scsi_write. PARTIAL write (0xAA->0x2A).
+ *   C416-C419: Always 0x00. R/W.
+ *
+ * C412/C414/C415 are latched by the first SCSI DMA transfer and remain set.
+ */
+#define REG_NVME_CTRL_STATUS    XDATA_REG8(0xC412)   /* mask=0x03 */
 #define   NVME_CTRL_WRITE_DIR    0x01  // Bit 0: 1=WRITE (host→device), 0=READ
 #define   NVME_CTRL_DMA_START    0x02  // Bit 1: Start DMA transfer
-#define   NVME_CTRL_STATUS_READY  0x02  // Bit 1: NVMe controller ready (alias)
-#define REG_NVME_CONFIG         XDATA_REG8(0xC413)
-#define   NVME_CONFIG_EP_MASK    0x3F  // Bits 0-5: Endpoint/channel index
-#define   NVME_CONFIG_MASK_HI    0xC0  // Bits 6-7: Config mode
-#define REG_NVME_DATA_CTRL      XDATA_REG8(0xC414)
-#define   NVME_DATA_CTRL_MASK     0xC0  // Bits 6-7: Data control mode
-#define   NVME_DATA_CTRL_BIT7     0x80  // Bit 7: Data control high bit
-#define REG_NVME_DEV_STATUS     XDATA_REG8(0xC415)
-#define   NVME_DEV_STATUS_MASK    0xC0  // Bits 6-7: Device status
-// NVMe SCSI Command Buffer (0xC4C0-0xC4CA) - used for SCSI to NVMe translation
-#define REG_NVME_SCSI_CMD_BUF_0 XDATA_REG8(0xC4C0)  // SCSI cmd buffer byte 0
-#define REG_NVME_SCSI_CMD_BUF_1 XDATA_REG8(0xC4C1)  // SCSI cmd buffer byte 1
-#define REG_NVME_SCSI_CMD_BUF_2 XDATA_REG8(0xC4C2)  // SCSI cmd buffer byte 2
-#define REG_NVME_SCSI_CMD_BUF_3 XDATA_REG8(0xC4C3)  // SCSI cmd buffer byte 3
-#define REG_NVME_SCSI_CMD_LEN_0 XDATA_REG8(0xC4C4)  // SCSI cmd length byte 0
-#define REG_NVME_SCSI_CMD_LEN_1 XDATA_REG8(0xC4C5)  // SCSI cmd length byte 1
-#define REG_NVME_SCSI_CMD_LEN_2 XDATA_REG8(0xC4C6)  // SCSI cmd length byte 2
-#define REG_NVME_SCSI_CMD_LEN_3 XDATA_REG8(0xC4C7)  // SCSI cmd length byte 3
-#define REG_NVME_SCSI_TAG       XDATA_REG8(0xC4C8)  // SCSI command tag
-#define REG_NVME_SCSI_CTRL      XDATA_REG8(0xC4C9)  // SCSI control byte
+#define REG_NVME_CONFIG         XDATA_REG8(0xC413)   /* mask=0x3F */
+#define REG_NVME_DATA_CTRL      XDATA_REG8(0xC414)   /* mask=0xBF */
+#define REG_NVME_DEV_STATUS     XDATA_REG8(0xC415)   /* mask=0x3F */
+#define REG_NVME_DMA_ADDR0      XDATA_REG8(0xC416)   /* mask=0xFF DMA address byte 0 */
+#define REG_NVME_DMA_ADDR1      XDATA_REG8(0xC417)   /* mask=0xFF DMA address byte 1 */
+#define REG_NVME_DMA_ADDR2      XDATA_REG8(0xC418)   /* mask=0xFF DMA address byte 2 (0x02=PCI 0x200000) */
+#define REG_NVME_DMA_ADDR3      XDATA_REG8(0xC419)   /* mask=0xFF DMA address byte 3 */
+/*
+ * NVMe SCSI Command Buffer (0xC4C0-0xC4CA)
+ *
+ * Used for SCSI to NVMe translation.  All R/W (verified).
+ * C4C0-C4C9 are fully writable. C4CA not tested.
+ * Also: C4D8-C4DB are R/W.
+ * WARNING: C4E8 write CRASHES the device.
+ */
+#define REG_NVME_SCSI_CMD_BUF_0 XDATA_REG8(0xC4C0)  /* SCSI cmd buffer byte 0 (R/W) */
+#define REG_NVME_SCSI_CMD_BUF_1 XDATA_REG8(0xC4C1)  /* SCSI cmd buffer byte 1 (R/W) */
+#define REG_NVME_SCSI_CMD_BUF_2 XDATA_REG8(0xC4C2)  /* SCSI cmd buffer byte 2 (R/W) */
+#define REG_NVME_SCSI_CMD_BUF_3 XDATA_REG8(0xC4C3)  /* SCSI cmd buffer byte 3 (R/W) */
+#define REG_NVME_SCSI_CMD_LEN_0 XDATA_REG8(0xC4C4)  /* SCSI cmd length byte 0 (R/W) */
+#define REG_NVME_SCSI_CMD_LEN_1 XDATA_REG8(0xC4C5)  /* SCSI cmd length byte 1 (R/W) */
+#define REG_NVME_SCSI_CMD_LEN_2 XDATA_REG8(0xC4C6)  /* SCSI cmd length byte 2 (R/W) */
+#define REG_NVME_SCSI_CMD_LEN_3 XDATA_REG8(0xC4C7)  /* SCSI cmd length byte 3 (R/W) */
+#define REG_NVME_SCSI_TAG       XDATA_REG8(0xC4C8)  /* SCSI command tag (R/W) */
+#define REG_NVME_SCSI_CTRL      XDATA_REG8(0xC4C9)  /* SCSI control byte (R/W) */
 #define REG_NVME_SCSI_DATA      XDATA_REG8(0xC4CA)  // SCSI data byte
 
 #define REG_NVME_CMD            XDATA_REG8(0xC420)  /* Also DMA xfer byte count high */
@@ -1257,9 +1383,13 @@
 #define REG_NVME_DMA_ADDR_C427  XDATA_REG8(0xC427)  /* DMA sector count (0x01=512B, 0x08=4096B) */
 #define REG_NVME_COUNT_HIGH     XDATA_REG8(0xC426)  /* Alias for compatibility */
 #define REG_NVME_ERROR          XDATA_REG8(0xC427)  /* Alias for compatibility */
-#define REG_NVME_QUEUE_CFG      XDATA_REG8(0xC428)
+/*
+ * C428: PARTIAL write. 0xAA->0x28 (writable mask 0x28 = bits 3,5).
+ *       Default 0x30 (bits 4,5). Bits 4 appears read-only.
+ */
+#define REG_NVME_QUEUE_CFG      XDATA_REG8(0xC428)  /* Queue cfg (PARTIAL: mask ~0x28) */
 #define   NVME_QUEUE_CFG_MASK_LO  0x03  // Bits 0-1: Queue config low
-#define   NVME_QUEUE_CFG_BIT3     0x08  // Bit 3: Queue config flag
+#define   NVME_QUEUE_CFG_BIT3     0x08  // Bit 3: Queue config flag (writable)
 #define REG_NVME_CMD_PARAM      XDATA_REG8(0xC429)
 #define   NVME_CMD_PARAM_TYPE    0xE0  // Bits 5-7: Command parameter type
 /*
@@ -1290,7 +1420,7 @@
 #define   NVME_DOORBELL_BIT3      0x08  // Bit 3: Queue config
 #define   NVME_DOORBELL_BIT4      0x10  // Bit 4: Queue config
 #define   NVME_DOORBELL_LINK_GATE 0x20  // Bit 5: NVMe link init gate
-#define REG_NVME_CMD_FLAGS      XDATA_REG8(0xC42B)
+#define REG_NVME_CMD_FLAGS      XDATA_REG8(0xC42B)  /* PARTIAL: 0xAA->0x02 (only bit 1 writable) */
 /*
  * USB MSC Engine (0xC42C-0xC42D)
  * Primary bulk IN trigger for MSC (Mass Storage Class) transfers.
@@ -1321,7 +1451,17 @@
  */
 #define REG_USB_MSC_CTRL        XDATA_REG8(0xC42C)  /* Write 0x01 to trigger bulk IN */
 #define REG_USB_MSC_STATUS      XDATA_REG8(0xC42D)  /* Read status; clear bit 0 after trigger */
-#define REG_NVME_CMD_PRP1       XDATA_REG8(0xC430)  // NVMe command PRP1 (init: 0xFF)
+/*
+ * DMA Transfer Latch (0xC430)
+ *
+ * One-shot hardware latch. R/O (CPU writes ignored).
+ *   0x00 after boot (no DMA has occurred).
+ *   0x01 after the first SCSI DMA write (CE00=0x03), stays 0x01 forever.
+ * Indicates "SCSI DMA engine has been used at least once".
+ * Stock firmware writes 0xFF during init (REG_NVME_CMD_PRP1) but the
+ * hardware clears it; it only goes to 0x01 from actual DMA activity.
+ */
+#define REG_NVME_CMD_PRP1       XDATA_REG8(0xC430)  /* DMA transfer latch (R/O: 0x00->0x01 on first DMA) */
 #define REG_NVME_CMD_PRP2       XDATA_REG8(0xC431)  // NVMe command PRP2 (init: 0xFF)
 #define REG_NVME_CMD_PRP3       XDATA_REG8(0xC432)  // NVMe PRP byte 2 (init: 0xFF)
 #define REG_NVME_CMD_PRP4       XDATA_REG8(0xC433)  // NVMe PRP byte 3 (init: 0xFF)
@@ -1352,10 +1492,37 @@
 #define REG_NVME_INIT_CTRL2_1   XDATA_REG8(0xC449)  // NVMe init ctrl2 byte 1 (0xFF)
 #define REG_NVME_INIT_CTRL2_2   XDATA_REG8(0xC44A)  // NVMe init ctrl2 byte 2 (0xFF)
 #define REG_NVME_INIT_CTRL2_3   XDATA_REG8(0xC44B)  // NVMe init ctrl2 byte 3 (0xFF)
-#define REG_NVME_CMD_STATUS_50  XDATA_REG8(0xC450)  // NVMe command status
+/*
+ * DMA Transfer Counters (0xC450-0xC46F)
+ *
+ * Read-only hardware registers that track SCSI DMA transfer sizes.
+ * All zero after boot; populated after first scsi_write.
+ *
+ * Empirically verified (stock firmware):
+ *   C450: 0x00 after boot, 0x04 after 4KB+ write. R/O.
+ *   C456, C45A, C46A: Transfer size in 256-byte units (R/O).
+ *     512B  -> 0x02    (512/256)
+ *     4KB   -> 0x10    (4096/256)
+ *     16KB  -> 0x40    (16384/256)
+ *   C45D, C45F, C46D, C46F: 0x01 after first write (flags). R/O.
+ *   C462: PARTIAL write (0xAA->0x0A). DMA entry register.
+ *
+ * These appear to be three parallel status channels tracking the
+ * same transfer from different pipeline stages.
+ */
+#define REG_NVME_CMD_STATUS_50  XDATA_REG8(0xC450)  /* DMA status (R/O, 0x04 after 4KB+ write) */
 #define REG_NVME_QUEUE_STATUS_51 XDATA_REG8(0xC451) // NVMe queue status
 #define   NVME_QUEUE_STATUS_51_MASK 0x1F  // Bits 0-4: Queue status index
+#define REG_DMA_XFER_SIZE_C456  XDATA_REG8(0xC456)  /* Transfer size in 256B units (R/O) */
+#define REG_DMA_XFER_SIZE_C45A  XDATA_REG8(0xC45A)  /* Transfer size in 256B units (R/O) */
+#define REG_DMA_XFER_SIZE_C46A  XDATA_REG8(0xC46A)  /* Transfer size in 256B units (R/O) */
 #define REG_DMA_ENTRY           XDATA_REG16(0xC462)
+/*
+ * DMA Direction / Queue End (0xC470)
+ *
+ * 0x00 after boot, 0xC0 after first scsi_write (bits 7+6 set). R/O.
+ * Bits 7:6 appear to be DMA active/direction flags latched by first transfer.
+ */
 #define REG_CMDQ_DIR_END        XDATA_REG16(0xC470)
 /*
  * NVMe Queue Busy (0xC471)
@@ -1377,12 +1544,76 @@
  */
 #define REG_NVME_QUEUE_BUSY     XDATA_REG8(0xC471)  /* Queue busy (R/O without NVMe) */
 #define   NVME_QUEUE_BUSY_BIT     0x01              /* Bit 0: Queue busy */
-#define REG_NVME_LINK_CTRL      XDATA_REG8(0xC472)  // NVMe link control
-#define REG_NVME_LINK_PARAM     XDATA_REG8(0xC473)  // NVMe link parameter (bit 4)
+#define REG_NVME_LINK_CTRL      XDATA_REG8(0xC472)  /* NVMe link control (PARTIAL: 0xAA->0x02, bit 1 only) */
+/*
+ * NVMe Link Parameter (0xC473)
+ *
+ * R/W. Default 0x66 after boot. Writing 0x00 clears it (verified).
+ * Used in NVMe link init under C42A bit 5 gate.
+ * WARNING: clearing this may affect MSC engine operation.
+ */
+#define REG_NVME_LINK_PARAM     XDATA_REG8(0xC473)  /* NVMe link param (PARTIAL: 0xAA->0x2A, mask 0x2A; default 0x66) */
+/*
+ * SCSI Command Counter (0xC478-0xC479)
+ *
+ * Hardware SCSI CDB counter. R/O (writes ignored, counter keeps running).
+ * Increments by 1 for each SCSI CDB processed (E4 read, E5 write, or
+ * 0x8A SCSI WRITE each count as 1 CDB). 8-bit wrapping counter.
+ * C479 = C478 - 1 always (C479 is one CDB behind C478).
+ *
+ * Useful for debugging: delta between reads tells you how many SCSI
+ * commands were processed.
+ */
+#define REG_SCSI_CMD_CNT_HI     XDATA_REG8(0xC478)  /* SCSI CDB counter (R/O, wrapping) */
+#define REG_SCSI_CMD_CNT_LO     XDATA_REG8(0xC479)  /* SCSI CDB counter - 1 (R/O) */
 #define REG_NVME_CMD_STATUS_C47A XDATA_REG8(0xC47A) // NVMe command status (used by usb_ep_loop)
+/*
+ * Queue Config (0xC47B, 0xC47D, 0xC47E)
+ *
+ * C47B: 0x01 after boot. R/W.
+ * C47D: 0x01 after boot, 0x00 after 4KB write (volatile). R/W.
+ * C47E: 0x40 after boot. R/W.
+ */
+#define REG_NVME_QUEUE_CFG_C47B XDATA_REG8(0xC47B)  /* Queue config (default: 0x01, R/W) */
+#define REG_NVME_QUEUE_CFG_C47D XDATA_REG8(0xC47D)  /* Queue config (default: 0x01, volatile, R/W) */
+#define REG_NVME_QUEUE_CFG_C47E XDATA_REG8(0xC47E)  /* Queue config (default: 0x40, R/W) */
+/*
+ * DMA Extended State (0xC487-0xC48A)
+ *
+ * C487: Transfer sequence counter. Changes with each scsi_write (R/O).
+ *       Values seen: 0x01, 0x02, 0x04 across different writes.
+ * C489: Toggles between 0x00 and 0x01 across writes (R/O).
+ * C48A: Always 0x20 (R/O). Possibly SRAM page size indicator.
+ */
+#define REG_DMA_SEQ_CTR         XDATA_REG8(0xC487)  /* DMA sequence counter (R/O, changes per write) */
+#define REG_DMA_TOGGLE          XDATA_REG8(0xC489)  /* DMA toggle 0/1 (R/O) */
+#define REG_DMA_PAGE_SIZE       XDATA_REG8(0xC48A)  /* Always 0x20 (R/O) */
+/*
+ * SCSI Command Tracking (0xC4B0-0xC4B5)
+ *
+ * All R/O. Updated by hardware after each SCSI command.
+ * C4B0-C4B1: Volatile, change with every scsi_write. Possibly a
+ *            hash or sequence number of the last processed CDB.
+ * C4B2: 0x84 after boot, 0x94 after first scsi_write (bit 4 set by DMA).
+ * C4B3: 0x02 after boot, changes to 0x0A then back to 0x02.
+ * C4B4-C4B5: Always 0x01 (R/O).
+ */
+#define REG_SCSI_CMD_TRACK_0    XDATA_REG8(0xC4B0)  /* SCSI cmd tracking (R/O, volatile) */
+#define REG_SCSI_CMD_TRACK_1    XDATA_REG8(0xC4B1)  /* SCSI cmd tracking (R/O, volatile) */
+#define REG_SCSI_CMD_TRACK_2    XDATA_REG8(0xC4B2)  /* 0x84->0x94 after first DMA (R/O) */
+#define REG_SCSI_CMD_TRACK_3    XDATA_REG8(0xC4B3)  /* (R/O) */
+#define REG_SCSI_CMD_TRACK_4    XDATA_REG8(0xC4B4)  /* Always 0x01 (R/O) */
+#define REG_SCSI_CMD_TRACK_5    XDATA_REG8(0xC4B5)  /* Always 0x01 (R/O) */
 #define REG_NVME_DMA_CTRL_C4E9  XDATA_REG8(0xC4E9)  // NVMe DMA control extended
 #define REG_NVME_PARAM_C4EA     XDATA_REG8(0xC4EA)  // NVMe parameter storage
-#define REG_NVME_PARAM_C4EB     XDATA_REG8(0xC4EB)  // NVMe parameter storage high
+#define REG_NVME_PARAM_C4EB     XDATA_REG8(0xC4EB)  /* NVMe parameter (R/O, default: 0x01) */
+/*
+ * DMA First-Transfer Flag (0xC4FB)
+ *
+ * 0x00 after boot, 0x01 after first scsi_write. Stays 0x01.
+ * Similar to C430 latch but in the C4xx address space.
+ */
+#define REG_DMA_FIRST_XFER      XDATA_REG8(0xC4FB)  /* 0->1 on first DMA (R/O latch) */
 /*
  * Transfer Control (0xC509)
  * Used by both NVMe and software DMA paths in dispatch_0206.
@@ -1783,12 +2014,38 @@
  *   - CE76-CE79 auto-increments after each sector
  */
 #define REG_SCSI_DMA_CTRL       XDATA_REG8(0xCE00)  /* Write 0x03 to start sector DMA, poll 0x00 for done */
-#define REG_SCSI_DMA_PARAM      XDATA_REG8(0xCE01)  /* DMA parameter (upper 2 bits | tag value) */
+#define REG_SCSI_DMA_PARAM      XDATA_REG8(0xCE01)  /* DMA parameter (upper 2 bits | tag value), R/W */
+/*
+ * CE02: Hardware toggle bit (R/O).
+ * Alternates between 0x00 and 0x01 on every read.  Likely a DMA
+ * engine busy/ready oscillator used for timing or synchronization.
+ */
+#define REG_SCSI_DMA_TOGGLE     XDATA_REG8(0xCE02)  /* Alternating 0/1 on read (R/O) */
+/*
+ * CE05: Always reads 0xFF (R/O).  Purpose unknown, possibly unused.
+ */
+#define REG_SCSI_DMA_CONST_FF   XDATA_REG8(0xCE05)  /* Always 0xFF (R/O) */
 /*
  * SCSI DMA SRAM Write Pointer (0xCE10-0xCE13)
  *
- * 32-bit PCI address in big-endian byte order.  Read-back of current SRAM
- * write pointer.  Observed initial value 0x00200000 (= SRAM base).
+ * 32-bit PCI address in big-endian byte order.  Read-only hardware register
+ * tracking the current SRAM write position during SCSI DMA transfers.
+ * CPU writes to CE10-CE13 are ignored (verified: writes don't stick).
+ *
+ * Initial value: 0x00200000 (= SRAM base).
+ *
+ * Behavior (empirically verified on stock firmware):
+ *   - Auto-advances as the MSC engine DMAs sectors from USB to SRAM.
+ *   - After a 512-byte scsi_write:  CE10 = 0x00204000 (advances by 0x4000)
+ *   - After a 64KB scsi_write:      CE10 = 0x00210000 (advances by 0x10000)
+ *   - The pointer advances by more than the actual data size (rounds up
+ *     to 0x4000 minimum, likely a hardware page/chunk granularity).
+ *   - Writing CE6E=0x00,CE6F=0x00 resets CE10 back to 0x00200000.
+ *   - Writing CE6E=0x00,CE6F=nonzero (as a pair) also sets CE10 to 0x00204000,
+ *     even without an actual DMA transfer.
+ *   - The XDATA 0xF000-0xFFFF window maps to PCI 0x00200000, so data
+ *     written via scsi_write(lba=0) always appears at 0xF000 regardless
+ *     of pointer position (LBA field is ignored by the hardware).
  *
  * Proxy trace (fresh boot):
  *   CE10=0x00 CE11=0x20 CE12=0x00 CE13=0x00  -> PCI 0x00200000
@@ -1797,8 +2054,29 @@
 #define REG_SCSI_DMA_SRAM_PTR_1 XDATA_REG8(0xCE11)  /* SRAM pointer byte 1 (BE: bits 23-16) */
 #define REG_SCSI_DMA_SRAM_PTR_2 XDATA_REG8(0xCE12)  /* SRAM pointer byte 2 (BE: bits 15-8) */
 #define REG_SCSI_DMA_SRAM_PTR_3 XDATA_REG8(0xCE13)  /* SRAM pointer byte 3 (BE: bits 7-0) */
+/*
+ * SCSI DMA Descriptor Pointer (0xCE20-0xCE22)
+ *
+ * R/O.  Reads as 0x50, 0xCE, 0x20 = little-endian pointer to 0xCE50.
+ * Likely a hardware pointer to the SCSI DMA parameter block at CE50+.
+ */
+#define REG_SCSI_DMA_DESC_PTR_0 XDATA_REG8(0xCE20)  /* Descriptor pointer LSB (R/O: 0x50) */
+#define REG_SCSI_DMA_DESC_PTR_1 XDATA_REG8(0xCE21)  /* Descriptor pointer (R/O: 0xCE) */
+#define REG_SCSI_DMA_DESC_PTR_2 XDATA_REG8(0xCE22)  /* Descriptor pointer MSB (R/O: 0x20) */
 #define REG_SCSI_DMA_CFG_CE36   XDATA_REG8(0xCE36)  /* SCSI DMA config */
 #define REG_SCSI_DMA_TAG_CE3A   XDATA_REG8(0xCE3A)  /* SCSI DMA tag storage */
+/*
+ * SCSI DMA Config (0xCE3C-0xCE3F)
+ *
+ * CE3C: 0x01 (R/O).
+ * CE3D: 0x03 (R/W). CE3E: 0x00 (R/W). CE3F: 0x04 (R/W).
+ * WARNING: writing to CE3D/CE3F can corrupt DMA state and cause
+ * subsequent scsi_writes to fail with USB endpoint errors.
+ */
+#define REG_SCSI_DMA_CFG_CE3C   XDATA_REG8(0xCE3C)  /* DMA config (R/O: 0x01) */
+#define REG_SCSI_DMA_CFG_CE3D   XDATA_REG8(0xCE3D)  /* DMA config (R/W, default: 0x03) DANGER */
+#define REG_SCSI_DMA_CFG_CE3E   XDATA_REG8(0xCE3E)  /* DMA config (R/W, default: 0x00) */
+#define REG_SCSI_DMA_CFG_CE3F   XDATA_REG8(0xCE3F)  /* DMA config (R/W, default: 0x04) DANGER */
 
 //=============================================================================
 // SCSI/Mass Storage DMA (0xCE40-0xCE97)
@@ -1819,8 +2097,17 @@
 #define REG_SCSI_DMA_PARAM1     XDATA_REG8(0xCE41)
 #define REG_SCSI_DMA_PARAM2     XDATA_REG8(0xCE42)
 #define REG_SCSI_DMA_PARAM3     XDATA_REG8(0xCE43)
-#define REG_SCSI_DMA_PARAM4     XDATA_REG8(0xCE44)
-#define REG_SCSI_DMA_PARAM5     XDATA_REG8(0xCE45)
+/*
+ * SCSI DMA Hardware Constants (0xCE44-0xCE49)
+ *
+ * R/W but contain a fixed pattern that does not change across writes:
+ *   CE44=0x50, CE45=0x05, CE46=0x55, CE47=0x50, CE48=0x05, CE49=0x55
+ * The pattern 0x50,0x05,0x55 repeats twice.  Purpose unknown.
+ * Possibly DMA timing or threshold configuration.
+ * Does NOT change after scsi_write of any size.
+ */
+#define REG_SCSI_DMA_PARAM4     XDATA_REG8(0xCE44)  /* Default: 0x50 (R/W) */
+#define REG_SCSI_DMA_PARAM5     XDATA_REG8(0xCE45)  /* Default: 0x05 (R/W) */
 #define REG_SCSI_TAG_IDX        XDATA_REG8(0xCE51)   /* SCSI tag index */
 /*
  * REG_SCSI_DMA_XFER_CNT (0xCE55)
@@ -1843,16 +2130,38 @@
 #define   SCSI_DMA_TAG_MASK       0x1F  /* Bits 0-4: Tag count (0-31) */
 #define REG_SCSI_DMA_QUEUE_STAT XDATA_REG8(0xCE67)
 #define   SCSI_DMA_QUEUE_MASK     0x0F  /* Bits 0-3: Queue status (0-15) */
-#define REG_XFER_STATUS_CE6C    XDATA_REG8(0xCE6C)   /* Transfer status CE6C (bit 7: ready) */
 /*
- * REG_SCSI_DMA_STATUS (0xCE6E-0xCE6F)
+ * Transfer Status (0xCE6C-0xCE6D)
  *
- * tinygrad clears this (writes 0x00, 0x00) after each scsi_write chunk.
- * Observed initial value: 0x00 0x00.
+ * CE6C: Default 0x20. Changes across scsi_writes.
+ * CE6D: Default 0x20, becomes 0x21 after scsi_write.
+ *       Bit 0 appears to be a "transfer occurred" flag.
+ */
+#define REG_XFER_STATUS_CE6C    XDATA_REG8(0xCE6C)   /* Transfer status (default: 0x20) */
+#define REG_XFER_STATUS_CE6D    XDATA_REG8(0xCE6D)   /* Transfer status (0x20->0x21 after write) */
+/*
+ * SCSI DMA Status / SRAM Pointer Reset (0xCE6E-0xCE6F)
+ *
+ * Controls the SRAM write pointer (CE10-CE13).  Both bytes are R/W.
+ *
+ * Writing CE6E=0x00, CE6F=0x00 resets CE10-CE13 back to 0x00200000.
+ * tinygrad does this after each scsi_write chunk to reset the pointer.
+ *
+ * After a scsi_write, the hardware sets CE6E to indicate transfer status:
+ *   512B-16KB write:  CE6E=0x0000, CE10 advances to 0x00204000
+ *   32KB write:       CE6E=0x0100, CE10 advances to 0x00208000
+ *   64KB write:       CE6E=0x0700, CE10 advances to 0x00210000
+ *
+ * Writing CE6F to a non-zero value (with CE6E=0x00) also advances
+ * CE10 to 0x00204000 even without a DMA transfer.  The low byte
+ * appears to be a chunk counter and the high byte a transfer ID.
+ *
+ * CE6E bits 0-3 are writable (mask 0x0F); bits 4-7 are ignored.
+ * CE6F bits 0-3 are writable (mask 0x0F); bits 4-7 are ignored.
  */
 #define REG_SCSI_DMA_STATUS     XDATA_REG16(0xCE6E)
-#define REG_SCSI_DMA_STATUS_L   XDATA_REG8(0xCE6E)   /* SCSI DMA status low byte */
-#define REG_SCSI_DMA_STATUS_H   XDATA_REG8(0xCE6F)   /* SCSI DMA status high byte */
+#define REG_SCSI_DMA_STATUS_L   XDATA_REG8(0xCE6E)   /* DMA status / SRAM pointer control (high) */
+#define REG_SCSI_DMA_STATUS_H   XDATA_REG8(0xCE6F)   /* DMA status / SRAM pointer control (low) */
 #define REG_SCSI_TRANSFER_CTRL  XDATA_REG8(0xCE70)
 /*
  * REG_SCSI_TRANSFER_MODE (0xCE72)
@@ -1883,9 +2192,17 @@
 #define REG_SCSI_BUF_ADDR1      XDATA_REG8(0xCE77)  /* PCI addr bits 15-8 */
 #define REG_SCSI_BUF_ADDR2      XDATA_REG8(0xCE78)  /* PCI addr bits 23-16 */
 #define REG_SCSI_BUF_ADDR3      XDATA_REG8(0xCE79)  /* PCI addr bits 31-24 (LE: MSB) */
-#define REG_SCSI_BUF_CTRL       XDATA_REG8(0xCE80)  /* SCSI buffer control global */
-#define REG_SCSI_BUF_THRESH_HI  XDATA_REG8(0xCE81)  /* SCSI buffer threshold high */
-#define REG_SCSI_BUF_THRESH_LO  XDATA_REG8(0xCE82)  /* SCSI buffer threshold low */
+/*
+ * SCSI Buffer Control (0xCE80-0xCE82)
+ *
+ * CE80: Default 0xFF. R/W.
+ * CE81: Default 0xFF. R/W.
+ * CE82: Default 0x1F. PARTIAL write (0xAA->0x2A, writable mask ~0x2A).
+ * CE84-CE85: 0x00. R/O.
+ */
+#define REG_SCSI_BUF_CTRL       XDATA_REG8(0xCE80)  /* SCSI buffer control (R/W, default: 0xFF) */
+#define REG_SCSI_BUF_THRESH_HI  XDATA_REG8(0xCE81)  /* SCSI buffer threshold high (R/W, default: 0xFF) */
+#define REG_SCSI_BUF_THRESH_LO  XDATA_REG8(0xCE82)  /* SCSI buffer threshold low (PARTIAL, default: 0x1F) */
 /*
  * REG_SCSI_BUF_FLOW (0xCE83)
  *
@@ -1945,17 +2262,37 @@
  *   CE89 = 0x03  (ready, idle, no pending transfer)
  *   CE55 = 0x00  (no transfer count)
  */
-#define REG_USB_DMA_ERROR       XDATA_REG8(0xCE86)  /* DMA error flags */
+/*
+ * USB Bulk DMA Handshake Registers (0xCE86-0xCE8F)
+ *
+ * Empirically verified register properties:
+ *   CE86: 0x08 after boot (bit 3). R/O. Error flags.
+ *   CE87: 0x11 after boot. R/O. DMA config/status.
+ *   CE88: 0x00 at idle. R/O (write 0x00 is consumed as trigger, not stored).
+ *         Volatile: toggles 0x00/0x01 between reads.
+ *   CE89: 0x03 at idle (bits 0+1 set = ready + CBW). Stable across reads.
+ *   CE8A: 0x04-0x05 (toggles). PARTIAL write (0xAA->0x04).
+ *   CE8B: 0x00. R/O.
+ *   CE8C: 0x08. R/O.
+ *   CE8D: Volatile (0x00/0x01). R/O.
+ *   CE8E: 0x00. R/O.
+ *   CE8F: 0x01. R/O.
+ */
+#define REG_USB_DMA_ERROR       XDATA_REG8(0xCE86)  /* DMA error flags (R/O, default: 0x08) */
 #define   USB_DMA_ERROR_BIT       0x10  /* Bit 4: DMA error flag (stock check at 0x349D) */
-#define REG_BULK_DMA_HANDSHAKE  XDATA_REG8(0xCE88)  /* Write 0x00 to start bulk DMA handshake */
-#define REG_USB_DMA_STATE       XDATA_REG8(0xCE89)  /* DMA handshake status */
+#define REG_USB_DMA_CFG         XDATA_REG8(0xCE87)  /* DMA config (R/O, default: 0x11) */
+#define REG_BULK_DMA_HANDSHAKE  XDATA_REG8(0xCE88)  /* Write 0x00 to start bulk DMA handshake (R/O read) */
+#define REG_USB_DMA_STATE       XDATA_REG8(0xCE89)  /* DMA handshake status (R/O) */
 #define   USB_DMA_STATE_READY     0x01  /* Bit 0: DMA ready/complete (poll after CE88 write) */
 #define   USB_DMA_STATE_CBW       0x02  /* Bit 1: 1=CBW in registers, 0=bulk data at 0x7000 */
 #define   USB_DMA_STATE_ERROR     0x04  /* Bit 2: set after handshake (not necessarily error) */
-#define REG_USB_DMA_SECTOR_CTRL XDATA_REG8(0xCE8A)  /* Per-sector DMA control */
-#define REG_XFER_MODE_CE95      XDATA_REG8(0xCE95)
-#define REG_SCSI_DMA_CMD_REG    XDATA_REG8(0xCE96)
-#define REG_SCSI_DMA_RESP_REG   XDATA_REG8(0xCE97)
+#define REG_USB_DMA_SECTOR_CTRL XDATA_REG8(0xCE8A)  /* Per-sector DMA control (PARTIAL write) */
+#define REG_USB_DMA_BUS_CTRL    XDATA_REG8(0xCE8C)  /* DMA bus control (R/O, default: 0x08) */
+#define REG_USB_DMA_BUSY        XDATA_REG8(0xCE8D)  /* DMA busy toggle (R/O, volatile 0/1) */
+#define REG_USB_DMA_READY       XDATA_REG8(0xCE8F)  /* DMA ready (R/O, default: 0x01) */
+#define REG_XFER_MODE_CE95      XDATA_REG8(0xCE95)  /* PARTIAL write (0xAA->0x0A) */
+#define REG_SCSI_DMA_CMD_REG    XDATA_REG8(0xCE96)  /* PARTIAL write (0xAA->0x0A) */
+#define REG_SCSI_DMA_RESP_REG   XDATA_REG8(0xCE97)  /* R/O, default: 0x20 */
 
 /*
  * =========================================================================
@@ -2016,15 +2353,55 @@
  *   E5 write XDATA[0x07EF] = 0x00              (re-arm SCSI write path)
  *   ... SCSI WRITE(16) ...
  *   E5 write XDATA[0x0171] = 0xFF,0xFF,0xFF    (completion flags)
- *   E5 write XDATA[0xCE6E] = 0x00,0x00         (clear DMA status)
+ *   E5 write XDATA[0xCE6E] = 0x00,0x00         (reset SRAM write pointer)
+ *
+ * === SRAM Write Pointer (CE10-CE13) and CE6E Reset ===
+ *
+ * Empirically verified on stock firmware via E4/E5 probing:
+ *
+ * CE10-CE13 is a read-only 32-bit big-endian PCI address tracking
+ * where the next DMA sector will be written in SRAM.  CPU writes
+ * to CE10-CE13 are ignored.
+ *
+ * The pointer auto-advances during scsi_write:
+ *   After 512B-16KB write: CE10 = 0x00204000 (advance 0x4000 = 16KB)
+ *   After 32KB write:      CE10 = 0x00208000 (advance 0x8000 = 32KB)
+ *   After 64KB write:      CE10 = 0x00210000 (advance 0x10000 = 64KB)
+ *
+ * Writing CE6E=0x00, CE6F=0x00 resets CE10 back to 0x00200000.
+ * This is why tinygrad clears CE6E after each chunk.
+ *
+ * The LBA field in the SCSI WRITE(16) CDB is ignored by the hardware.
+ * Data always goes to the current CE10 pointer position (initially
+ * 0x200000 = SRAM base = XDATA 0xF000 window).
  * =========================================================================
  */
 
 //=============================================================================
-// USB Descriptor Validation (0xCEB0-0xCEB3)
+// USB Descriptor Validation / DMA Config (0xCEB0-0xCEFF)
 //=============================================================================
+/*
+ * Extended DMA Configuration (0xCEB0-0xCEFF)
+ *
+ * Empirically observed on stock firmware (fresh boot):
+ *   CEB0=0x01, CEB3=0x01
+ *   CEC0=0xE4, CEC1=0x10, CEC2=0x50, CEC3=0xCE, CEC4=0xC0
+ *     (CEC2-CEC3 = 0xCE50 in LE, same as CE20-21 descriptor pointer)
+ *   CED2=0x10
+ *   CED9=0x3F, CEDA=0x1F, CEDB=0x1F, CEDC=0x1F
+ *   CEEF=0x7F
+ *   CEF0=0xF7, CEF1=0x07
+ *   CEF8=0x01
+ *   CEFF=0xFF
+ */
+#define REG_USB_DESC_VAL_CEB0   XDATA_REG8(0xCEB0)  /* Default: 0x01 */
 #define REG_USB_DESC_VAL_CEB2   XDATA_REG8(0xCEB2)
-#define REG_USB_DESC_VAL_CEB3   XDATA_REG8(0xCEB3)
+#define REG_USB_DESC_VAL_CEB3   XDATA_REG8(0xCEB3)  /* Default: 0x01 */
+#define REG_DMA_EXT_CFG_CEC0    XDATA_REG8(0xCEC0)  /* Default: 0xE4 */
+#define REG_DMA_EXT_CFG_CEC1    XDATA_REG8(0xCEC1)  /* Default: 0x10 */
+#define REG_DMA_EXT_PTR_CEC2    XDATA_REG8(0xCEC2)  /* Default: 0x50 (LE ptr to CE50 low) */
+#define REG_DMA_EXT_PTR_CEC3    XDATA_REG8(0xCEC3)  /* Default: 0xCE (LE ptr to CE50 high) */
+#define REG_DMA_EXT_CFG_CEC4    XDATA_REG8(0xCEC4)  /* Default: 0xC0 */
 
 //=============================================================================
 // CPU Link Control (0xCEEF-0xCEFF)

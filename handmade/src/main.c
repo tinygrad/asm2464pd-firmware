@@ -7,6 +7,9 @@
 #include "registers.h"
 #include "globals.h"
 
+#define USB3
+static uint8_t is_usb3;
+
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
 __sfr __at(0x88) TCON;
@@ -48,13 +51,23 @@ static __code const uint8_t dev_desc[] = {
   0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40,
   0xD1, 0xAD, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x01,
 };
+static __code const uint8_t dev_desc_30[] = {
+  0x12, 0x01, 0x20, 0x03, 0x00, 0x00, 0x00, 0x09,
+  0xD1, 0xAD, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x01,
+};
 static __code const uint8_t cfg_desc[] = {
-  0x09, 0x02, 0x2E, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,  /* wTotalLength=46 */
-  0x09, 0x04, 0x00, 0x00, 0x04, 0xFF, 0xFF, 0xFF, 0x00,  /* bNumEndpoints=4 */
+  0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,  /* wTotalLength=32 */
+  0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,  /* bNumEndpoints=2 */
   0x07, 0x05, 0x81, 0x02, 0x40, 0x00, 0x00,  /* EP1 IN bulk 64 */
   0x07, 0x05, 0x02, 0x02, 0x40, 0x00, 0x00,  /* EP2 OUT bulk 64 */
-  0x07, 0x05, 0x83, 0x02, 0x40, 0x00, 0x00,  /* EP3 IN bulk 64 */
-  0x07, 0x05, 0x04, 0x02, 0x40, 0x00, 0x00,  /* EP4 OUT bulk 64 */
+};
+static __code const uint8_t cfg_desc_30[] = {
+  0x09, 0x02, 0x2C, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,  /* wTotalLength=44 */
+  0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,  /* bNumEndpoints=2 */
+  0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,  /* EP1 IN bulk 1024 */
+  0x06, 0x30, 0x00, 0x00, 0x00, 0x00,         /* SS EP Companion */
+  0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,  /* EP2 OUT bulk 1024 */
+  0x06, 0x30, 0x00, 0x00, 0x00, 0x00,         /* SS EP Companion */
 };
 static __code const uint8_t bos_desc[] = {
   0x05, 0x0F, 0x16, 0x00, 0x02,
@@ -72,11 +85,21 @@ static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint8_t w
   uint8_t desc_len;
 
   if (desc_type == USB_DESC_TYPE_DEVICE) {
-    src = dev_desc;
-    desc_len = 18;
+    if (is_usb3) {
+      src = dev_desc_30;
+      desc_len = sizeof(dev_desc_30);
+    } else {
+      src = dev_desc;
+      desc_len = sizeof(dev_desc);
+    }
   } else if (desc_type == USB_DESC_TYPE_CONFIG) {
-    src = cfg_desc;
-    desc_len = sizeof(cfg_desc);
+    if (is_usb3) {
+      src = cfg_desc_30;
+      desc_len = sizeof(cfg_desc_30);
+    } else {
+      src = cfg_desc;
+      desc_len = sizeof(cfg_desc);
+    }
   } else if (desc_type == USB_DESC_TYPE_BOS) {
     src = bos_desc;
     desc_len = sizeof(bos_desc);
@@ -104,12 +127,23 @@ static void handle_usb_control(void) {
     wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
     wLenL = REG_USB_SETUP_WLEN_L;
 
+    if (!(bmReq & USB_SETUP_TYPE_VENDOR)) {
+      uart_puts("[C ");
+      uart_puthex(bmReq);
+      uart_puts(" ");
+      uart_puthex(bReq);
+      uart_puts(" ");
+      uart_puthex(wLenL);
+      uart_puts("]\n");
+    }
+
     if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
       // the USB_INT_MASK_GLOBAL enabled bulk mode, this makes it not get -1
       REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
       // does set address
       REG_USB_EP_CTRL_91D0 = 0x02;
       send_zlp_ack();
+      uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       handle_get_descriptor(wValH, wValL, wLenL);
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
@@ -185,19 +219,14 @@ static void handle_usb_control(void) {
       DESC_BUF[7] = ret_status;
       send_control_data(8);
     } else {
-      uart_puts("[C ");
-      uart_puthex(bmReq);
-      uart_puts(" ");
-      uart_puthex(bReq);
-      uart_puts(" ");
-      uart_puthex(wLenL);
-      uart_puts("]\n");
       if (wLenL == 0) send_zlp_ack();
     }
   } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
     REG_USB_DMA_TRIGGER = USB_DMA_RECV;
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
-  } else if (phase & USB_CTRL_PHASE_DATA_IN) {
+  } else if (phase & USB_CTRL_PHASE_DATA_IN || phase & USB_CTRL_PHASE_STAT_IN) {
+    // USB_CTRL_PHASE_DATA_IN on USB 2.0, USB_CTRL_PHASE_STAT_IN on USB 3.0
+    if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
     if (REG_USB_SETUP_BREQ == 0xF0) {
       /* PCIe TLP DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
        *   [0-3]  address low, little-endian
@@ -240,7 +269,7 @@ static void handle_usb_control(void) {
       uart_puts("\n");
       send_zlp_ack();
     }
-    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
   } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
   } else {
@@ -311,10 +340,20 @@ void int1_isr(void) __interrupt(1) {
 void main(void) {
   // without this, UART has parity
   REG_UART_LCR &= ~LCR_PARITY_MASK;
-  uart_puts("\n[BOOT]\n");
 
-  // without this, USB2 is flaky
-  REG_CPU_MODE = CPU_MODE_USB2;
+  #ifdef USB3
+    uart_puts("\n[BOOT USB3]\n");
+    // clear this to get USB3 interrupts
+    REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
+  #else
+    uart_puts("\n[BOOT]\n");
+
+    // without this, USB2 is flaky
+    REG_CPU_MODE = CPU_MODE_USB2;
+
+    // enable USB high speed mode
+    REG_USB_PHY_CTRL_91C0 = 0x10;
+  #endif
 
   // without this, it doesn't get an interrupt
   REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
@@ -322,16 +361,19 @@ void main(void) {
   // without this, no USB interrupts
   REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
 
-  // enable USB high speed mode
-  REG_USB_PHY_CTRL_91C0 = 0x10;
-
   // enable BULK interrupt. mislabeled
   REG_USB_EP0_LEN_H = 0xF0;
 
   // enables EP_COMPLETE interrupts
   REG_USB_DATA_L = 0x00;
 
-  uart_puts("[GO]\n");
+  // PCIe TLP engine values that don't change
+  REG_PCIE_TLP_CTRL   = 0x01;
+  REG_PCIE_TLP_LENGTH = 0x20;
+
+  uint8_t link = REG_USB_LINK_STATUS;
+  is_usb3 = (link >= USB_SPEED_SUPER) ? 1 : 0;
+  uart_puts("[GO link="); uart_puthex(link); uart_puts("]\n");
 
   // enable interrupts and chill
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
