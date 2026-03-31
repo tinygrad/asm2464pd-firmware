@@ -89,11 +89,8 @@ def main():
   # verify firmware set B213
   assert dev.read8(0xB213) == 0x01, f"B213=0x{dev.read8(0xB213):02X}, firmware didn't set TLP_CTRL"
 
-  # pcie stable with this
-  dev.write(0xCA06, 0x21)
-  dev.write(0xB403, 0x01)
-
   # === Assert PERST# + PCIe setup ===
+  dev.write(0xB403, 0x01)              # fix PCIe link stability
   dev.write(0xB480, 0x01)              # assert PERST#
   dev.write(0xB430, 0x00)              # clear tunnel link state
   dev.bank1_or_bits(0x6025, 0x80)          # TLP routing enable
@@ -110,7 +107,6 @@ def main():
 
   # === Re-assert/deassert PERST# to re-enumerate through bridge ===
   dev.write(0xB480, 0x00)              # deassert PERST#
-  #poll(dev, 0xB22B, 0x04, name="Link width x4")
 
   # === Status (reads don't count) ===
   print(f"\nTotal: {dev._wc} writes, {dev._rc} reads")
