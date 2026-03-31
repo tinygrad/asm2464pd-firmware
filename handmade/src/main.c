@@ -12,12 +12,8 @@ static uint8_t is_usb3;
 static uint8_t pcie_link_up;
 
 /* Streaming PCIe DMA state — configured via 0xF4 control message */
-static uint8_t dma_addr_hi;    /* addr[39:32] */
-static uint8_t dma_addr_2;     /* addr[23:16] */
-static uint8_t dma_addr_1;     /* addr[15:8] */
-static uint8_t dma_addr_0;     /* addr[7:0] */
 static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
-static uint8_t dma_count;      /* dwords per bulk packet (read mode) */
+static uint8_t dma_count;      /* dwords per bulk packet */
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
@@ -238,21 +234,17 @@ static void handle_usb_control(void) {
         dma_count = widx_l >> 2;
         if (dma_count == 0) dma_count = 128;
       }
-      dma_addr_0 = wValL & 0xFC;
-      dma_addr_1 = wValH;
-      dma_addr_2 = 0;
-      dma_addr_hi = REG_USB_SETUP_WIDX_H;
-
-      /* Pre-configure PCIe address registers that don't change per-dword */
+      /* Pre-configure PCIe address registers */
       REG_PCIE_FMT_TYPE = (dma_mode == 1) ? PCIE_FMT_MEM_WRITE64 : PCIE_FMT_MEM_READ64;
       REG_PCIE_BYTE_EN  = 0x0F;
       REG_PCIE_ADDR_HIGH   = 0;
       REG_PCIE_ADDR_HIGH_1 = 0;
       REG_PCIE_ADDR_HIGH_2 = 0;
-      REG_PCIE_ADDR_HIGH_3 = dma_addr_hi;
+      REG_PCIE_ADDR_HIGH_3 = REG_USB_SETUP_WIDX_H;
       REG_PCIE_ADDR_0 = 0;
-      REG_PCIE_ADDR_1 = dma_addr_2;
-      REG_PCIE_ADDR_2 = dma_addr_1;
+      REG_PCIE_ADDR_1 = 0;
+      REG_PCIE_ADDR_2 = wValH;
+      REG_PCIE_ADDR_3 = wValL & 0xFC;
 
       send_zlp_ack();
     } else {
@@ -305,14 +297,14 @@ static void handle_usb_control(void) {
   }
 }
 
-static void dma_addr_inc(void) {
-  dma_addr_0 += 4;
-  if (dma_addr_0 == 0) {
-    dma_addr_1++;
-    REG_PCIE_ADDR_2 = dma_addr_1;
-    if (dma_addr_1 == 0) {
-      dma_addr_2++;
-      REG_PCIE_ADDR_1 = dma_addr_2;
+static inline void dma_addr_inc(void) {
+  uint8_t a = REG_PCIE_ADDR_3 + 4;
+  REG_PCIE_ADDR_3 = a;
+  if (a == 0) {
+    a = REG_PCIE_ADDR_2 + 1;
+    REG_PCIE_ADDR_2 = a;
+    if (a == 0) {
+      REG_PCIE_ADDR_1 = REG_PCIE_ADDR_1 + 1;
     }
   }
 }
@@ -330,10 +322,7 @@ void handle_usb_bulk_data(void) {
         REG_PCIE_DATA_1 = *src++;
         REG_PCIE_DATA_2 = *src++;
         REG_PCIE_DATA_3 = *src++;
-        REG_PCIE_ADDR_3 = dma_addr_0;
-        REG_PCIE_STATUS  = PCIE_STATUS_ERROR;
-        REG_PCIE_STATUS  = PCIE_STATUS_COMPLETE;
-        REG_PCIE_STATUS  = PCIE_STATUS_KICK;
+        REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
         REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
         dma_addr_inc();
       }
@@ -342,10 +331,7 @@ void handle_usb_bulk_data(void) {
       __xdata uint8_t *dst = (__xdata uint8_t *)0xD800;
       uint8_t ci;
       for (ci = 0; ci < dma_count; ci++) {
-        REG_PCIE_ADDR_3 = dma_addr_0;
-        REG_PCIE_STATUS  = PCIE_STATUS_ERROR;
-        REG_PCIE_STATUS  = PCIE_STATUS_COMPLETE;
-        REG_PCIE_STATUS  = PCIE_STATUS_KICK;
+        REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
         REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
         while (!(REG_PCIE_STATUS & (PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE)));
         *dst++ = REG_PCIE_DATA_0;
