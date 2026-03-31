@@ -331,6 +331,10 @@ void main(void) {
   // enables EP_COMPLETE interrupts
   REG_USB_DATA_L = 0x00;
 
+  // PCIe TLP engine values that don't change
+  REG_PCIE_TLP_CTRL   = 0x01;
+  REG_PCIE_TLP_LENGTH = 0x20;
+
   uart_puts("[GO]\n");
 
   // enable interrupts and chill
