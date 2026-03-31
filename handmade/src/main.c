@@ -336,6 +336,9 @@ static inline void pcie_read_chunk(void) {
   }
   REG_USB_MSC_LENGTH = (uint8_t)(dma_count * 4);
   REG_USB_BULK_DMA_TRIGGER = 0x01;
+  // unfortunately we need this to block and prevent the next one clobbering it
+  // while the DMA out the USB is happening
+  while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
 }
 
 static inline void pcie_write_chunk(void) {
@@ -358,9 +361,11 @@ void handle_usb_bulk_data(void) {
   uint8_t bulk_cfg1, bulk_cfg2;
   bulk_cfg1 = REG_USB_EP_CFG1;
   bulk_cfg2 = REG_USB_EP_CFG2;
-  uart_puts("[BULK ");
-  uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
-  uart_puts("]\n");
+  if (dma_mode == 0) {
+    uart_puts("[BULK ");
+    uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
+    uart_puts("]\n");
+  }
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
     if (dma_mode == 1) {
       pcie_write_chunk();
