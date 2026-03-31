@@ -340,18 +340,15 @@ static void handle_usb_control(void) {
 
 /*=== ISR ===*/
 
-void int0_isr(void) __interrupt(0) {
-  uint8_t periph_status;
-  periph_status = REG_USB_PERIPH_STATUS;
-
-  if (periph_status & USB_PERIPH_BUS_RESET) {
-    uart_puts("[UNHANDLED RESET]\n");
-    return;
-  } else if (periph_status & USB_PERIPH_CONTROL) {
-    handle_usb_control();
-  } else if (periph_status & USB_PERIPH_BULK_DATA) {
-    uint8_t bulk_cfg1 = REG_USB_EP_CFG1;
-    if ((bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) && dma_mode == 1) {
+void handle_usb_bulk_data(void) {
+  uint8_t bulk_cfg1, bulk_cfg2;
+  bulk_cfg1 = REG_USB_EP_CFG1;
+  bulk_cfg2 = REG_USB_EP_CFG2;
+  uart_puts("[BULK ");
+  uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
+  uart_puts("]\n");
+  if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
+    if (dma_mode == 1) {
       /* Streaming write: 128 dwords from 0x7000 bulk OUT buffer */
       __xdata uint8_t *src = (__xdata uint8_t *)0x7000;
       uint8_t ci;
@@ -365,20 +362,43 @@ void int0_isr(void) __interrupt(0) {
         REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
         dma_addr_inc();
       }
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
     }
-    if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
-      if (dma_mode == 2) {
-        pcie_read_chunk();
-      } else {
-        /* Generic bulk IN: send 13 bytes from D800 */
-        REG_USB_MSC_LENGTH = 0x0d;
-        REG_USB_BULK_DMA_TRIGGER = 0x01;
-      }
+    // re-arm OUT
+    REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+  } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
+    if (dma_mode == 2) {
+      pcie_read_chunk();
+    } else {
+      /* Generic bulk IN: send 13 bytes from D800 */
+      REG_USB_MSC_LENGTH = 0x0d;
+      REG_USB_BULK_DMA_TRIGGER = 0x01;
     }
-    REG_USB_EP_CFG1 = bulk_cfg1;
+  } else if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_START) {
+    // ack
+  } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_START) {
+    // ack
+  } else {
+    // don't ack
+    return;
+  }
+  // ack
+  REG_USB_EP_CFG1 = bulk_cfg1;
+}
+
+void int0_isr(void) __interrupt(0) {
+  uint8_t periph_status;
+  periph_status = REG_USB_PERIPH_STATUS;
+
+  if (periph_status & USB_PERIPH_BUS_RESET) {
+    uart_puts("[UNHANDLED RESET]\n");
+    return;
+  } else if (periph_status & USB_PERIPH_CONTROL) {
+    handle_usb_control();
+  } else if (periph_status & USB_PERIPH_BULK_DATA) {
+    handle_usb_bulk_data();
   } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
     uint8_t ep = REG_USB_EP_READY;
+    uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts(" "); uart_puthex(REG_USB_EP_STATUS_90E3); uart_puts("]\n");
     REG_USB_EP_READY = ep;
     /* Bulk IN completed — chain next read if streaming */
     if (dma_mode == 2) {
