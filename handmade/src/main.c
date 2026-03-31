@@ -123,39 +123,6 @@ static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint8_t w
   send_control_data(wlen < desc_len ? wlen : desc_len);
 }
 
-/*=== PCIe streaming helpers ===*/
-
-static inline void dma_addr_inc(void) {
-  dma_addr_0 += 4;
-  if (dma_addr_0 == 0) {
-    dma_addr_1++;
-    REG_PCIE_ADDR_2 = dma_addr_1;
-    if (dma_addr_1 == 0) {
-      dma_addr_2++;
-      REG_PCIE_ADDR_1 = dma_addr_2;
-    }
-  }
-}
-
-/* Read dma_count dwords from PCIe into D800, then trigger bulk IN send */
-static void pcie_read_chunk(void) {
-  __xdata uint8_t *dst = (__xdata uint8_t *)0xD800;
-  uint8_t ci;
-  for (ci = 0; ci < dma_count; ci++) {
-    REG_PCIE_ADDR_3 = dma_addr_0;
-    REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
-    REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
-    while (!(REG_PCIE_STATUS & (PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE)));
-    *dst++ = REG_PCIE_DATA_0;
-    *dst++ = REG_PCIE_DATA_1;
-    *dst++ = REG_PCIE_DATA_2;
-    *dst++ = REG_PCIE_DATA_3;
-    dma_addr_inc();
-  }
-  REG_USB_MSC_LENGTH = (uint8_t)(dma_count * 4);
-  REG_USB_BULK_DMA_TRIGGER = 0x01;
-}
-
 /*=== USB Control Handler ===*/
 
 static void handle_usb_control(void) {
@@ -340,6 +307,53 @@ static void handle_usb_control(void) {
 
 /*=== ISR ===*/
 
+static inline void dma_addr_inc(void) {
+  dma_addr_0 += 4;
+  if (dma_addr_0 == 0) {
+    dma_addr_1++;
+    REG_PCIE_ADDR_2 = dma_addr_1;
+    if (dma_addr_1 == 0) {
+      dma_addr_2++;
+      REG_PCIE_ADDR_1 = dma_addr_2;
+    }
+  }
+}
+
+/* Read dma_count dwords from PCIe into D800, then trigger bulk IN send */
+static inline void pcie_read_chunk(void) {
+  __xdata uint8_t *dst = (__xdata uint8_t *)0xD800;
+  uint8_t ci;
+  for (ci = 0; ci < dma_count; ci++) {
+    REG_PCIE_ADDR_3 = dma_addr_0;
+    REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
+    REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
+    while (!(REG_PCIE_STATUS & (PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE)));
+    *dst++ = REG_PCIE_DATA_0;
+    *dst++ = REG_PCIE_DATA_1;
+    *dst++ = REG_PCIE_DATA_2;
+    *dst++ = REG_PCIE_DATA_3;
+    dma_addr_inc();
+  }
+  REG_USB_MSC_LENGTH = (uint8_t)(dma_count * 4);
+  REG_USB_BULK_DMA_TRIGGER = 0x01;
+}
+
+static inline void pcie_write_chunk(void) {
+  /* Streaming write: 128 dwords from 0x7000 bulk OUT buffer */
+  __xdata uint8_t *src = (__xdata uint8_t *)0x7000;
+  uint8_t ci;
+  for (ci = 0; ci < 128; ci++) {
+    REG_PCIE_DATA_0 = *src++;
+    REG_PCIE_DATA_1 = *src++;
+    REG_PCIE_DATA_2 = *src++;
+    REG_PCIE_DATA_3 = *src++;
+    REG_PCIE_ADDR_3 = dma_addr_0;
+    REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
+    REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
+    dma_addr_inc();
+  }
+}
+
 void handle_usb_bulk_data(void) {
   uint8_t bulk_cfg1, bulk_cfg2;
   bulk_cfg1 = REG_USB_EP_CFG1;
@@ -349,19 +363,7 @@ void handle_usb_bulk_data(void) {
   uart_puts("]\n");
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
     if (dma_mode == 1) {
-      /* Streaming write: 128 dwords from 0x7000 bulk OUT buffer */
-      __xdata uint8_t *src = (__xdata uint8_t *)0x7000;
-      uint8_t ci;
-      for (ci = 0; ci < 128; ci++) {
-        REG_PCIE_DATA_0 = *src++;
-        REG_PCIE_DATA_1 = *src++;
-        REG_PCIE_DATA_2 = *src++;
-        REG_PCIE_DATA_3 = *src++;
-        REG_PCIE_ADDR_3 = dma_addr_0;
-        REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
-        REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
-        dma_addr_inc();
-      }
+      pcie_write_chunk();
     } else {
       // dump what's at 0x7000
       uart_puts("[7000=");
@@ -404,12 +406,8 @@ void int0_isr(void) __interrupt(0) {
     handle_usb_bulk_data();
   } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
     uint8_t ep = REG_USB_EP_READY;
-    uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts(" "); uart_puthex(REG_USB_EP_STATUS_90E3); uart_puts("]\n");
+    //uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts(" "); uart_puthex(REG_USB_EP_STATUS_90E3); uart_puts("]\n");
     REG_USB_EP_READY = ep;
-    /* Bulk IN completed — chain next read if streaming */
-    if (dma_mode == 2) {
-      pcie_read_chunk();
-    }
   } else {
     uart_puts("[UNHANDLED INT0 ");
     uart_puthex(periph_status);
