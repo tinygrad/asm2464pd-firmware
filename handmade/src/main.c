@@ -362,6 +362,12 @@ void handle_usb_bulk_data(void) {
         REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
         dma_addr_inc();
       }
+    } else {
+      // dump what's at 0x7000
+      uart_puts("[7000=");
+      uart_puthex(XDATA_REG8(0x7000)); uart_puthex(XDATA_REG8(0x7001));
+      uart_puthex(XDATA_REG8(0x7002)); uart_puthex(XDATA_REG8(0x7003));
+      uart_puts("]\n");
     }
     // re-arm OUT
     REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
