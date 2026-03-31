@@ -33,3 +33,15 @@ You can reset the device with:
 ./ftdi_debug.py -rn
 
 If you don't need to change the code, this is faster than a reflash.
+
+=== Current Task ===
+
+This brings up PCIe on the device. However, it is not 100% reliable:
+
+make -C handmade flash && python3 pcie/pcie_bringup_min.py && python3 pcie/pcie_probe.py
+
+This is 100%, but it is slow:
+
+make -C handmade flash && python3 pcie/pcie_bringup.py && python3 pcie/pcie_probe.py
+
+You need to fix pcie_bringup_min to be 100% reliable.
