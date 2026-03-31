@@ -45,3 +45,6 @@ This is 100%, but it is slow:
 make -C handmade flash && python3 pcie/pcie_bringup.py && python3 pcie/pcie_probe.py
 
 You need to fix pcie_bringup_min to be 100% reliable.
+
+Do not insert time.sleep in places, you need to figure out what registers we need to poll for completion.
+We may also be missing some PHY or link configuration.
