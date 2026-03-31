@@ -82,52 +82,6 @@ def print_pcie_status(dev):
   print(f"  12V enable  (C659): 0x{c659:02X}  {'(on)' if c659 & 0x01 else '(off)'}")
   print(f"  Link status: {'UP' if link_up else 'DOWN'}")
 
-def phy_soft_reset(dev):
-  """PHY soft reset via RXPLL mode toggle, polls E712 for completion."""
-  print("  [phy_soft_reset]")
-  # CC37 |= 0x04 — enable RXPLL reset mode
-  dev.set_bits(0xCC37, 0x04)
-  # CA70 = 0x00, E780 = 0x00
-  dev.write(0xCA70, 0x00)
-  dev.write(0xE780, 0x00)
-  # E716 = 0x00, then 0x03 (reset and restore PCIe mode)
-  dev.write(0xE716, 0x00)
-  dev.write(0xE716, 0x03)
-  # Poll E712 for PHY PLL relock
-  poll(dev, 0xE712, 0x03, timeout_s=2.0, name="E712 PHY relock")
-  # CC37 &= ~0x04
-  dev.clear_bits(0xCC37, 0x04)
-
-  # E710 re-init
-  e710 = dev.read8(0xE710)
-  dev.write(0xE710, (e710 & 0xE0) | 0x04)
-  # CA81 clear, CA06 Gen3, B403 set
-  dev.clear_bits(0xCA81, 0x01)
-  ca06 = dev.read8(0xCA06)
-  dev.write(0xCA06, (ca06 & 0x1F) | 0x20)
-  dev.set_bits(0xB403, 0x01)
-  # Lane mask 0x0C (lanes 2,3 for Gen3 x2)
-  b431 = dev.read8(0xB431)
-  dev.write(0xB431, (b431 & 0xF0) | 0x0C)
-  # Save E710/CA06 and set up equalization
-  saved_e710 = dev.read8(0xE710) & 0x1F
-  e710 = dev.read8(0xE710)
-  dev.write(0xE710, (e710 & 0xE0) | 0x1F)
-  saved_ca06 = dev.read8(0xCA06) & 0xE0
-  dev.write(0xE751, 0x01)
-  # E764 training trigger sequence
-  e764 = dev.read8(0xE764)
-  dev.write(0xE764, (e764 & 0xF7) | 0x08)  # set bit 3
-  e764 = dev.read8(0xE764)
-  dev.write(0xE764, e764 & 0xFB)            # clear bit 2
-  e764 = dev.read8(0xE764)
-  dev.write(0xE764, e764 & 0xFE)            # clear bit 0
-  e764 = dev.read8(0xE764)
-  dev.write(0xE764, (e764 & 0xFD) | 0x02)   # set bit 1
-  # Poll E762 bit 4 for link ok (instead of 2s timer_wait)
-  print("  [polling E762 for PHY link...]")
-  poll(dev, 0xE762, 0x10, timeout_s=5.0, name="E762 RXPLL link ok")
-
 def main():
   dev = ASM2464PD()
   dev.open()
@@ -135,7 +89,9 @@ def main():
   # verify firmware set B213
   assert dev.read8(0xB213) == 0x01, f"B213=0x{dev.read8(0xB213):02X}, firmware didn't set TLP_CTRL"
 
-  phy_soft_reset(dev)
+  # pcie stable with this
+  dev.write(0xCA06, 0x21)
+  dev.write(0xB403, 0x01)
 
   # === Assert PERST# + PCIe setup ===
   dev.write(0xB480, 0x01)              # assert PERST#
