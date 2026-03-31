@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure PCIe VRAM read/write speed via streaming bulk transfers.
 
-0xF4 control message configures base addr + mode, then bulk streams raw dwords.
+0xF0 control message configures base addr + mode, then bulk streams raw dwords.
 Firmware loops internally — one large bulk transfer per direction.
 """
 
@@ -16,13 +16,18 @@ EP_OUT = 0x02
 EP_IN = 0x81
 READ_CHUNK = 16  # 16 dwords = 64 bytes = 1 full bulk packet (no short packet termination)
 
+MWR64 = 0x60
+MRD64 = 0x20
+
 def dma_setup(handle, addr, mode, count=0):
-  """0xF4: wValue low = mode[1:0] | (count[5:0] << 2). DATA_OUT = addr[8 bytes LE]."""
-  wval = (mode & 0x03) | ((count & 0x3F) << 2)
-  payload = struct.pack('<II', addr & 0xFFFFFFFF, addr >> 32)
-  buf = (ctypes.c_ubyte * 8)(*payload)
-  ret = libusb.libusb_control_transfer(handle, 0x40, 0xF4, wval, 0, buf, 8, 5000)
-  assert ret >= 0, f"F4 setup failed: {ret}"
+  """0xF0: wValue = fmt_type|(be<<8), wIndex = mode|(count<<2). DATA_OUT = addr[8] + value[4]."""
+  fmt = {0: 0, 1: MWR64, 2: MRD64}[mode]
+  wval = fmt | (0x0F << 8)
+  widx = (mode & 0x03) | ((count & 0x3F) << 2)
+  payload = struct.pack('<II', addr & 0xFFFFFFFF, addr >> 32) + struct.pack('>I', 0)
+  buf = (ctypes.c_ubyte * 12)(*payload)
+  ret = libusb.libusb_control_transfer(handle, 0x40, 0xF0, wval, widx, buf, 12, 5000)
+  assert ret >= 0, f"F0 setup failed: {ret}"
 
 def main():
   handle, ctx = usb_open()
@@ -55,7 +60,7 @@ def main():
   ret = libusb.libusb_bulk_transfer(handle, EP_OUT, buf, len(data), ctypes.byref(transferred), 30000)
   t_write = time.monotonic() - t0
   assert ret == 0, f"bulk write failed: {ret} (transferred {transferred.value})"
-  dma_setup(handle, 0, 0)
+
   print(f"  {t_write:.3f}s ({SIZE / t_write / 1024:.1f} KB/s)")
 
   print(f"Reading {SIZE // 1024} KB from VRAM...")
@@ -70,7 +75,6 @@ def main():
     assert ret == 0, f"read failed: {ret}"
     result.extend(struct.unpack(f'>{transferred.value // 4}I', bytes(resp[:transferred.value])))
   t_read = time.monotonic() - t0
-  dma_setup(handle, 0, 0)
   for i in range(total_dwords):
     if result[i] != i:
       if errors < 10:

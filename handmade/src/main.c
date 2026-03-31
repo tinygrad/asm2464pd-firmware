@@ -10,7 +10,7 @@
 //#define USB3
 static uint8_t is_usb3;
 
-/* Streaming PCIe DMA state — configured via 0xF4 control message */
+/* Streaming PCIe DMA state — configured via 0xF0 control message */
 static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
 static uint8_t dma_count;      /* dwords per read chunk */
 static uint8_t dma_addr_0;     /* shadow of ADDR_3 (addr[7:0]) — written BEFORE trigger */
@@ -221,17 +221,18 @@ static void handle_usb_control(void) {
       XDATA_REG8(addr) = val;
       if (bank) DPX = 0x00;
       send_zlp_ack();
+    /* 0xF0 OUT: PCIe TLP engine.
+     *   wValue = fmt_type | (byte_enable << 8)
+     *   wIndex low[1:0] = mode (0=single TLP, 1=stream write, 2=stream read)
+     *   wIndex low[7:2] = dwords per read chunk (0 → 128 for writes)
+     *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 BE] */
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
-      /* PCIe TLP request — OUT phase: set fmt_type + byte_enable from wValue.
-       * DATA_OUT will carry the address and value.
-       * wValue = fmt_type | (byte_enable << 8) */
-      REG_PCIE_FMT_TYPE = wValL;
-      REG_PCIE_BYTE_EN  = wValH;
-      /* Don't send ZLP — wait for DATA_OUT phase */
+      /* Don't configure yet — wait for DATA_OUT phase.
+       * SETUP params (wValue/wIndex) are readable from registers in DATA_OUT. */
+
+    /* 0xF0 IN: read TLP completion (mode=0 only). Returns 8 bytes. */
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
-      /* PCIe TLP result — IN phase: poll B296 on-chip, return completion data.
-       * The OUT phase already cleared, triggered, and armed B296. */
-      uint8_t ret_status = 0xFF; // timeout fallthrough
+      uint8_t ret_status = 0xFF;
       uint16_t t;
       for (t = 0; t < 50000; t++) {
         uint8_t s = REG_PCIE_STATUS;
@@ -259,16 +260,6 @@ static void handle_usb_control(void) {
       }
       DESC_BUF[7] = ret_status;
       send_control_data(8);
-
-    /* 0xF4: configure streaming bulk DMA.
-     *   wValue low[1:0] = mode (0=stop, 1=write, 2=read)
-     *   wValue low[7:2] = dwords per read chunk (0 → 128 for writes)
-     *   DATA_OUT: 8 bytes = addr_lo[4 LE] + addr_hi[4 LE] (same as 0xF0) */
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF4) {
-      dma_mode = wValL & 0x03;
-      dma_count = wValL >> 2;
-      if (dma_count == 0) dma_count = 128;
-      /* Wait for DATA_OUT phase with address */
     } else {
       if (wLenL == 0) send_zlp_ack();
     }
@@ -279,53 +270,54 @@ static void handle_usb_control(void) {
     // USB_CTRL_PHASE_DATA_IN on USB 2.0, USB_CTRL_PHASE_STAT_IN on USB 3.0
     if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
     if (REG_USB_SETUP_BREQ == 0xF0) {
-      /* PCIe TLP DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
-       *   [0-3]  address low, little-endian
-       *   [4-7]  address high, little-endian
-       *   [8-11] value, big-endian (writes only)
-       * fmt_type/byte_enable already written to B210/B217 in SETUP phase. */
+      /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
+       *   [0-3]  address low (LE), [4-7] address high (LE), [8-11] value (BE)
+       * Read SETUP params now and configure everything atomically. */
+      uint8_t fmt_type = REG_USB_SETUP_WVAL_L;
+      uint8_t byte_en  = REG_USB_SETUP_WVAL_H;
+      uint8_t widx_l   = REG_USB_SETUP_WIDX_L;
+      uint8_t mode  = widx_l & 0x03;
+      uint8_t count = widx_l >> 2;
+      if (count == 0) count = 128;
 
-      /* Write value to B220-B223 if write request (data payload present) */
-      if (REG_PCIE_FMT_TYPE & PCIE_FMT_HAS_DATA) {
-        REG_PCIE_DATA_0     = DESC_BUF[8];
-        REG_PCIE_DATA_1     = DESC_BUF[9];
-        REG_PCIE_DATA_2     = DESC_BUF[10];
-        REG_PCIE_DATA_3     = DESC_BUF[11];
+      /* Configure PCIe TLP engine */
+      REG_PCIE_FMT_TYPE   = fmt_type;
+      REG_PCIE_BYTE_EN    = byte_en;
+      REG_PCIE_ADDR_0     = DESC_BUF[3];
+      REG_PCIE_ADDR_1     = DESC_BUF[2];
+      REG_PCIE_ADDR_2     = DESC_BUF[1];
+      REG_PCIE_ADDR_3     = DESC_BUF[0];
+      REG_PCIE_ADDR_HIGH   = DESC_BUF[7];
+      REG_PCIE_ADDR_HIGH_1 = DESC_BUF[6];
+      REG_PCIE_ADDR_HIGH_2 = DESC_BUF[5];
+      REG_PCIE_ADDR_HIGH_3 = DESC_BUF[4];
+
+      if (mode == 0) {
+        /* Single TLP: fire with data from DESC_BUF[8-11] */
+        if (fmt_type & PCIE_FMT_HAS_DATA) {
+          REG_PCIE_DATA_0 = DESC_BUF[8];
+          REG_PCIE_DATA_1 = DESC_BUF[9];
+          REG_PCIE_DATA_2 = DESC_BUF[10];
+          REG_PCIE_DATA_3 = DESC_BUF[11];
+        }
+        REG_PCIE_STATUS  = PCIE_STATUS_ERROR;
+        REG_PCIE_STATUS  = PCIE_STATUS_COMPLETE;
+        REG_PCIE_STATUS  = PCIE_STATUS_KICK;
+        REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
+      } else {
+        /* Streaming: set address shadows for auto-increment */
+        dma_addr_0 = DESC_BUF[0] & 0xFC;
+        dma_addr_1 = DESC_BUF[1];
+        dma_addr_2 = DESC_BUF[2];
+        dma_count  = count;
       }
-      /* Address: LE to BE swap into B218-B21F */
-      REG_PCIE_ADDR_0      = DESC_BUF[3];
-      REG_PCIE_ADDR_1      = DESC_BUF[2];
-      REG_PCIE_ADDR_2      = DESC_BUF[1];
-      REG_PCIE_ADDR_3      = DESC_BUF[0];
-      REG_PCIE_ADDR_HIGH   = DESC_BUF[7];
-      REG_PCIE_ADDR_HIGH_1 = DESC_BUF[6];
-      REG_PCIE_ADDR_HIGH_2 = DESC_BUF[5];
-      REG_PCIE_ADDR_HIGH_3 = DESC_BUF[4];
-      /* Stock sequence: clear error, clear completion, arm, then trigger */
-      REG_PCIE_STATUS  = PCIE_STATUS_ERROR;
-      REG_PCIE_STATUS  = PCIE_STATUS_COMPLETE;
-      REG_PCIE_STATUS  = PCIE_STATUS_KICK;
-      REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
-      send_zlp_ack();
-    } else if (REG_USB_SETUP_BREQ == 0xF4) {
-      /* 0xF4 DATA_OUT: 8 bytes at DESC_BUF = addr_lo[4 LE] + addr_hi[4 LE] */
-      dma_addr_0 = DESC_BUF[0] & 0xFC;
-      dma_addr_1 = DESC_BUF[1];
-      dma_addr_2 = DESC_BUF[2];
 
-      REG_PCIE_FMT_TYPE = (dma_mode == 1) ? PCIE_FMT_MEM_WRITE64 : PCIE_FMT_MEM_READ64;
-      REG_PCIE_BYTE_EN  = 0x0F;
-      REG_PCIE_ADDR_0      = DESC_BUF[3];
-      REG_PCIE_ADDR_1      = DESC_BUF[2];
-      REG_PCIE_ADDR_2      = DESC_BUF[1];
-      REG_PCIE_ADDR_HIGH   = DESC_BUF[7];
-      REG_PCIE_ADDR_HIGH_1 = DESC_BUF[6];
-      REG_PCIE_ADDR_HIGH_2 = DESC_BUF[5];
-      REG_PCIE_ADDR_HIGH_3 = DESC_BUF[4];
+      /* Update dma_mode LAST — this arms the bulk/EP_COMPLETE handlers */
+      dma_mode = mode;
 
       send_zlp_ack();
 
-      if (dma_mode == 2) {
+      if (mode == 2) {
         pcie_read_chunk();
       }
     }
@@ -358,9 +350,13 @@ void int0_isr(void) __interrupt(0) {
 
   if (periph_status & USB_PERIPH_BUS_RESET) {
     uart_puts("[UNHANDLED RESET]\n");
-  } else if (periph_status & USB_PERIPH_CONTROL) {
+    return;
+  }
+  if (periph_status & USB_PERIPH_CONTROL) {
     handle_usb_control();
-  } else if (periph_status & USB_PERIPH_BULK_DATA) {
+    periph_status = REG_USB_PERIPH_STATUS;  /* re-check for pending bulk */
+  }
+  if (periph_status & USB_PERIPH_BULK_DATA) {
     uint8_t bulk_cfg1 = REG_USB_EP_CFG1;
     if ((bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) && dma_mode == 1) {
       /* Streaming write: 128 dwords from 0x7000 bulk OUT buffer */
