@@ -316,10 +316,6 @@ static void handle_usb_control(void) {
       dma_mode = mode;
 
       send_zlp_ack();
-
-      if (mode == 2) {
-        pcie_read_chunk();
-      }
     }
     if (REG_USB_SETUP_BREQ == 0xF1) {
       // test packet
@@ -351,12 +347,9 @@ void int0_isr(void) __interrupt(0) {
   if (periph_status & USB_PERIPH_BUS_RESET) {
     uart_puts("[UNHANDLED RESET]\n");
     return;
-  }
-  if (periph_status & USB_PERIPH_CONTROL) {
+  } else if (periph_status & USB_PERIPH_CONTROL) {
     handle_usb_control();
-    periph_status = REG_USB_PERIPH_STATUS;  /* re-check for pending bulk */
-  }
-  if (periph_status & USB_PERIPH_BULK_DATA) {
+  } else if (periph_status & USB_PERIPH_BULK_DATA) {
     uint8_t bulk_cfg1 = REG_USB_EP_CFG1;
     if ((bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) && dma_mode == 1) {
       /* Streaming write: 128 dwords from 0x7000 bulk OUT buffer */
@@ -374,10 +367,19 @@ void int0_isr(void) __interrupt(0) {
       }
       REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
     }
+    if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
+      if (dma_mode == 2) {
+        pcie_read_chunk();
+      } else {
+        /* Generic bulk IN: send 13 bytes from D800 */
+        REG_USB_MSC_LENGTH = 0x0d;
+        REG_USB_BULK_DMA_TRIGGER = 0x01;
+      }
+    }
     REG_USB_EP_CFG1 = bulk_cfg1;
   } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
-    REG_USB_EP_STATUS_90E3 = 0x02;
-    REG_USB_EP_READY = 0x01;
+    uint8_t ep = REG_USB_EP_READY;
+    REG_USB_EP_READY = ep;
     /* Bulk IN completed — chain next read if streaming */
     if (dma_mode == 2) {
       pcie_read_chunk();
