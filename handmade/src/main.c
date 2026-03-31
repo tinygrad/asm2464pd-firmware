@@ -261,35 +261,17 @@ static void handle_usb_control(void) {
       send_control_data(8);
 
     /* 0xF4: configure streaming bulk DMA.
-     *   wValue = addr[15:0]
-     *   wIndex low[1:0] = mode (0=stop, 1=write, 2=read)
-     *   wIndex low[7:2] = dwords per read chunk (0 → 128 for writes)
-     *   wIndex high = addr[39:32] */
+     *   wValue low[1:0] = mode (0=stop, 1=write, 2=read)
+     *   wValue low[7:2] = dwords per read chunk (0 → 128 for writes)
+     *   DATA_OUT: 8 bytes = addr_lo[4 LE] + addr_hi[4 LE] (same as 0xF0) */
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF4) {
-      uint8_t widx_l = REG_USB_SETUP_WIDX_L;
-      dma_mode = widx_l & 0x03;
-      dma_count = widx_l >> 2;
+      dma_mode = wValL & 0x03;
+      dma_count = wValL >> 2;
       if (dma_count == 0) dma_count = 128;
-
-      dma_addr_0 = wValL & 0xFC;
-      dma_addr_1 = wValH;
-      dma_addr_2 = 0;
-
-      REG_PCIE_FMT_TYPE = (dma_mode == 1) ? PCIE_FMT_MEM_WRITE64 : PCIE_FMT_MEM_READ64;
-      REG_PCIE_BYTE_EN  = 0x0F;
-      REG_PCIE_ADDR_HIGH   = 0;
-      REG_PCIE_ADDR_HIGH_1 = 0;
-      REG_PCIE_ADDR_HIGH_2 = 0;
-      REG_PCIE_ADDR_HIGH_3 = REG_USB_SETUP_WIDX_H;
-      REG_PCIE_ADDR_0 = 0;
-      REG_PCIE_ADDR_1 = dma_addr_2;
-      REG_PCIE_ADDR_2 = dma_addr_1;
-
-      send_zlp_ack();
-
-      if (dma_mode == 2) {
-        pcie_read_chunk();
+      if (dma_mode == 0) {
+        send_zlp_ack();  // stop mode — no data phase
       }
+      /* else: wait for DATA_OUT phase with address */
     } else {
       if (wLenL == 0) send_zlp_ack();
     }
@@ -327,6 +309,38 @@ static void handle_usb_control(void) {
       REG_PCIE_STATUS  = PCIE_STATUS_COMPLETE;
       REG_PCIE_STATUS  = PCIE_STATUS_KICK;
       REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
+      send_zlp_ack();
+    } else if (REG_USB_SETUP_BREQ == 0xF4) {
+      /* 0xF4 DATA_OUT: 8 bytes at DESC_BUF = addr_lo[4 LE] + addr_hi[4 LE] */
+      dma_addr_0 = DESC_BUF[0] & 0xFC;
+      dma_addr_1 = DESC_BUF[1];
+      dma_addr_2 = DESC_BUF[2];
+
+      REG_PCIE_FMT_TYPE = (dma_mode == 1) ? PCIE_FMT_MEM_WRITE64 : PCIE_FMT_MEM_READ64;
+      REG_PCIE_BYTE_EN  = 0x0F;
+      REG_PCIE_ADDR_0      = DESC_BUF[3];
+      REG_PCIE_ADDR_1      = DESC_BUF[2];
+      REG_PCIE_ADDR_2      = DESC_BUF[1];
+      REG_PCIE_ADDR_HIGH   = DESC_BUF[7];
+      REG_PCIE_ADDR_HIGH_1 = DESC_BUF[6];
+      REG_PCIE_ADDR_HIGH_2 = DESC_BUF[5];
+      REG_PCIE_ADDR_HIGH_3 = DESC_BUF[4];
+
+      send_zlp_ack();
+
+      if (dma_mode == 2) {
+        pcie_read_chunk();
+      }
+    }
+    if (REG_USB_SETUP_BREQ == 0xF1) {
+      // test packet
+      uart_puts("[F1 ");
+      uart_puthex(DESC_BUF[0]);
+      uart_puthex(DESC_BUF[1]);
+      uart_puthex(DESC_BUF[2]);
+      uart_puthex(DESC_BUF[3]);
+      uart_puts("]");
+      uart_puts("\n");
       send_zlp_ack();
     }
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
