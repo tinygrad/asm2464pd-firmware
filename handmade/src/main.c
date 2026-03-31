@@ -268,10 +268,7 @@ static void handle_usb_control(void) {
       dma_mode = wValL & 0x03;
       dma_count = wValL >> 2;
       if (dma_count == 0) dma_count = 128;
-      if (dma_mode == 0) {
-        send_zlp_ack();  // stop mode — no data phase
-      }
-      /* else: wait for DATA_OUT phase with address */
+      /* Wait for DATA_OUT phase with address */
     } else {
       if (wLenL == 0) send_zlp_ack();
     }

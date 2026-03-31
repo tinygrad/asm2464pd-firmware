@@ -19,14 +19,9 @@ READ_CHUNK = 16  # 16 dwords = 64 bytes = 1 full bulk packet (no short packet te
 def dma_setup(handle, addr, mode, count=0):
   """0xF4: wValue low = mode[1:0] | (count[5:0] << 2). DATA_OUT = addr[8 bytes LE]."""
   wval = (mode & 0x03) | ((count & 0x3F) << 2)
-  if mode == 0:
-    # stop — no data phase
-    ret = libusb.libusb_control_transfer(handle, 0x40, 0xF4, wval, 0, None, 0, 5000)
-  else:
-    # send 8-byte address via data phase (same LE format as 0xF0)
-    payload = struct.pack('<II', addr & 0xFFFFFFFF, addr >> 32)
-    buf = (ctypes.c_ubyte * 8)(*payload)
-    ret = libusb.libusb_control_transfer(handle, 0x40, 0xF4, wval, 0, buf, 8, 5000)
+  payload = struct.pack('<II', addr & 0xFFFFFFFF, addr >> 32)
+  buf = (ctypes.c_ubyte * 8)(*payload)
+  ret = libusb.libusb_control_transfer(handle, 0x40, 0xF4, wval, 0, buf, 8, 5000)
   assert ret >= 0, f"F4 setup failed: {ret}"
 
 def main():
