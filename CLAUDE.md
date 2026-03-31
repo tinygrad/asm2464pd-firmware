@@ -94,4 +94,4 @@ Traceback (most recent call last):
                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 RuntimeError: EP 0x81 error: 2
 
-You need to fix this
+You need to fix this. You can read and write registers with 0xe4/0xe5 if you need to change things. You can read and disassemble the running firmware in fw_tinygrad.bin
