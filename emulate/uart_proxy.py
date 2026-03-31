@@ -233,6 +233,30 @@ class UARTProxy:
 
             return byte0
 
+    def poll_interrupts(self):
+        """
+        Actively poll for pending interrupts by sending a lightweight echo command.
+
+        The proxy firmware only sends interrupt signals (0x7E <mask>) after processing
+        a command response. If the emulator is in a tight loop without MMIO, interrupts
+        accumulate on the proxy side but are never delivered. This method sends a cheap
+        echo command to trigger delivery of any pending interrupt signals.
+
+        This should be called periodically (e.g., every N emulator cycles) to ensure
+        timely interrupt delivery even when firmware isn't doing MMIO.
+        """
+        # First check if we already have pending interrupts queued
+        if self.pending_interrupts:
+            return
+
+        # Send a quick echo to trigger interrupt delivery from the proxy.
+        # The proxy checks for new interrupts after processing each command
+        # and sends 0x7E <mask> if any are pending.
+        self._write_bytes(bytes([CMD_ECHO, 0x00]))
+        self._read_response("POLL_INT")
+        # Any interrupt signals received during _read_response are queued
+        # in self.pending_interrupts
+
     def get_pending_interrupt(self) -> Optional[int]:
         """
         Get next pending interrupt if any.

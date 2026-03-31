@@ -165,7 +165,24 @@ class Emulator:
         return not self.cpu.halted
     
     def _check_proxy_interrupts(self):
-        """Check for and handle interrupts from proxy hardware."""
+        """Check for and handle interrupts from proxy hardware.
+
+        The proxy firmware only sends interrupt signals piggyback on command responses.
+        If the emulated firmware is in a tight loop without MMIO, interrupts won't be
+        delivered. We periodically send a lightweight echo command to poll for pending
+        interrupts from the real hardware.
+        """
+        # Periodically poll for interrupts even when no MMIO is happening.
+        # Every 512 steps, send a cheap echo to trigger interrupt delivery.
+        # This adds ~130us overhead per poll (UART roundtrip), so we don't
+        # want to poll too aggressively. 512 steps at ~1us/step = ~0.5ms between polls.
+        if not hasattr(self, '_poll_counter'):
+            self._poll_counter = 0
+        self._poll_counter += 1
+        if self._poll_counter >= 512:
+            self._poll_counter = 0
+            self.proxy.poll_interrupts()
+
         int_num = self.proxy.get_pending_interrupt()
         if int_num is not None:
             # Map interrupt number to CPU interrupt flag

@@ -3047,24 +3047,31 @@ def create_hardware_hooks(memory: 'Memory', hw: HardwareState, proxy: 'UARTProxy
         proxy_mask = []
 
     # Hardware register ranges (all >= 0x6000)
-    # NOTE: 0x7000-0x7FFF is flash buffer RAM, NOT hardware registers
-    mmio_ranges = [
-        (0x8000, 0x9000),   # USB/SCSI Data Buffer
-        (0x9000, 0x9400),   # USB Interface
-        (0x92C0, 0x9300),   # Power Management
-        (0x9E00, 0xA000),   # USB Control Buffer
-        (0xB200, 0xB900),   # PCIe Passthrough
-        (0xC000, 0xC100),   # UART
-        (0xC400, 0xC600),   # NVMe Interface
-        (0xC600, 0xC700),   # PHY Extended
-        (0xC800, 0xC900),   # Interrupt/DMA/Flash
-        (0xCA00, 0xCB00),   # PD Controller
-        (0xCC00, 0xCF00),   # Timer/CPU/SCSI
-        (0xD800, 0xE000),   # USB Endpoint Data Buffer
-        (0xE300, 0xE400),   # PHY Completion / Debug
-        (0xE400, 0xE500),   # Command Engine
-        (0xE700, 0xE800),   # System Status
-    ]
+    # In proxy mode, we proxy EVERYTHING from 0x6000-0xFFFF to real hardware.
+    # In emulation mode, we only hook known MMIO ranges.
+    if proxy is not None:
+        # Proxy mode: pass through ALL XDATA >= 0x6000
+        mmio_ranges = [
+            (0x6000, 0x10000),  # Everything from 0x6000-0xFFFF goes to real hardware
+        ]
+    else:
+        mmio_ranges = [
+            (0x8000, 0x9000),   # USB/SCSI Data Buffer
+            (0x9000, 0x9400),   # USB Interface
+            (0x92C0, 0x9300),   # Power Management
+            (0x9E00, 0xA000),   # USB Control Buffer
+            (0xB200, 0xB900),   # PCIe Passthrough
+            (0xC000, 0xC100),   # UART
+            (0xC400, 0xC600),   # NVMe Interface
+            (0xC600, 0xC700),   # PHY Extended
+            (0xC800, 0xC900),   # Interrupt/DMA/Flash
+            (0xCA00, 0xCB00),   # PD Controller
+            (0xCC00, 0xCF00),   # Timer/CPU/SCSI
+            (0xD800, 0xE000),   # USB Endpoint Data Buffer
+            (0xE300, 0xE400),   # PHY Completion / Debug
+            (0xE400, 0xE500),   # Command Engine
+            (0xE700, 0xE800),   # System Status
+        ]
 
     # Set memory reference for USB commands
     hw.memory = memory
@@ -3253,15 +3260,12 @@ def create_hardware_hooks(memory: 'Memory', hw: HardwareState, proxy: 'UARTProxy
     # Example: Trace reads/writes to specific addresses
     # memory.xdata_write_hooks[0x0AF7] = make_debug_hook(hw, memory)
 
-    # USB3 mode hook for 0x0ACC
-    # During GET_DESCRIPTOR handling at 0x87A0, firmware reads 0x0ACC to determine
-    # USB2 vs USB3 mode. Bit 1 SET = USB3 mode, which uses R7=5 for descriptors.
-    # Without bit 1 SET, firmware takes USB2 path with R7=3.
-    # This hook returns USB3 mode when a control transfer is active.
-    def usb3_mode_read_hook(addr):
-        if hw.usb_control_transfer_active:
-            # USB3 mode: bit 1 SET for GET_DESCRIPTOR to set R7=5
-            return 0x02
-        return memory.xdata[addr]
-    memory.xdata_read_hooks[0x0ACC] = usb3_mode_read_hook
+    if proxy is None:
+        # USB3 mode hook for 0x0ACC - only in emulation mode
+        # In proxy mode, real hardware handles USB mode detection
+        def usb3_mode_read_hook(addr):
+            if hw.usb_control_transfer_active:
+                return 0x02
+            return memory.xdata[addr]
+        memory.xdata_read_hooks[0x0ACC] = usb3_mode_read_hook
 
