@@ -5,7 +5,7 @@ CC = sdcc
 AS = sdas8051
 
 # Compiler flags
-CFLAGS = -mmcs51 --model-large --opt-code-size
+CFLAGS = -mmcs51 --model-small --opt-code-speed --peep-asm --allow-unsafe-read
 CFLAGS += --std-c99
 CFLAGS += -I$(SRC_DIR)
 CFLAGS += -I../src/include

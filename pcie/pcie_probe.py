@@ -71,16 +71,14 @@ MWR32  = 0x60  # Memory Write 32-bit
 
 
 def pcie_request(handle, fmt_type, address, value=None, size=4, verbose=False, retries=10):
-    """Send a PCIe TLP via 0xF0 control message.
+    """Send a PCIe TLP via 0xF0 control message (wIndex=0 for single TLP mode).
 
-    OUT phase (0x40): SETUP wValue = fmt_type | (byte_enable << 8).
+    OUT phase (0x40): SETUP wValue = fmt_type | (byte_enable << 8), wIndex = 0.
       DATA payload (12 bytes): addr_lo[4] LE + addr_hi[4] LE + value[4] BE.
-      Firmware writes B210/B217 from wValue, then programs B218-B21F and
-      B220-B223 from payload, clears stale status, arms, and triggers.
 
-    IN phase (0xC0): Firmware polls B296 on-chip in tight loop, returns 8 bytes:
-      [0-3] B220-B223 completion data, [4-5] B22A-B22B completion header,
-      [6] B284 completion type, [7] status (0=ok, 1=UR, 0xFF=timeout).
+    IN phase (0xC0): Firmware polls completion, returns 8 bytes:
+      [0-3] completion data, [4-5] completion header,
+      [6] completion type, [7] status (0=ok, 1=UR, 0xFF=timeout).
     """
     masked = address & 0xFFFFFFFC
     offset = address & 0x3
