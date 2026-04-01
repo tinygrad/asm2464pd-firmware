@@ -7,7 +7,6 @@
 #include "registers.h"
 #include "globals.h"
 
-#define USB3
 static uint8_t is_usb3;
 static uint8_t pcie_link_up;
 
@@ -431,14 +430,16 @@ void int1_isr(void) __interrupt(1) {
 void main(void) {
   // without this, UART has parity
   REG_UART_LCR &= ~LCR_PARITY_MASK;
-  uart_puts("\n[BOOT]\n");
 
   #ifndef USB3
+    uart_puts("\n[BOOT USB2]\n");
     // without this, USB2 is flaky
     REG_CPU_MODE = CPU_MODE_USB2;
 
     // enable USB high speed mode
     REG_USB_PHY_CTRL_91C0 = 0x10;
+  #else
+    uart_puts("\n[BOOT USB3]\n");
   #endif
 
   // clear this to get USB3 interrupts
