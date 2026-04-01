@@ -586,8 +586,21 @@
 #define REG_USB_SETUP_WLEN_H    XDATA_REG8(0x910B)  /* wLength high */
 
 
-#define REG_USB_STAT_EXT_L      XDATA_REG8(0x910D)
-#define REG_USB_STAT_EXT_H      XDATA_REG8(0x910E)
+/*
+ * USB Bulk OUT Byte Count (0x910D-0x910E)
+ *
+ * Hardware-populated, read-only.  After a bulk OUT packet is received
+ * (BULK_OUT_COMPLETE fires in EP_CFG1), this 16-bit big-endian register
+ * holds the actual number of bytes deposited in the 0x7000 landing buffer.
+ * Works regardless of MSC mode (tested with REG_USB_MSC_CFG = 0x00).
+ *
+ * Byte order: 0x910D = high byte, 0x910E = low byte (big-endian).
+ * Example: 1024-byte transfer → 0x910D=0x04, 0x910E=0x00.
+ *
+ * Mirrored at 0x9114-0x9115 (same value, read-only).
+ */
+#define REG_USB_BULK_OUT_BC_H   XDATA_REG8(0x910D)  /* Bulk OUT byte count high */
+#define REG_USB_BULK_OUT_BC_L   XDATA_REG8(0x910E)  /* Bulk OUT byte count low */
 /*
  * USB Endpoint Status / CBW Registers (0x9118-0x912E)
  *

@@ -7,7 +7,7 @@
 #include "registers.h"
 #include "globals.h"
 
-//#define USB3
+#define USB3
 static uint8_t is_usb3;
 static uint8_t pcie_link_up;
 
@@ -343,10 +343,11 @@ static inline void pcie_read_chunk(void) {
 }
 
 static inline void pcie_write_chunk(void) {
-  /* Streaming write: 128 dwords from 0x7000 bulk OUT buffer */
+  /* Streaming write: bulk OUT byte count from HW, converted to dwords */
   __xdata uint8_t *src = (__xdata uint8_t *)0x7000;
-  uint8_t ci;
-  for (ci = 0; ci < 128; ci++) {
+  uint16_t byte_count = ((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L;
+  uint16_t ci;
+  for (ci = 0; ci < (byte_count >> 2); ci++) {
     REG_PCIE_DATA_0 = *src++;
     REG_PCIE_DATA_1 = *src++;
     REG_PCIE_DATA_2 = *src++;
