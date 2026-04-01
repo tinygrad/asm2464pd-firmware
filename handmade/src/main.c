@@ -273,7 +273,7 @@ static void handle_usb_control(void) {
         REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
       } else {
         /* Streaming: set address shadows for auto-increment */
-        dma_addr_0 = DESC_BUF[0] & 0xFC;
+        dma_addr_0 = DESC_BUF[0];
         dma_addr_1 = DESC_BUF[1];
         dma_addr_2 = DESC_BUF[2];
         dma_addr_3 = DESC_BUF[3];
@@ -310,7 +310,8 @@ static void handle_usb_control(void) {
 
 static inline void dma_addr_inc(void) {
   dma_addr_0 += 4;
-  if (dma_addr_0 == 0) {
+  REG_PCIE_ADDR_3 = dma_addr_0;
+  if (dma_addr_0 < 4) {
     dma_addr_1++;
     REG_PCIE_ADDR_2 = dma_addr_1;
     if (dma_addr_1 == 0) {
@@ -329,7 +330,6 @@ static inline void pcie_read_chunk(void) {
   __xdata uint8_t *dst = (__xdata uint8_t *)0xD800;
   uint8_t ci;
   for (ci = 0; ci < dma_count; ci++) {
-    REG_PCIE_ADDR_3 = dma_addr_0;
     REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
     REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
     while (!(REG_PCIE_STATUS & (PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE)));
@@ -356,7 +356,6 @@ static inline void pcie_write_chunk(void) {
     REG_PCIE_DATA_1 = *src++;
     REG_PCIE_DATA_2 = *src++;
     REG_PCIE_DATA_3 = *src++;
-    REG_PCIE_ADDR_3 = dma_addr_0;
     REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
     REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
     dma_addr_inc();
