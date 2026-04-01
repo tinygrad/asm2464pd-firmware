@@ -7,7 +7,6 @@
 #include "registers.h"
 #include "globals.h"
 
-//#define USB3
 static uint8_t is_usb3;
 static uint8_t pcie_link_up;
 
@@ -17,6 +16,7 @@ static uint8_t dma_count;      /* dwords per read chunk */
 static uint8_t dma_addr_0;     /* shadow of ADDR_3 (addr[7:0]) — written BEFORE trigger */
 static uint8_t dma_addr_1;     /* shadow of ADDR_2 (addr[15:8]) */
 static uint8_t dma_addr_2;     /* shadow of ADDR_1 (addr[23:16]) */
+static uint8_t dma_addr_3;     /* shadow of ADDR_0 (addr[31:24]) */
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
@@ -246,8 +246,6 @@ static void handle_usb_control(void) {
       uint8_t byte_en  = REG_USB_SETUP_WVAL_H;
       uint8_t widx_l   = REG_USB_SETUP_WIDX_L;
       uint8_t mode  = widx_l & 0x03;
-      uint8_t count = widx_l >> 2;
-      if (count == 0) count = 128;
 
       /* Configure PCIe TLP engine */
       REG_PCIE_FMT_TYPE   = fmt_type;
@@ -275,10 +273,11 @@ static void handle_usb_control(void) {
         REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
       } else {
         /* Streaming: set address shadows for auto-increment */
-        dma_addr_0 = DESC_BUF[0] & 0xFC;
+        dma_addr_0 = DESC_BUF[0];
         dma_addr_1 = DESC_BUF[1];
         dma_addr_2 = DESC_BUF[2];
-        dma_count  = count;
+        dma_addr_3 = DESC_BUF[3];
+        dma_count  = widx_l >> 2;
       }
 
       /* Update dma_mode LAST — this arms the bulk/EP_COMPLETE handlers */
@@ -311,12 +310,17 @@ static void handle_usb_control(void) {
 
 static inline void dma_addr_inc(void) {
   dma_addr_0 += 4;
-  if (dma_addr_0 == 0) {
+  REG_PCIE_ADDR_3 = dma_addr_0;
+  if (dma_addr_0 < 4) {
     dma_addr_1++;
     REG_PCIE_ADDR_2 = dma_addr_1;
     if (dma_addr_1 == 0) {
       dma_addr_2++;
       REG_PCIE_ADDR_1 = dma_addr_2;
+      if (dma_addr_2 == 0) {
+        dma_addr_3++;
+        REG_PCIE_ADDR_0 = dma_addr_3;
+      }
     }
   }
 }
@@ -326,7 +330,6 @@ static inline void pcie_read_chunk(void) {
   __xdata uint8_t *dst = (__xdata uint8_t *)0xD800;
   uint8_t ci;
   for (ci = 0; ci < dma_count; ci++) {
-    REG_PCIE_ADDR_3 = dma_addr_0;
     REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
     REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
     while (!(REG_PCIE_STATUS & (PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE)));
@@ -344,15 +347,15 @@ static inline void pcie_read_chunk(void) {
 }
 
 static inline void pcie_write_chunk(void) {
-  /* Streaming write: 128 dwords from 0x7000 bulk OUT buffer */
+  /* Streaming write: bulk OUT byte count from HW, converted to dwords */
   __xdata uint8_t *src = (__xdata uint8_t *)0x7000;
-  uint8_t ci;
-  for (ci = 0; ci < 128; ci++) {
+  uint16_t byte_count = ((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L;
+  uint16_t ci;
+  for (ci = 0; ci < (byte_count >> 2); ci++) {
     REG_PCIE_DATA_0 = *src++;
     REG_PCIE_DATA_1 = *src++;
     REG_PCIE_DATA_2 = *src++;
     REG_PCIE_DATA_3 = *src++;
-    REG_PCIE_ADDR_3 = dma_addr_0;
     REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
     REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
     dma_addr_inc();
@@ -442,14 +445,16 @@ void int1_isr(void) __interrupt(1) {
 void main(void) {
   // without this, UART has parity
   REG_UART_LCR &= ~LCR_PARITY_MASK;
-  uart_puts("\n[BOOT]\n");
 
   #ifndef USB3
+    uart_puts("\n[BOOT USB2]\n");
     // without this, USB2 is flaky
     REG_CPU_MODE = CPU_MODE_USB2;
 
     // enable USB high speed mode
     REG_USB_PHY_CTRL_91C0 = 0x10;
+  #else
+    uart_puts("\n[BOOT USB3]\n");
   #endif
 
   // clear this to get USB3 interrupts
