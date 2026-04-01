@@ -17,6 +17,7 @@ static uint8_t dma_count;      /* dwords per read chunk */
 static uint8_t dma_addr_0;     /* shadow of ADDR_3 (addr[7:0]) — written BEFORE trigger */
 static uint8_t dma_addr_1;     /* shadow of ADDR_2 (addr[15:8]) */
 static uint8_t dma_addr_2;     /* shadow of ADDR_1 (addr[23:16]) */
+static uint8_t dma_addr_3;     /* shadow of ADDR_0 (addr[31:24]) */
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
@@ -245,7 +246,6 @@ static void handle_usb_control(void) {
       uint8_t byte_en  = REG_USB_SETUP_WVAL_H;
       uint8_t widx_l   = REG_USB_SETUP_WIDX_L;
       uint8_t mode  = widx_l & 0x03;
-      uint8_t count = widx_l >> 2;
 
       /* Configure PCIe TLP engine */
       REG_PCIE_FMT_TYPE   = fmt_type;
@@ -276,7 +276,8 @@ static void handle_usb_control(void) {
         dma_addr_0 = DESC_BUF[0] & 0xFC;
         dma_addr_1 = DESC_BUF[1];
         dma_addr_2 = DESC_BUF[2];
-        dma_count  = count;
+        dma_addr_3 = DESC_BUF[3];
+        dma_count  = widx_l >> 2;
       }
 
       /* Update dma_mode LAST — this arms the bulk/EP_COMPLETE handlers */
@@ -315,6 +316,10 @@ static inline void dma_addr_inc(void) {
     if (dma_addr_1 == 0) {
       dma_addr_2++;
       REG_PCIE_ADDR_1 = dma_addr_2;
+      if (dma_addr_2 == 0) {
+        dma_addr_3++;
+        REG_PCIE_ADDR_0 = dma_addr_3;
+      }
     }
   }
 }

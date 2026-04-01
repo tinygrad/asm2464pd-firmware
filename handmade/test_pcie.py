@@ -155,5 +155,31 @@ class TestF0(unittest.TestCase):
     got = stream_read(self.handle, self.vram, 64)
     self.assertEqual(len(got), 64)
 
+  def test_f0_write_read_16mb_boundary(self):
+    """Write/read spanning a 16MB boundary in VRAM, verified with single-TLP reads."""
+    # Pick the first 16MB boundary above vram base.
+    boundary = (self.vram + 0x1000000) & ~0xFFFFFF
+    offset = boundary - 256  # start 256 bytes before the boundary
+    n = 128  # 128 dwords = 512 bytes, straddles the boundary
+    vals = [0xF0F00000 | i for i in range(n)]
+    data = make_be_data(vals)
+    stream_write(self.handle, offset, data)
+    # Verify with single-TLP reads (mode=0) — these set the full address each time
+    for i in range(n):
+      addr = offset + i * 4
+      # mode=0 single TLP: send F0 OUT with MRD64 fmt, then F0 IN for completion
+      wval = MRD64 | (0x0F << 8)
+      payload = struct.pack('<II', addr & 0xFFFFFFFF, addr >> 32) + struct.pack('>I', 0)
+      buf = (ctypes.c_ubyte * 12)(*payload)
+      ret = libusb.libusb_control_transfer(self.handle, 0x40, 0xF0, wval, 0, buf, 12, 5000)
+      assert ret >= 0, f"F0 OUT failed at dword {i}: ret={ret}"
+      resp = (ctypes.c_ubyte * 8)()
+      ret = libusb.libusb_control_transfer(self.handle, 0xC0, 0xF0, 0, 0, resp, 8, 5000)
+      assert ret == 8, f"F0 IN read failed at dword {i}: ret={ret}"
+      assert resp[7] == 0, f"TLP error at dword {i} (addr 0x{addr:X}): status={resp[7]}"
+      got_dword = struct.unpack('>I', bytes(resp[0:4]))[0]
+      self.assertEqual(got_dword, vals[i],
+        f"mismatch at dword {i} (addr 0x{addr:X}): got 0x{got_dword:08X}, expected 0x{vals[i]:08X}")
+
 if __name__ == '__main__':
   pytest.main([__file__, "-v", "-s", *sys.argv[1:]])
