@@ -246,7 +246,6 @@ static void handle_usb_control(void) {
       uint8_t widx_l   = REG_USB_SETUP_WIDX_L;
       uint8_t mode  = widx_l & 0x03;
       uint8_t count = widx_l >> 2;
-      if (count == 0) count = 128;
 
       /* Configure PCIe TLP engine */
       REG_PCIE_FMT_TYPE   = fmt_type;
