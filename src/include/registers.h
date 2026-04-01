@@ -515,6 +515,43 @@
  * Reading it back after C42C or DMA operations may return 0x00.
  */
 #define REG_USB_MODE            XDATA_REG8(0x90E2)
+/*
+ * Bulk Endpoint Command Register (0x90E3) — WRITE-ONLY
+ *
+ * Controls the USB bulk endpoint engine and MSC CBW routing.
+ * NOT a status register — it is a command register that configures
+ * how the hardware handles bulk transfers.
+ *
+ * Commands:
+ *   0x01 = ACTIVATE: Initialize/activate the bulk endpoint engine.
+ *          MUST be paired with REG_USB_CTRL_90A0 = 0x01 (commit strobe).
+ *          Always preceded by 905F/905D configuration.
+ *          Used during: SET_CONFIGURATION, do_bulk_init, nvme_queue_init.
+ *
+ *   0x02 = ACK/ARM: Two distinct uses depending on context:
+ *
+ *          (a) During init / SET_CONFIG:
+ *              Arms the MSC engine for CBW reception.  After this write,
+ *              bulk OUT data is routed through the MSC parser which
+ *              deposits the parsed CBW fields at 0x911B-0x912E (tag,
+ *              transfer length, opcode, etc.) instead of raw data at 0x7000.
+ *              This is what enables USB_PERIPH_CBW_RECEIVED (9101 bit 6).
+ *
+ *          (b) After EP_COMPLETE event:
+ *              Acknowledges a completed bulk transfer and clears the
+ *              endpoint completion status.  Usually paired with
+ *              REG_USB_EP_READY = 0x01 to re-arm the endpoint.
+ *              Optionally followed by 90A0=0x01 for full DMA reset.
+ *
+ * Stock firmware usage patterns:
+ *   90E3=0x01; 90A0=0x01;            — activate endpoint engine
+ *   90E3=0x02; EP_READY=0x01;        — ack completion, re-arm endpoint
+ *   90E3=0x02; EP_READY=0x01; 90A0=0x01; — full transfer ack + DMA reset
+ *   90E3=0x02;                       — arm MSC for CBW (during init)
+ */
+#define REG_USB_BULK_EP_CMD     XDATA_REG8(0x90E3)
+#define   USB_BULK_EP_CMD_ACTIVATE  0x01  /* Activate endpoint engine (pair with 90A0=0x01) */
+#define   USB_BULK_EP_CMD_CBW       0x02  /* Ack transfer completion / arm MSC for CBW */
 #define REG_USB_EP_STATUS_90E3  XDATA_REG8(0x90E3)
 
 /*

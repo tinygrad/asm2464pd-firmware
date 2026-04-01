@@ -161,7 +161,8 @@ static void handle_usb_control(void) {
       // enable bulk endpoint (without the clear in, it'll get a spurious IN, without the clear out, it'll miss an out)
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
+      //REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       send_zlp_ack();
       uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
@@ -400,22 +401,36 @@ void handle_usb_bulk_data(void) {
 }
 
 void int0_isr(void) __interrupt(0) {
-  uint8_t periph_status;
-  periph_status = REG_USB_PERIPH_STATUS;
+  uint8_t int0_type = REG_INT_USB_STATUS;
+  if (int0_type & INT_USB_GATE) {
+    uint8_t periph_status;
+    periph_status = REG_USB_PERIPH_STATUS;
 
-  if (periph_status & USB_PERIPH_BUS_RESET) {
-    uart_puts("[UNHANDLED RESET]\n");
-  } else if (periph_status & USB_PERIPH_CONTROL) {
-    handle_usb_control();
-  } else if (periph_status & USB_PERIPH_BULK_DATA) {
-    handle_usb_bulk_data();
-  } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
-    uint8_t ep = REG_USB_EP_READY;
-    //uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts(" "); uart_puthex(REG_USB_EP_STATUS_90E3); uart_puts("]\n");
-    REG_USB_EP_READY = ep;
-  } else {
-    uart_puts("[UNHANDLED INT0 ");
-    uart_puthex(periph_status);
+    if (periph_status & USB_PERIPH_BUS_RESET) {
+      uart_puts("[UNHANDLED RESET]\n");
+    } else if (periph_status & USB_PERIPH_CONTROL) {
+      handle_usb_control();
+    } else if (periph_status & USB_PERIPH_BULK_DATA) {
+      handle_usb_bulk_data();
+    } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
+      uint8_t ep = REG_USB_EP_READY;
+      //uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts(" "); uart_puthex(REG_USB_EP_STATUS_90E3); uart_puts("]\n");
+      REG_USB_EP_READY = ep;
+    } else if (periph_status & USB_PERIPH_CBW_RECEIVED) {
+      // BULK OUT (but only if pointed to 0x911B)
+      uint8_t ep = REG_USB_MODE;
+      uart_puts("[CBW_RECEIVED "); uart_puthex(ep); uart_puthex(REG_USB_BULK_EP_CMD); uart_puts("]\n");
+      REG_USB_MODE = ep;
+      REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
+    } else {
+      uart_puts("[UNHANDLED INT0 ");
+      uart_puthex(periph_status);
+      uart_puts("]\n");
+    }
+  }
+  if (int0_type & (~INT_USB_GATE)) {
+    uart_puts("[UNHANDLED INT0 TYPE ");
+    uart_puthex(int0_type);
     uart_puts("]\n");
   }
 }
@@ -451,6 +466,9 @@ void main(void) {
 
   // enables EP_COMPLETE interrupts
   REG_USB_DATA_L = 0x00;
+
+  // enables CBW_RECEIVED interrupts
+  REG_USB_EP_MGMT = 0x00;
 
   // PCIe TLP engine values that don't change
   REG_PCIE_TLP_CTRL   = 0x01;
