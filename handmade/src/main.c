@@ -9,6 +9,7 @@
 
 //#define USB3
 static uint8_t is_usb3;
+static uint8_t pcie_link_up;
 
 /* Streaming PCIe DMA state — configured via 0xF0 control message */
 static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
@@ -404,7 +405,6 @@ void int0_isr(void) __interrupt(0) {
 
   if (periph_status & USB_PERIPH_BUS_RESET) {
     uart_puts("[UNHANDLED RESET]\n");
-    return;
   } else if (periph_status & USB_PERIPH_CONTROL) {
     handle_usb_control();
   } else if (periph_status & USB_PERIPH_BULK_DATA) {
@@ -475,6 +475,7 @@ void main(void) {
   // wait for PCIe
   while (REG_PCIE_LTSSM_STATE != 0x78);
   REG_PCIE_PERST_CTRL = 0x00; // deassert PERST#
+  pcie_link_up = 1;
   uart_puts("[PCIe up]\n");
 
   while (1) {
