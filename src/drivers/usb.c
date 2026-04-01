@@ -768,8 +768,8 @@ __xdata uint8_t *usb_clear_idata_indexed(void)
  */
 uint16_t usb_read_status_pair(void)
 {
-    uint8_t hi = REG_USB_STAT_EXT_L;
-    uint8_t lo = REG_USB_STAT_EXT_H;
+    uint8_t hi = REG_USB_BULK_OUT_BC_H;
+    uint8_t lo = REG_USB_BULK_OUT_BC_L;
     return ((uint16_t)hi << 8) | lo;
 }
 
