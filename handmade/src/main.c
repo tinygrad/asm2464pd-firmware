@@ -199,12 +199,10 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       // receive to 0x911B
       //REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
-
+      // receive to 0x7000
+      //REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       // setup UAS mode
       REG_USB_STATUS = USB_STATUS_DMA_READY;
-
-      // receive to 0x7000
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       send_zlp_ack();
       uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
@@ -435,6 +433,8 @@ void handle_usb_bulk_data(void) {
       uart_puthex(XDATA_REG8(0x7002)); uart_puthex(XDATA_REG8(0x7003));
       uart_puts("]\n");
     }
+    // re-arm OUT
+    REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
     if (dma_mode == 2) {
       pcie_read_chunk();
@@ -467,8 +467,6 @@ void int0_isr(void) __interrupt(0) {
       handle_usb_control();
     } else if (periph_status & USB_PERIPH_BULK_DATA) {
       handle_usb_bulk_data();
-    } else if (periph_status & USB_PERIPH_LINK_EVENT) {
-      // no print, replay_trace can trigger this
     } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
       uint8_t ep = REG_USB_EP_READY;
       //uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts(" "); uart_puthex(REG_USB_EP_STATUS_90E3); uart_puts("]\n");

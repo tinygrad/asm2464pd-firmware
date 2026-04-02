@@ -5,7 +5,7 @@ CC = sdcc
 AS = sdas8051
 
 # USB3=1 to enable USB 3.0 descriptors and link training (default: USB2 only)
-USB3 ?= 1
+USB3 ?= 0
 
 # Compiler flags
 CFLAGS = -mmcs51 --model-small --opt-code-speed --peep-asm --allow-unsafe-read
