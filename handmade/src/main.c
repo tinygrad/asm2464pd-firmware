@@ -9,8 +9,6 @@
 
 static uint8_t is_usb3;
 static uint8_t pcie_link_up;
-static uint8_t uas_tag;        /* tag from last Command IU */
-static uint8_t uas_state;      /* 0=idle, 1=RTT sent (skip next I4), 2=waiting for data */
 
 /* Streaming PCIe DMA state — configured via 0xF0 control message */
 static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
@@ -483,27 +481,7 @@ void int0_isr(void) __interrupt(0) {
       uart_puts("]\n");
     }
   }
-  if (int0_type & 0x04) {
-    /* DMA/bulk completion */
-    uint8_t ep_status = XDATA_REG8(0x9118);
-    uint8_t ep_ready = REG_USB_EP_READY;
-    if (uas_state == 1) {
-      /* RTT send completion — ack and advance to waiting for data */
-      XDATA_REG8(0x9093) = 0x08;
-      XDATA_REG8(0xCE88) = 0x02;
-      uas_state = 2;
-    } else if (uas_state == 2) {
-      /* Data arrived — flag for main loop to send Sense */
-      uas_state = 3;
-    }
-    /* Ack EP ready bits */
-    if (ep_ready) REG_USB_EP_READY = ep_ready;
-    while (XDATA_REG8(0x9118)) {
-      ep_ready = REG_USB_EP_READY;
-      if (ep_ready) REG_USB_EP_READY = ep_ready;
-    }
-  }
-  if (int0_type & ~(INT_USB_GATE | 0x04)) {
+  if (int0_type & ~(INT_USB_GATE)) {
     uart_puts("[UNHANDLED INT0 TYPE ");
     uart_puthex(int0_type);
     uart_puts("]\n");

@@ -4,6 +4,7 @@
 import ctypes, os, struct, sys
 from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
+from hexdump import hexdump
 
 # NVMe DMA init sequence from trace/usb2_dma.
 # This is what the stock firmware does after SET_INTERFACE alt=1 to bring up
@@ -54,11 +55,12 @@ def main():
     print(f"SCSI WRITE {len(test_data)} bytes (tag={tag.hex()})...", end="")
     dev.scsi_write(test_data)
 
-    got = bytes(dev.read8(0xF000 + j) for j in range(4))
-    if got == tag:
+    got = bytes(dev.read8(0xF000 + j) for j in range(0x10))
+    if got[:4] == tag:
         print(f"  PASS")
     else:
         print(f"  FAIL: expected {tag.hex()}, got {got.hex()}")
+    hexdump(got)
 
 
 if __name__ == "__main__":
