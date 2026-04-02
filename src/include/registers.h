@@ -2332,6 +2332,59 @@
 #define REG_BANK_2269           XDATA_REG8(0x2269)  /* Bank register at 0x2269 */
 
 //=============================================================================
+// PCIe Switch PHY Registers (XDATA Bank 1 — SFR 0x93 = 1)
+//=============================================================================
+/*
+ * The ASM2464PD has an internal PCIe switch with its own proprietary
+ * control registers.  These are NOT standard PCIe config space — they
+ * are ASMedia-internal registers with no public documentation.  The
+ * register map was reverse-engineered from the stock firmware.
+ *
+ * These registers occupy the same XDATA address range as normal memory
+ * (0x4000-0x7FFF) but are on a separate physical bus selected by SFR
+ * 0x93 (DPX).  In normal operation (DPX=0), MOVX to these addresses
+ * hits ordinary XDATA (the 0x6000 region is "Reserved"/unused, 0x7000
+ * is the flash/bulk-OUT landing buffer).  With DPX=1, MOVX is routed
+ * to the switch PHY register plane instead.
+ *
+ * Access pattern:
+ *   DPX = 0x01;                  // select PHY register bank
+ *   val = XDATA_REG8(addr);     // read
+ *   XDATA_REG8(addr) = val;     // write
+ *   DPX = 0x00;                  // restore normal XDATA
+ *
+ * The stock firmware uses read-modify-write (|= mask) for most of
+ * these to preserve other bits.  Direct writes (= val) may clobber
+ * unknown bits.
+ *
+ * NOTE: SFR 0x93 (XDATA bank select) is distinct from SFR 0x96
+ * (CODE bank select for firmware paging).  Do not confuse them.
+ *
+ * Known registers (addresses are XDATA addresses with DPX=1):
+ *
+ *   0x4084  Switch port 0 PHY config       (stock writes 0x22)
+ *   0x5084  Switch port 1 PHY config       (stock writes 0x22)
+ *   0x6025  PCIe switch TLP routing control
+ *             Bit 7: TLP routing enable — without this, TLPs from
+ *                    the B210-B296 engine cannot reach downstream
+ *                    PCIe devices.  Required for all PCIe access.
+ *             (stock does read-modify-write: |= 0x80)
+ *   0x6041  PHY isolation control
+ *             Bit 6: PHY isolation (set/clear during link training)
+ *   0x6043  TLP routing config              (stock writes 0x70)
+ *   0x78AF  PHY lane 0 register             (stock sets bit 7)
+ *   0x79AF  PHY lane 1 register             (stock sets bit 7)
+ *   0x7AAF  PHY lane 2 register             (stock sets bit 7)
+ *   0x7BAF  PHY lane 3 register             (stock sets bit 7)
+ */
+#define REG_PHY_PORT0_CFG       XDATA_REG8(0x4084)  /* Switch port 0 PHY config (bank 1) */
+#define REG_PHY_PORT1_CFG       XDATA_REG8(0x5084)  /* Switch port 1 PHY config (bank 1) */
+#define REG_PHY_TLP_ROUTING     XDATA_REG8(0x6025)  /* TLP routing control (bank 1) */
+#define   PHY_TLP_ROUTING_ENABLE  0x80               /*   Bit 7: enable TLP routing */
+#define REG_PHY_ISOLATION       XDATA_REG8(0x6041)  /* PHY isolation control (bank 1) */
+#define REG_PHY_TLP_CONFIG      XDATA_REG8(0x6043)  /* TLP routing config (bank 1) */
+
+//=============================================================================
 // GPIO (0xC620-0xC638 control, 0xC650-0xC653 input)
 //=============================================================================
 // Control: write 0x00=input(pull-up), 0x02=output LOW, 0x03=output HIGH

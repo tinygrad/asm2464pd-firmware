@@ -43,15 +43,9 @@ static void uart_puthex(uint8_t val) {
 
 /*=== USB Control Transfer Helpers ===*/
 
-static uint8_t ctrl_send_total;  /* total bytes to send */
-static uint8_t ctrl_send_pos;    /* bytes already sent */
-
 static void send_control_data(uint8_t len) {
-  uint8_t chunk = (len > 64) ? 64 : len;
-  ctrl_send_total = len;
-  ctrl_send_pos = chunk;
   REG_USB_EP0_STATUS = 0x00;
-  REG_USB_EP0_LEN_L = chunk;
+  REG_USB_EP0_LEN_L = len;
   REG_USB_DMA_TRIGGER = USB_DMA_SEND;
   REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
 }
@@ -121,7 +115,7 @@ static __code const uint8_t str2_desc[] = { 0x08, 0x03, 'u',0, 's',0, 'b',0 };
 static __code const uint8_t str3_desc[] = { 0x08, 0x03, '0',0, '0',0, '1',0 };
 static __code const uint8_t str_empty[] = { 0x02, 0x03 };
 
-static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint8_t wlen) {
+static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint16_t wlen) {
   __code const uint8_t *src;
   uint8_t desc_len;
 
@@ -164,11 +158,12 @@ static void handle_usb_control(void) {
   uint8_t phase;
   phase = REG_USB_CTRL_PHASE;
   if (phase & USB_CTRL_PHASE_SETUP) {
-    uint8_t bmReq, bReq, wValL, wValH, wLenL;
+    uint8_t bmReq, bReq, wValL, wValH;
+    uint16_t wLen;
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
     bmReq = REG_USB_SETUP_BMREQ; bReq = REG_USB_SETUP_BREQ;
     wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
-    wLenL = REG_USB_SETUP_WLEN_L;
+    wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
 
     if (!(bmReq & USB_SETUP_TYPE_VENDOR)) {
       uart_puts("[C ");
@@ -176,7 +171,7 @@ static void handle_usb_control(void) {
       uart_puts(" ");
       uart_puthex(bReq);
       uart_puts(" ");
-      uart_puthex(wLenL);
+      uart_puthex(wLen >> 8); uart_puthex(wLen & 0xFF);
       uart_puts("]\n");
     }
 
@@ -188,7 +183,7 @@ static void handle_usb_control(void) {
       send_zlp_ack();
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-      handle_get_descriptor(wValH, wValL, wLenL);
+      handle_get_descriptor(wValH, wValL, wLen);
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
       // enable USB bulk mode (bypass MSC)
       REG_USB_MSC_CFG = 0x00;
@@ -209,13 +204,13 @@ static void handle_usb_control(void) {
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
       uint8_t bank = REG_USB_SETUP_WIDX_H;
       uint8_t vi;
-      for (vi = 0; vi < wLenL; vi++) {
+      for (vi = 0; vi < wLen; vi++) {
         if (bank) DPX = bank;
         uint8_t val = XDATA_REG8(addr + vi);
         if (bank) DPX = 0x00;
         DESC_BUF[vi] = val;
       }
-      send_control_data(wLenL);
+      send_control_data(wLen);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE5) {
       /* Vendor write XDATA via control.  wValue=addr, wIndex low=val.
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
@@ -266,7 +261,7 @@ static void handle_usb_control(void) {
       DESC_BUF[7] = ret_status;
       send_control_data(8);
     } else {
-      if (wLenL == 0) send_zlp_ack();
+      if (wLen == 0) send_zlp_ack();
     }
   } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
     REG_USB_DMA_TRIGGER = USB_DMA_RECV;
@@ -274,20 +269,6 @@ static void handle_usb_control(void) {
   } else if (phase & USB_CTRL_PHASE_DATA_IN || phase & USB_CTRL_PHASE_STAT_IN) {
     // USB_CTRL_PHASE_DATA_IN on USB 2.0, USB_CTRL_PHASE_STAT_IN on USB 3.0
     if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
-
-    /* Multi-packet EP0 continuation: copy remaining data to start of buffer and send */
-    if (ctrl_send_pos < ctrl_send_total) {
-      uint8_t remain = ctrl_send_total - ctrl_send_pos;
-      uint8_t chunk = (remain > 64) ? 64 : remain;
-      uint8_t ci;
-      for (ci = 0; ci < chunk; ci++) DESC_BUF[ci] = DESC_BUF[ctrl_send_pos + ci];
-      ctrl_send_pos += chunk;
-      REG_USB_EP0_STATUS = 0x00;
-      REG_USB_EP0_LEN_L = chunk;
-      REG_USB_DMA_TRIGGER = USB_DMA_SEND;
-      REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
-      return;
-    }
     if (REG_USB_SETUP_BREQ == 0xF0) {
       /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
        *   [0-3]  address low (LE), [4-7] address high (LE), [8-11] value (BE)
@@ -528,7 +509,7 @@ void main(void) {
   REG_TUNNEL_CTRL_B403 = 0x01;           // fix PCIe link stability
   REG_PCIE_PERST_CTRL  = 0x01;           // assert PERST#
   REG_TUNNEL_LINK_STATE = 0x00;          // clear tunnel link state
-  DPX = 0x01; XDATA_REG8(0x6025) = 0x80; DPX = 0x00;  // TLP routing enable
+  DPX = 0x01; REG_PHY_TLP_ROUTING = PHY_TLP_ROUTING_ENABLE; DPX = 0x00;
   REG_HDDPC_CTRL |= 0x20;                // enable 3.3V
   REG_PCIE_LANE_CTRL_C659 |= 0x01;       // enable 12V
   REG_PHY_TIMER_CTRL_E764 = 0x1C;        // start link training

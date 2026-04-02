@@ -49,7 +49,15 @@ PROXY_TARGET = $(BUILD_DIR)/proxy
 PROXY_HEX = $(PROXY_TARGET).ihx
 PROXY_BIN = $(PROXY_TARGET).bin
 
-.PHONY: all clean flash wrapped proxy flash-proxy
+# Track build flags — rebuild when USB3 changes
+FLAGS_FILE = $(OBJ_DIR)/.build_flags
+CURRENT_FLAGS := USB3=$(USB3)
+$(FLAGS_FILE): force | $(OBJ_DIR)
+	@if [ ! -f $@ ] || [ "$$(cat $@)" != "$(CURRENT_FLAGS)" ]; then \
+		echo "$(CURRENT_FLAGS)" > $@; \
+	fi
+
+.PHONY: all clean flash wrapped proxy flash-proxy force
 
 all: $(BIN)
 	@echo "Built: $(BIN)"
@@ -69,8 +77,8 @@ $(CRT0_OBJ): $(CRT0_SRC) | $(OBJ_DIR)
 	-mv $(SRC_DIR)/crt0.lst $(OBJ_DIR)/ 2>/dev/null || true
 	-mv $(SRC_DIR)/crt0.sym $(OBJ_DIR)/ 2>/dev/null || true
 
-# Compile main source
-$(MAIN_OBJ): $(MAIN_SRC) | $(OBJ_DIR)
+# Compile main source (rebuild if USB3 flag changes)
+$(MAIN_OBJ): $(MAIN_SRC) $(FLAGS_FILE) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Link object files to Intel HEX

@@ -10,23 +10,17 @@ from tinygrad.helpers import getenv
 # This is what the stock firmware does after SET_INTERFACE alt=1 to bring up
 # the NVMe/UAS DMA engine so bulk writes land at 0xF000.
 DMA_INIT = [
-    (0x900B, 0x06),  # needed for second run
-    (0x900B, 0x00),
-
-    (0x9000, 0x01),  # REG_USB_STATUS = USB_STATUS_DMA_READY
-
     (0xC42A, 0x20),  # REG_NVME_DOORBELL = 0x20 (breaks bulk IN)
     (0xC422, 0x02),  # REG_NVME_LBA_LOW = 0x02 (data is wrong)
     (0xC427, 0x01),  # REG_NVME_ERROR (sector count) = 0x01 (data is wrong)
     (0xC414, 0x80),  # REG_NVME_DATA_CTRL = 0x80 (breaks bulk IN)
     (0xC415, 0x01),  # REG_NVME_DEV_STATUS = 0x01 (without this, read 0xF000 fails)
     (0xC412, 0x03),  # REG_NVME_CTRL_STATUS = 0x03 (breaks bulk IN)
-    (0xC429, 0x00),  # REG_NVME_CMD_PARAM = 0x00
 ]
 
 class Dev:
     def __init__(self):
-        self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04)
+        self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04, use_bot=True)
 
     def read8(self, addr):
         buf = (ctypes.c_ubyte * 1)()
@@ -44,15 +38,15 @@ class Dev:
 
     def scsi_write(self, data):
         usb = self.usb
-        usb._bulk_in(usb.ep_stat_in, 64)
         usb._bulk_out(usb.ep_data_out, data)
 
 def main():
     dev = Dev()
+    dev.init_dma()
 
     # NOTE: if this is less than 10, it won't work a second time and will fail with BULK IN STALL (-7)
-    for i in range(getenv("CNT", 10)):
-        dev.init_dma()
+    for i in range(getenv("CNT", 3)):
+        dev.write(0xC429, 0x00) # NVMe slot 0 select + DMA re-arm (slot*4, see registers.h)
         tag = os.urandom(4)
         test_data = tag + bytes(range(252)) + bytes(range(256))
         print(f"[{i}] SCSI WRITE (tag={tag.hex()})...", end="")
