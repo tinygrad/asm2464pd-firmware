@@ -156,7 +156,6 @@ static void handle_usb_control(void) {
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       handle_get_descriptor(wValH, wValL, wLenL);
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
-      uint8_t t;
       // enable USB bulk mode (bypass MSC)
       REG_USB_MSC_CFG = 0x00;
       // enable bulk endpoint (without the clear in, it'll get a spurious IN, without the clear out, it'll miss an out)
