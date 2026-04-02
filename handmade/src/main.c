@@ -191,7 +191,7 @@ static void handle_usb_control(void) {
       handle_get_descriptor(wValH, wValL, wLenL);
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
       // enable USB bulk mode (bypass MSC)
-      REG_USB_MSC_CFG = 0x00;
+      //REG_USB_MSC_CFG = 0x00;
       // enable bulk endpoint (without the clear in, it'll get a spurious IN, without the clear out, it'll miss an out)
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
