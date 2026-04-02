@@ -44,6 +44,30 @@ class Dev:
         else: raise RuntimeError("UAS: failed to get RTT after 10 retries")
         # 3. Send data
         usb._bulk_out(usb.ep_data_out, data)
+        # 4. Re-arm DMA for next command
+        self.write(0xD000, 0x00)
+        self.write(0xD020, 0x00)
+        self.write(0x9093, 0x08)
+        self.write(0xCE88, 0x02)
+        # Re-arm DMA slots
+        self.write(0xC8D4, 0x80)
+        self.read8(0xC4ED)
+        self.write(0xC4ED, self.read8(0xC4ED) & 0xFE)
+        self.write(0xD802, 0x00)
+        self.write(0xD803, 0x0B)
+        self.write(0xD804, 0x00)
+        self.write(0xD805, 0x00)
+        self.write(0xD806, 0x00)
+        self.write(0xD807, 0x00)
+        self.write(0xD80F, 0x00)
+        self.write(0xD800, 0x03)
+        self.write(0xC509, 0x01)
+        self.write(0x901A, 0x10)
+        self.write(0x90A1, 0x01)
+        self.write(0xC509, 0x00)
+        self.write(0xC8D4, 0x00)
+        self.write(0x9093, 0x08)
+        self.write(0xCE88, 0x02)
 
 
 def replay_init(dev):
@@ -63,8 +87,7 @@ def replay_init(dev):
             val = int(m.group(4), 16)
             if addr in BLACKLIST: continue
             if 0xD800 <= addr < 0xE000: continue  # buffer region
-            if 0x8000 <= addr < 0x8100: continue  # NVMe write data
-            if 0xF000 <= addr < 0xF100: continue  # NVMe read data
+            #if 0x8000 <= addr < 0x8100: continue  # NVMe write data
             if op == "Write":
                 dev.write(addr, val)
             else:
@@ -78,27 +101,27 @@ def main():
 
     print("Replaying UAS init from trace...", end="")
     n = replay_init(dev)
-    print(f"  {n} writes.")
+    print(f"  {n} ops.")
 
-    # Send test data
-    tag = os.urandom(4)
-    test_data = tag + bytes(range(252)) + bytes(range(256))
-    print(f"SCSI WRITE {len(test_data)} bytes (tag={tag.hex()})...", end="")
-    dev.scsi_write(test_data)
-    print("  done.")
-
-    # Verify at 0xF000
-    print("0xF000:")
-    ok = True
-    for off in range(0, 64, 16):
-        vals = [dev.read8(0xF000 + off + i) for i in range(16)]
-        hex_str = ' '.join(f'{v:02X}' for v in vals)
-        print(f"  {hex_str}")
-    got = bytes(dev.read8(0xF000 + i) for i in range(4))
-    if got == tag:
-        print(f"PASS: tag {tag.hex()} found at 0xF000")
-    else:
-        print(f"FAIL: expected {tag.hex()}, got {got.hex()}")
+    for i in range(1):
+        tag = os.urandom(4)
+        test_data = tag + bytes(range(252)) + bytes(range(256))
+        print(f"[{i}] SCSI WRITE {len(test_data)} bytes (tag={tag.hex()})...", end="")
+        try:
+            dev.scsi_write(test_data)
+        except Exception as e:
+            print(f"  {e}")
+        # Search for data in F000-FFFF
+        found = None
+        for base in range(0xF000, 0x10000, 0x200):
+            got = bytes(dev.read8(base + j) for j in range(4))
+            if got == tag:
+                found = base
+                break
+        if found is not None:
+            print(f"  PASS at 0x{found:04X}")
+        else:
+            print(f"  FAIL: tag {tag.hex()} not found")
 
 
 if __name__ == "__main__":
