@@ -50,10 +50,9 @@ class Dev:
 def main():
     dev = Dev()
 
-    dev.init_dma()
-
-    # NOTE: if this is less than 10, it won't work a second time
+    # NOTE: if this is less than 10, it won't work a second time and will fail with BULK IN STALL (-7)
     for i in range(getenv("CNT", 10)):
+        dev.init_dma()
         tag = os.urandom(4)
         test_data = tag + bytes(range(252)) + bytes(range(256))
         print(f"[{i}] SCSI WRITE (tag={tag.hex()})...", end="")
@@ -64,7 +63,6 @@ def main():
         else:
             print(f"  FAIL: expected {tag.hex()}, got {got.hex()}")
             break
-        dev.init_dma()
 
 
 if __name__ == "__main__":
