@@ -198,23 +198,11 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       // receive to 0x911B
-      //REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
+      REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
       // receive to 0x7000
       REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       send_zlp_ack();
       uart_puts("[*** SET CONFIG ***]\n");
-    } else if ((bmReq == USB_SETUP_DIR_HOST_TO_DEV || bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_ENDPOINT))
-               && bReq == USB_REQ_CLEAR_FEATURE) {
-      /* CLEAR_FEATURE(ENDPOINT_HALT) — stock firmware toggles 9200 and resets EP */
-      XDATA_REG8(0x9200) = 0xF1;
-      XDATA_REG8(0x900B) = 0x01;
-      XDATA_REG8(0x900B) = 0x00;
-      XDATA_REG8(0x9200) = 0xB1;
-      XDATA_REG8(0x9006) = 0x10;
-      XDATA_REG8(0x9006) = 0x10;
-      XDATA_REG8(0x905F) = 0x4C;
-      XDATA_REG8(0x90E3) = 0x02;
-      send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       uart_puts("[SET_IFACE alt=");
       uart_puthex(wValL);
@@ -226,14 +214,6 @@ static void handle_usb_control(void) {
         /* Set XCVR mode to UAS */
         XDATA_REG8(0x9018) = 0x02;
         XDATA_REG8(0x9010) = 0x00;
-
-        /* USB status clear + EP setup */
-        XDATA_REG8(0x9000) = 0x00;
-        XDATA_REG8(0x924C) = 0x04;
-        XDATA_REG8(0x905F) = 0x4C;
-        XDATA_REG8(0x905D) = 0x00;
-        XDATA_REG8(0x90E3) = 0x01;
-        XDATA_REG8(0x90A0) = 0x01;
 
         /* Activate */
         XDATA_REG8(0x9000) = 0x01;
@@ -464,19 +444,8 @@ static void uas_send_iu(uint8_t iu_id, uint8_t tag, uint8_t slot) {
   /* DMA config sequence — matches stock firmware trace exactly */
   XDATA_REG8(0xC8D4) = 0x80 + slot;
   XDATA_REG8(0xC4ED) = slot;
-  XDATA_REG8(0xD802) = 0x00;
-  XDATA_REG8(0xD803) = buf_hi;
-  XDATA_REG8(0xD804) = 0x00;
-  XDATA_REG8(0xD805) = 0x00;
-  XDATA_REG8(0xD806) = 0x00;
-  XDATA_REG8(0xD807) = 0x00;
-  XDATA_REG8(0xD80F) = 0x00;
-  XDATA_REG8(0xD800) = 0x03;          /* trigger IN */
-  XDATA_REG8(0xC509) = 0x01;
   XDATA_REG8(0x901A + slot) = 0x10;   /* 16 bytes */
   XDATA_REG8(0x90A1 + slot) = 0x01;   /* bulk DMA trigger */
-  XDATA_REG8(0xC509) = 0x00;
-  XDATA_REG8(0xC8D4) = 0x00;
 }
 
 /* Handle UAS Command IU received at 0x7000 (32 bytes from EP4 OUT).
