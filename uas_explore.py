@@ -10,17 +10,15 @@ from hexdump import hexdump
 # This is what the stock firmware does after SET_INTERFACE alt=1 to bring up
 # the NVMe/UAS DMA engine so bulk writes land at 0xF000.
 DMA_INIT = [
-    (0x900B, 0x02),  # REG_USB_MSC_CFG
-    (0x900B, 0x06),
-    (0x900B, 0x04),
+    (0x900B, 0x06),  # needed for second run
     (0x900B, 0x00),
-    (0xC42A, 0x20),  # REG_NVME_DOORBELL = 0x20
-    (0xC422, 0x02),  # REG_NVME_LBA_LOW = 0x02
-    (0xC427, 0x01),  # REG_NVME_ERROR (sector count) = 0x01
-    (0xC413, 0x02),  # REG_NVME_CONFIG = 0x02 (write mode)
-    (0xC414, 0x80),  # REG_NVME_DATA_CTRL = 0x80
-    (0xC415, 0x01),  # REG_NVME_DEV_STATUS = 0x01
-    (0xC412, 0x03),  # REG_NVME_CTRL_STATUS = 0x03
+
+    (0xC42A, 0x20),  # REG_NVME_DOORBELL = 0x20 (breaks bulk IN)
+    (0xC422, 0x02),  # REG_NVME_LBA_LOW = 0x02 (data is wrong)
+    (0xC427, 0x01),  # REG_NVME_ERROR (sector count) = 0x01 (data is wrong)
+    (0xC414, 0x80),  # REG_NVME_DATA_CTRL = 0x80 (breaks bulk IN)
+    (0xC415, 0x01),  # REG_NVME_DEV_STATUS = 0x01 (without this, read 0xF000 fails)
+    (0xC412, 0x03),  # REG_NVME_CTRL_STATUS = 0x03 (breaks bulk IN)
     (0xC429, 0x00),  # REG_NVME_CMD_PARAM = 0x00
 ]
 
@@ -52,7 +50,7 @@ def main():
 
     dev.init_dma()
 
-    for i in range(5):
+    for i in range(20):
         tag = os.urandom(4)
         test_data = tag + bytes(range(252)) + bytes(range(256))
         print(f"[{i}] SCSI WRITE (tag={tag.hex()})...", end="")
