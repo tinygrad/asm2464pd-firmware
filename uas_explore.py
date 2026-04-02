@@ -13,6 +13,8 @@ DMA_INIT = [
     (0x900B, 0x06),  # needed for second run
     (0x900B, 0x00),
 
+    (0x9000, 0x01),  # REG_USB_STATUS = USB_STATUS_DMA_READY
+
     (0xC42A, 0x20),  # REG_NVME_DOORBELL = 0x20 (breaks bulk IN)
     (0xC422, 0x02),  # REG_NVME_LBA_LOW = 0x02 (data is wrong)
     (0xC427, 0x01),  # REG_NVME_ERROR (sector count) = 0x01 (data is wrong)
