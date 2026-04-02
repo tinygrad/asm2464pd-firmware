@@ -4,7 +4,7 @@
 import ctypes, os, struct, sys
 from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
-from hexdump import hexdump
+from tinygrad.helpers import getenv
 
 # NVMe DMA init sequence from trace/usb2_dma.
 # This is what the stock firmware does after SET_INTERFACE alt=1 to bring up
@@ -52,7 +52,8 @@ def main():
 
     dev.init_dma()
 
-    for i in range(20):
+    # NOTE: if this is less than 10, it won't work a second time
+    for i in range(getenv("CNT", 10)):
         tag = os.urandom(4)
         test_data = tag + bytes(range(252)) + bytes(range(256))
         print(f"[{i}] SCSI WRITE (tag={tag.hex()})...", end="")
