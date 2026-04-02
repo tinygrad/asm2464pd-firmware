@@ -9,66 +9,11 @@ from tinygrad.runtime.autogen import libusb
 # This is what the stock firmware does after SET_INTERFACE alt=1 to bring up
 # the NVMe/UAS DMA engine so bulk writes land at 0xF000.
 C4XX_INIT = [
-    # Phase 1: NVMe queue/link init (first round)
     (0xC42A, 0x20),  # REG_NVME_DOORBELL = 0x20
-    (0xC428, 0x30),  # REG_NVME_QUEUE_CFG = 0x30
-    (0xC473, 0x66),  # REG_NVME_LINK_PARAM = 0x66
-    (0xC472, 0x00),  # REG_NVME_LINK_CTRL = 0x00
-    (0xC448, 0xFF),  # REG_NVME_INIT_CTRL2 = 0xFF
-    (0xC449, 0xFF),  # REG_NVME_INIT_CTRL2_1 = 0xFF
-    (0xC44A, 0xFF),  # REG_NVME_INIT_CTRL2_2 = 0xFF
-    (0xC44B, 0xFF),  # REG_NVME_INIT_CTRL2_3 = 0xFF
-    (0xC473, 0x66),  # REG_NVME_LINK_PARAM = 0x66
-    (0xC472, 0x00),  # REG_NVME_LINK_CTRL = 0x00
-    (0xC438, 0xFF),  # REG_NVME_INIT_CTRL = 0xFF
-    (0xC439, 0xFF),  # REG_NVME_CMD_CDW11 = 0xFF
-    (0xC43A, 0xFF),  # REG_NVME_INT_MASK_A = 0xFF
-    (0xC43B, 0xFF),  # REG_NVME_INT_MASK_B = 0xFF
-    (0xC42A, 0x00),  # REG_NVME_DOORBELL = 0x00
-    (0xC430, 0xFF),  # REG_NVME_CMD_PRP1 = 0xFF
-    (0xC431, 0xFF),  # REG_NVME_CMD_PRP2 = 0xFF
-    (0xC432, 0xFF),  # REG_NVME_CMD_PRP3 = 0xFF
-    (0xC433, 0xFF),  # REG_NVME_CMD_PRP4 = 0xFF
-    (0xC440, 0xFF),  # REG_NVME_QUEUE_CTRL = 0xFF
-    (0xC441, 0xFF),  # REG_NVME_SQ_HEAD = 0xFF
-    (0xC442, 0xFF),  # REG_NVME_SQ_TAIL = 0xFF
-    (0xC443, 0xFF),  # REG_NVME_CQ_HEAD = 0xFF
-
-    # Phase 2: Clear masks
-    (0xC438, 0x00),  # REG_NVME_INIT_CTRL = 0x00
-    (0xC439, 0x00),  # REG_NVME_CMD_CDW11 = 0x00
-    (0xC43A, 0x00),  # REG_NVME_INT_MASK_A = 0x00
-    (0xC43B, 0x00),  # REG_NVME_INT_MASK_B = 0x00
-    (0xC448, 0x00),  # REG_NVME_INIT_CTRL2 = 0x00
-    (0xC449, 0x00),  # REG_NVME_INIT_CTRL2_1 = 0x00
-    (0xC44A, 0x00),  # REG_NVME_INIT_CTRL2_2 = 0x00
-    (0xC44B, 0x00),  # REG_NVME_INIT_CTRL2_3 = 0x00
-
-    # Phase 5: Command slot init — C4EA/C4EB = slot params, C4E8 = slot trigger
-    # Each group: C4EA=0, C4EB=slot_id, C4E8=stream, C428=0x30, C4ED=stream, C47A=0xFF
-    (0xC462, 0x00),  # REG_DMA_ENTRY = 0x00
     (0xC422, 0x02),  # REG_NVME_LBA_LOW = 0x02
-    (0xC4ED, 0x00), (0xC47A, 0xFF),
-    (0xC47A, 0xFF),
-    (0xC4EA, 0x00), (0xC4EB, 0x0C), (0xC4E8, 0x01),
-    (0xC47A, 0xFF), (0xC4ED, 0x00),
-    (0xC4EA, 0x00), (0xC4EB, 0x0D), (0xC4E8, 0x02),
-    (0xC47A, 0xFF), (0xC428, 0x30),
-    (0xC4ED, 0x01), (0xC428, 0x30),
-
-    # Phase 6: NVMe WRITE command setup (first)
-    (0xC414, 0x82),  # REG_NVME_DATA_CTRL = 0x82
-    (0xC401, 0x00),  # REG_NVME_STATUS = 0x00
-    (0xC412, 0x03),  # REG_NVME_CTRL_STATUS = 0x03
-    (0xC428, 0x30),  # REG_NVME_QUEUE_CFG = 0x30
-    (0xC426, 0x00),  # REG_NVME_COUNT_HIGH = 0x00
     (0xC427, 0x01),  # REG_NVME_ERROR (sector count) = 0x01
     (0xC413, 0x02),  # REG_NVME_CONFIG = 0x02 (write mode)
-    (0xC420, 0x00),  # REG_NVME_DMA_XFER_HI = 0x00
-    (0xC421, 0x0D),  # REG_NVME_DMA_XFER_LO = 0x0D
     (0xC414, 0x80),  # REG_NVME_DATA_CTRL = 0x80
-    (0xC412, 0x01),  # REG_NVME_CTRL_STATUS = 0x01
-    (0xC415, 0x04),  # REG_NVME_DEV_STATUS = 0x04
     (0xC415, 0x01),  # REG_NVME_DEV_STATUS = 0x01
     (0xC412, 0x03),  # REG_NVME_CTRL_STATUS = 0x03
     (0xC429, 0x00),  # REG_NVME_CMD_PARAM = 0x00
@@ -94,12 +39,8 @@ class Dev:
 
     def scsi_write(self, data):
         usb = self.usb
-        slot = 0
         cdb = struct.pack('>BBQIBB', 0x8A, 0, 0, len(data) // 512, 0, 0)
-        usb.buf_cmd[slot][16:16+len(cdb)] = list(cdb)
-        usb._uas_tag = (usb._uas_tag % 255) + 1
-        usb.buf_cmd[slot][3] = usb._uas_tag
-        usb._bulk_out(usb.ep_cmd_out, bytes(usb.buf_cmd[slot]))
+        usb._bulk_out(usb.ep_cmd_out, cdb)
         usb._bulk_in(usb.ep_stat_in, 64)
         usb._bulk_out(usb.ep_data_out, data)
 

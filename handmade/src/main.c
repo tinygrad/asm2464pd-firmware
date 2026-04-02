@@ -200,12 +200,7 @@ static void handle_usb_control(void) {
       // receive to 0x911B
       REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
 
-      /* Match stock firmware SET_INTERFACE alt=1 sequence from trace */
-      /* Set XCVR mode to UAS */
-      REG_USB_XCVR_MODE = 0x02;
-      REG_USB_DATA_L = 0x00;
-
-      /* Activate */
+      // setup UAS mode
       REG_USB_STATUS = 0x01;
       REG_USB_CTRL_924C = 0x05;
 
