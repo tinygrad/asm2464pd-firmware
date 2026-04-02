@@ -746,9 +746,11 @@ void main(void) {
       uart_puts("]\n");
       /* Clear the IU so we don't re-trigger */
       XDATA_REG8(0xD000) = 0x00;
-      /* Send RTT on slot B */
+      /* Send RTT on slot B, then arm for data reception */
       uas_state = 1;  /* next I4 = RTT completion */
       uas_send_iu(0x07, uas_tag, 1);
+      XDATA_REG8(0x9093) = 0x08;
+      XDATA_REG8(0xCE88) = 0x02;
     }
     if (uas_state == 3) {
       /* Send Sense/Status IU (deferred from ISR) — reuse slot B like RTT */

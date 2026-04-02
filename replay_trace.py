@@ -21,7 +21,7 @@ Examples:
         --blacklist 0x9092,0x9091 --dry-run
 """
 
-import argparse, ctypes, re, struct, sys, time
+import argparse, ctypes, os, re, struct, sys, time
 from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
 
@@ -168,9 +168,10 @@ def main():
         print(f"Replay complete. {total_writes} writes, {total_reads} reads "
               f"({GREEN}{read_match} match{RESET}, {RED}{read_mismatch} mismatch{RESET}).")
 
-        # Send a SCSI WRITE(16) via UAS
-        test_data = bytes(range(256)) + bytes(range(256))
-        print(f"\nSending SCSI WRITE(16) via UAS ({len(test_data)} bytes)...", end="")
+        # Send data via UAS bulk write with random prefix to detect stale data
+        tag = os.urandom(4)
+        test_data = tag + bytes(range(252)) + bytes(range(256))
+        print(f"\nSending {len(test_data)} bytes via UAS (tag={tag.hex()})...", end="")
         try:
             dev.scsi_write(test_data)
             print("  done.")
@@ -182,8 +183,7 @@ def main():
         for off in range(0, 64, 16):
             vals = [dev.read8(0xF000 + off + i) for i in range(16)]
             hex_str = ' '.join(f'{v:02X}' for v in vals)
-            ascii_str = ''.join(chr(v) if 32 <= v < 127 else '.' for v in vals)
-            print(f"  F{off:03X}: {hex_str}  |{ascii_str}|")
+            print(f"  F{off:03X}: {hex_str}")
 
 
 if __name__ == "__main__":
