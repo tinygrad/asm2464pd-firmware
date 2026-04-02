@@ -375,11 +375,9 @@ static inline void dma_addr_inc(void) {
   }
 }
 
-/* Read dma_count dwords from PCIe into D800, then trigger bulk IN send */
-static inline void pcie_read_chunk(void) {
-  __xdata uint8_t *dst = (__xdata uint8_t *)0xD800;
+static inline void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
   uint8_t ci;
-  for (ci = 0; ci < dma_count; ci++) {
+  for (ci = 0; ci < cnt; ci++) {
     REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
     REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
     while (!(REG_PCIE_STATUS & (PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE)));
@@ -389,19 +387,11 @@ static inline void pcie_read_chunk(void) {
     *dst++ = REG_PCIE_DATA_3;
     dma_addr_inc();
   }
-  REG_USB_MSC_LENGTH = (uint8_t)(dma_count * 4);
-  REG_USB_BULK_DMA_TRIGGER = 0x01;
-  // unfortunately we need this to block and prevent the next one clobbering it
-  // while the DMA out the USB is happening
-  while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
 }
 
-static inline void pcie_write_chunk(void) {
-  /* Streaming write: bulk OUT byte count from HW, converted to dwords */
-  __xdata uint8_t *src = (__xdata uint8_t *)0x7000;
-  uint16_t byte_count = ((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L;
+static inline void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
   uint16_t ci;
-  for (ci = 0; ci < (byte_count >> 2); ci++) {
+  for (ci = 0; ci < cnt; ci++) {
     REG_PCIE_DATA_0 = *src++;
     REG_PCIE_DATA_1 = *src++;
     REG_PCIE_DATA_2 = *src++;
@@ -423,7 +413,8 @@ void handle_usb_bulk_data(void) {
   }
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
     if (dma_mode == 1) {
-      pcie_write_chunk();
+      uint16_t byte_count = ((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L;
+      pcie_write_chunk((__xdata uint8_t *)0x7000, byte_count >> 2);
     } else {
       // dump what's at 0x7000
       uart_puts("[7000=");
@@ -435,12 +426,16 @@ void handle_usb_bulk_data(void) {
     REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
     if (dma_mode == 2) {
-      pcie_read_chunk();
+      pcie_read_chunk((__xdata uint8_t *)0xD800, dma_count);
+      REG_USB_MSC_LENGTH = dma_count * 4;
     } else {
       /* Generic bulk IN: send 13 bytes from D800 */
-      REG_USB_MSC_LENGTH = 0x0d;
-      REG_USB_BULK_DMA_TRIGGER = 0x01;
+      REG_USB_MSC_LENGTH = 0xD;
     }
+    REG_USB_BULK_DMA_TRIGGER = 0x01;
+    // unfortunately we need this to block and prevent the next one clobbering it
+    // while the DMA out the USB is happening
+    while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_START) {
     // ack
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_START) {
