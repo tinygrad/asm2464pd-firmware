@@ -129,13 +129,7 @@ class Dev:
         usb._uas_tag = (usb._uas_tag % 255) + 1
         usb.buf_cmd[slot][3] = usb._uas_tag
         usb._bulk_out(usb.ep_cmd_out, bytes(usb.buf_cmd[slot]))
-        for _retry in range(10):
-            _rtt = usb._bulk_in(usb.ep_stat_in, 64)
-            if _rtt[0] == 0x07: break
-            usb._uas_tag = (usb._uas_tag % 255) + 1
-            usb.buf_cmd[slot][3] = usb._uas_tag
-            usb._bulk_out(usb.ep_cmd_out, bytes(usb.buf_cmd[slot]))
-        else: raise RuntimeError("UAS: failed to get RTT after 10 retries")
+        usb._bulk_in(usb.ep_stat_in, 64)
         usb._bulk_out(usb.ep_data_out, data)
 
 

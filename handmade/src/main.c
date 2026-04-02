@@ -429,42 +429,6 @@ static inline void pcie_write_chunk(void) {
   }
 }
 
-/* Send a UAS IU via bulk IN using the stock firmware's DMA sequence.
- * slot: 0=A, 1=B, 2=C, 3=D — maps to buf 0x0B00/0C00/0D00/0E00,
- * DMA config 0x80+slot, C4ED=slot, 901A+slot, 90A1+slot. */
-static void uas_send_iu(uint8_t iu_id, uint8_t tag, uint8_t slot) {
-  uint8_t buf_hi = 0x0B + slot;
-  __xdata uint8_t *buf = (__xdata uint8_t *)((uint16_t)buf_hi << 8);
-  uint8_t i;
-  /* Write 16-byte IU to buffer */
-  for (i = 0; i < 16; i++) buf[i] = 0;
-  buf[0] = iu_id;
-  buf[3] = tag;
-
-  /* DMA config sequence — matches stock firmware trace exactly */
-  XDATA_REG8(0xC8D4) = 0x80 + slot;
-  XDATA_REG8(0xC4ED) = slot;
-  XDATA_REG8(0x901A + slot) = 0x10;   /* 16 bytes */
-  XDATA_REG8(0x90A1 + slot) = 0x01;   /* bulk DMA trigger */
-}
-
-/* Handle UAS Command IU received at 0x7000 (32 bytes from EP4 OUT).
- * Parse the tag from byte[3], send RTT, wait for data, send status. */
-static void handle_uas_command(void) {
-  __xdata uint8_t *cmd = (__xdata uint8_t *)0x7000;
-  uas_tag = cmd[3];
-
-  uart_puts("[UAS cmd=");
-  uart_puthex(cmd[16]);  /* CDB opcode */
-  uart_puts(" tag=");
-  uart_puthex(uas_tag);
-  uart_puts("]\n");
-
-  /* Send RTT on slot B (matches stock trace: 901B, 90A2, C8D4=0x81) */
-  uas_state = 1;  /* next I4 = RTT completion, skip it */
-  uas_send_iu(0x07, uas_tag, 1);
-}
-
 void handle_usb_bulk_data(void) {
   uint8_t bulk_cfg1, bulk_cfg2;
   bulk_cfg1 = REG_USB_EP_CFG1;
@@ -475,17 +439,10 @@ void handle_usb_bulk_data(void) {
     uart_puts("]\n");
   }
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
-    if (uas_state == 2) {
-      /* UAS data phase complete — send Sense IU (status=GOOD) */
-      uart_puts("[UAS data ok]\n");
-      uas_state = 0;
-      uas_send_iu(0x03, uas_tag, 2);
-    } else if (dma_mode == 1) {
+    if (dma_mode == 1) {
       pcie_write_chunk();
-    } else if (XDATA_REG8(0x7000) == 0x01) {
-      /* UAS Command IU (byte[0]=0x01) received on EP4 */
-      handle_uas_command();
     } else {
+      // dump what's at 0x7000
       uart_puts("[7000=");
       uart_puthex(XDATA_REG8(0x7000)); uart_puthex(XDATA_REG8(0x7001));
       uart_puthex(XDATA_REG8(0x7002)); uart_puthex(XDATA_REG8(0x7003));
@@ -644,28 +601,5 @@ void main(void) {
   /* Clear stale data in command buffer */
   { uint8_t ci; for (ci = 0; ci < 128; ci++) XDATA_REG8(0xD000 + ci) = 0x00; }
 
-  while (1) {
-    /* Poll for UAS Command IUs at D000 */
-    if (XDATA_REG8(0xD000) == 0x01 && uas_state == 0) {
-      uas_tag = XDATA_REG8(0xD003);
-      uart_puts("[UAS cmd=");
-      uart_puthex(XDATA_REG8(0xD010));
-      uart_puts(" tag=");
-      uart_puthex(uas_tag);
-      uart_puts("]\n");
-      /* Clear the IU so we don't re-trigger */
-      XDATA_REG8(0xD000) = 0x00;
-      /* Send RTT on slot B, then arm for data reception */
-      uas_state = 1;  /* next I4 = RTT completion */
-      uas_send_iu(0x07, uas_tag, 1);
-      XDATA_REG8(0x9093) = 0x08;
-      XDATA_REG8(0xCE88) = 0x02;
-    }
-    if (uas_state == 3) {
-      /* Send Sense/Status IU (deferred from ISR) — reuse slot B like RTT */
-      uart_puts("[UAS sense]\n");
-      uas_state = 0;
-      uas_send_iu(0x03, uas_tag, 1);
-    }
-  }
+  while (1) { }
 }
