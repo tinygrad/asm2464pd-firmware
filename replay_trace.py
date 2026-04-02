@@ -45,8 +45,25 @@ class Dev:
         assert ret >= 0, f"write(0x{addr:04X}, 0x{val:02X}) failed: {ret}"
 
     def scsi_write(self, data):
+        usb = self.usb
+        slot = 0
         cdb = struct.pack('>BBQIBB', 0x8A, 0, 0, len(data) // 512, 0, 0)
-        self.usb.send_batch([cdb], idata=[0], odata=[data])
+        usb.buf_cmd[slot][16:16+len(cdb)] = list(cdb)
+        usb._uas_tag = (usb._uas_tag % 255) + 1
+        usb.buf_cmd[slot][3] = usb._uas_tag
+        # 1. Send command IU
+        usb._bulk_out(usb.ep_cmd_out, bytes(usb.buf_cmd[slot]))
+        # 2. Wait for RTT
+        for _retry in range(10):
+            _rtt = usb._bulk_in(usb.ep_stat_in, 64)
+            if _rtt[0] == 0x07: break
+            usb._uas_tag = (usb._uas_tag % 255) + 1
+            usb.buf_cmd[slot][3] = usb._uas_tag
+            usb._bulk_out(usb.ep_cmd_out, bytes(usb.buf_cmd[slot]))
+        else: raise RuntimeError("UAS: failed to get RTT after 10 retries")
+        # 3. Send data
+        usb._bulk_out(usb.ep_data_out, data)
+        # skip status read — firmware doesn't send Sense IU yet
 
 
 def parse_ops(filename, after=None, before=None):
