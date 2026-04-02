@@ -9,6 +9,8 @@
 
 static uint8_t is_usb3;
 static uint8_t pcie_link_up;
+static uint8_t uas_tag;        /* tag from last Command IU */
+static uint8_t uas_state;      /* 0=idle, 1=waiting for data (RTT sent), 2=done */
 
 /* Streaming PCIe DMA state — configured via 0xF0 control message */
 static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
@@ -201,7 +203,102 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       send_zlp_ack();
       uart_puts("[*** SET CONFIG ***]\n");
+    } else if ((bmReq == USB_SETUP_DIR_HOST_TO_DEV || bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_ENDPOINT))
+               && bReq == USB_REQ_CLEAR_FEATURE) {
+      /* CLEAR_FEATURE(ENDPOINT_HALT) — stock firmware toggles 9200 and resets EP */
+      XDATA_REG8(0x9200) = 0xF1;
+      XDATA_REG8(0x900B) = 0x01;
+      XDATA_REG8(0x900B) = 0x00;
+      XDATA_REG8(0x9200) = 0xB1;
+      XDATA_REG8(0x9006) = 0x10;
+      XDATA_REG8(0x9006) = 0x10;
+      XDATA_REG8(0x905F) = 0x4C;
+      XDATA_REG8(0x90E3) = 0x02;
+      send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
+      uart_puts("[SET_IFACE alt=");
+      uart_puthex(wValL);
+      uart_puts("]\n");
+      if (wValL == 1) {
+        uint8_t si;
+        uas_state = 0;
+        /* Match stock firmware SET_INTERFACE alt=1 sequence from trace */
+
+        /* NVMe doorbell + queue init (required for C471 to stick) */
+        XDATA_REG8(0xB480) = 0x01;   /* Must be set BEFORE NVMe init */
+        XDATA_REG8(0xC42A) = 0x20;
+        XDATA_REG8(0xC428) = 0x30;
+        XDATA_REG8(0xC473) = 0x66;
+        XDATA_REG8(0xC472) = 0x00;
+        XDATA_REG8(0xC448) = 0xFF; XDATA_REG8(0xC449) = 0xFF;
+        XDATA_REG8(0xC44A) = 0xFF; XDATA_REG8(0xC44B) = 0xFF;
+        XDATA_REG8(0xC438) = 0xFF; XDATA_REG8(0xC439) = 0xFF;
+        XDATA_REG8(0xC43A) = 0xFF; XDATA_REG8(0xC43B) = 0xFF;
+        XDATA_REG8(0xC42A) = 0x00;
+        XDATA_REG8(0xC430) = 0xFF; XDATA_REG8(0xC431) = 0xFF;
+        XDATA_REG8(0xC432) = 0xFF; XDATA_REG8(0xC433) = 0xFF;
+        XDATA_REG8(0xC440) = 0xFF; XDATA_REG8(0xC441) = 0xFF;
+        XDATA_REG8(0xC442) = 0xFF; XDATA_REG8(0xC443) = 0xFF;
+
+        /* Clear EP ready and mode registers */
+        XDATA_REG8(0x9096) = 0xFF; XDATA_REG8(0x9097) = 0xFF;
+        XDATA_REG8(0x9098) = 0xFF; XDATA_REG8(0x9099) = 0xFF;
+        XDATA_REG8(0x909A) = 0xFF; XDATA_REG8(0x909B) = 0xFF;
+        XDATA_REG8(0x909C) = 0xFF; XDATA_REG8(0x909D) = 0xFF;
+        XDATA_REG8(0x909E) = 0x03;
+
+        /* Clear/re-set NVMe masks */
+        XDATA_REG8(0xC438) = 0x00; XDATA_REG8(0xC439) = 0x00;
+        XDATA_REG8(0xC43A) = 0x00; XDATA_REG8(0xC43B) = 0x00;
+        XDATA_REG8(0xC448) = 0x00; XDATA_REG8(0xC449) = 0x00;
+        XDATA_REG8(0xC44A) = 0x00; XDATA_REG8(0xC44B) = 0x00;
+
+        /* Clear FIFOs */
+        XDATA_REG8(0x9011) = 0x00; XDATA_REG8(0x9012) = 0x00;
+        XDATA_REG8(0x9013) = 0x00; XDATA_REG8(0x9014) = 0x00;
+        XDATA_REG8(0x9015) = 0x00; XDATA_REG8(0x9016) = 0x00;
+        XDATA_REG8(0x9017) = 0x00;
+
+        /* Set XCVR mode to UAS */
+        XDATA_REG8(0x9018) = 0x02;
+        XDATA_REG8(0x9010) = 0x00;
+
+        /* Second NVMe queue init round */
+        XDATA_REG8(0xC428) = 0x30;
+        XDATA_REG8(0xC473) = 0x66;
+        XDATA_REG8(0xC472) = 0x00;
+        XDATA_REG8(0xC448) = 0xFF; XDATA_REG8(0xC449) = 0xFF;
+        XDATA_REG8(0xC44A) = 0xFF; XDATA_REG8(0xC44B) = 0xFF;
+        XDATA_REG8(0xC438) = 0xFF; XDATA_REG8(0xC439) = 0xFF;
+        XDATA_REG8(0xC43A) = 0xFF; XDATA_REG8(0xC43B) = 0xFF;
+
+        /* Doorbell sequence */
+        XDATA_REG8(0xC42A) = 0x02; XDATA_REG8(0xC42A) = 0x06;
+        XDATA_REG8(0xC42A) = 0x0E; XDATA_REG8(0xC42A) = 0x0C;
+        XDATA_REG8(0xC42A) = 0x08; XDATA_REG8(0xC42A) = 0x00;
+        XDATA_REG8(0xC471) = 0x01;   /* NVMe queue busy — enables bulk DMA */
+        XDATA_REG8(0xC472) = 0x00;
+        XDATA_REG8(0xC42A) = 0x10; XDATA_REG8(0xC42A) = 0x00;
+
+        /* MSC config toggle */
+        XDATA_REG8(0x900B) = 0x02; XDATA_REG8(0x900B) = 0x06;
+        XDATA_REG8(0x900B) = 0x04; XDATA_REG8(0x900B) = 0x00;
+
+        /* USB status clear + EP setup */
+        XDATA_REG8(0x9000) = 0x00;
+        XDATA_REG8(0x924C) = 0x04;
+        XDATA_REG8(0x905F) = 0x4C;
+        XDATA_REG8(0x905D) = 0x00;
+        XDATA_REG8(0x90E3) = 0x01;
+        XDATA_REG8(0x90A0) = 0x01;
+
+        /* Activate */
+        XDATA_REG8(0x9000) = 0x01;
+        XDATA_REG8(0x924C) = 0x05;
+
+        /* Zero D800 buffer */
+        for (si = 0; si < 0x68; si++) XDATA_REG8(0xD800 + si) = 0x00;
+      }
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
       /* Vendor read XDATA via control.  wValue=addr, wLength=size.
@@ -412,6 +509,57 @@ static inline void pcie_write_chunk(void) {
   }
 }
 
+/* Send a UAS IU via bulk IN using the stock firmware's DMA sequence.
+ * slot: 0=A, 1=B, 2=C, 3=D — maps to buf 0x0B00/0C00/0D00/0E00,
+ * DMA config 0x80+slot, C4ED=slot, 901A+slot, 90A1+slot. */
+static void uas_send_iu(uint8_t iu_id, uint8_t tag, uint8_t slot) {
+  uint8_t buf_hi = 0x0B + slot;
+  __xdata uint8_t *buf = (__xdata uint8_t *)((uint16_t)buf_hi << 8);
+  uint8_t i;
+  /* Write 16-byte IU to buffer */
+  for (i = 0; i < 16; i++) buf[i] = 0;
+  buf[0] = iu_id;
+  buf[3] = tag;
+
+  /* DMA config sequence — matches stock firmware trace exactly */
+  XDATA_REG8(0xC8D4) = 0x80 + slot;
+  XDATA_REG8(0xC4ED) = slot;
+  XDATA_REG8(0xD802) = 0x00;
+  XDATA_REG8(0xD803) = buf_hi;
+  XDATA_REG8(0xD804) = 0x00;
+  XDATA_REG8(0xD805) = 0x00;
+  XDATA_REG8(0xD806) = 0x00;
+  XDATA_REG8(0xD807) = 0x00;
+  XDATA_REG8(0xD80F) = 0x00;
+  XDATA_REG8(0xD800) = 0x03;          /* trigger IN */
+  XDATA_REG8(0xC509) = 0x01;
+  XDATA_REG8(0x901A + slot) = 0x10;   /* 16 bytes */
+  XDATA_REG8(0x90A1 + slot) = 0x01;   /* bulk DMA trigger */
+  XDATA_REG8(0xC509) = 0x00;
+  XDATA_REG8(0xC8D4) = 0x00;
+}
+
+/* Handle UAS Command IU received at 0x7000 (32 bytes from EP4 OUT).
+ * Parse the tag from byte[3], send RTT, wait for data, send status. */
+static void handle_uas_command(void) {
+  __xdata uint8_t *cmd = (__xdata uint8_t *)0x7000;
+  uas_tag = cmd[3];
+
+  uart_puts("[UAS cmd=");
+  uart_puthex(cmd[16]);  /* CDB opcode */
+  uart_puts(" tag=");
+  uart_puthex(uas_tag);
+  uart_puts("]\n");
+
+  /* Send RTT on slot B (matches stock trace: 901B, 90A2, C8D4=0x81) */
+  uas_state = 1;
+  uas_send_iu(0x07, uas_tag, 1);
+
+  /* Arm endpoint for data reception — match stock firmware trace */
+  XDATA_REG8(0x9093) = 0x08;
+  XDATA_REG8(0xCE88) = 0x02;
+}
+
 void handle_usb_bulk_data(void) {
   uint8_t bulk_cfg1, bulk_cfg2;
   bulk_cfg1 = REG_USB_EP_CFG1;
@@ -422,17 +570,26 @@ void handle_usb_bulk_data(void) {
     uart_puts("]\n");
   }
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
-    if (dma_mode == 1) {
+    if (uas_state == 1) {
+      /* UAS data phase complete — send Sense IU (status=GOOD) */
+      uart_puts("[UAS data ok]\n");
+      uas_state = 0;
+      /* Send Sense/Status on slot C (matches stock trace: 901C, 90A3, C8D4=0x82) */
+      uas_send_iu(0x03, uas_tag, 2);
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+    } else if (dma_mode == 1) {
       pcie_write_chunk();
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+    } else if (XDATA_REG8(0x7000) == 0x01) {
+      /* UAS Command IU (byte[0]=0x01) received on EP4 */
+      handle_uas_command();
     } else {
-      // dump what's at 0x7000
       uart_puts("[7000=");
       uart_puthex(XDATA_REG8(0x7000)); uart_puthex(XDATA_REG8(0x7001));
       uart_puthex(XDATA_REG8(0x7002)); uart_puthex(XDATA_REG8(0x7003));
       uart_puts("]\n");
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
     }
-    // re-arm OUT
-    REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
     if (dma_mode == 2) {
       pcie_read_chunk();
@@ -483,7 +640,24 @@ void int0_isr(void) __interrupt(0) {
       uart_puts("]\n");
     }
   }
-  if (int0_type & (~INT_USB_GATE)) {
+  if (int0_type & 0x04) {
+    /* DMA/bulk completion */
+    uint8_t ep_status = XDATA_REG8(0x9118);
+    if (uas_state == 1) {
+      uart_puts("[I4 uas_data s=");
+      uart_puthex(ep_status);
+      uart_puts("]\n");
+      /* Data arrived — send Sense/Status IU on slot C */
+      uas_state = 0;
+      uas_send_iu(0x03, uas_tag, 2);
+    }
+    while (ep_status) {
+      uint8_t ep = REG_USB_EP_READY;
+      if (ep) REG_USB_EP_READY = ep;
+      ep_status = XDATA_REG8(0x9118);
+    }
+  }
+  if (int0_type & ~(INT_USB_GATE | 0x04)) {
     uart_puts("[UNHANDLED INT0 TYPE ");
     uart_puthex(int0_type);
     uart_puts("]\n");
@@ -563,7 +737,25 @@ void main(void) {
   pcie_link_up = 1;
   uart_puts("[PCIe up]\n");
 
+  /* Clear stale data in command buffer */
+  { uint8_t ci; for (ci = 0; ci < 128; ci++) XDATA_REG8(0xD000 + ci) = 0x00; }
+
   while (1) {
-    // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
+    /* Poll for UAS Command IUs at D000 */
+    if (XDATA_REG8(0xD000) == 0x01 && uas_state == 0) {
+      uas_tag = XDATA_REG8(0xD003);
+      uart_puts("[UAS cmd=");
+      uart_puthex(XDATA_REG8(0xD010));
+      uart_puts(" tag=");
+      uart_puthex(uas_tag);
+      uart_puts("]\n");
+      /* Clear the IU so we don't re-trigger */
+      XDATA_REG8(0xD000) = 0x00;
+      /* Send RTT on slot B */
+      uas_state = 1;
+      uas_send_iu(0x07, uas_tag, 1);
+      XDATA_REG8(0x9093) = 0x08;
+      XDATA_REG8(0xCE88) = 0x02;
+    }
   }
 }
