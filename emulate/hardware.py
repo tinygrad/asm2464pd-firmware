@@ -3203,8 +3203,9 @@ def create_hardware_hooks(memory: 'Memory', hw: HardwareState, proxy: 'UARTProxy
         # The emulator runs the code but hardware state (IE, timers, etc.)
         # must be synchronized with real hardware.
 
-        # SFRs to proxy (interrupt and timer related)
+        # SFRs to proxy (interrupt, timer, and bank select related)
         proxy_sfrs = [
+            0x93,  # DPX - XDATA bank select (0=normal, 1=PHY regs)
             0xA8,  # IE - Interrupt Enable
             0xB8,  # IP - Interrupt Priority
             0x88,  # TCON - Timer Control

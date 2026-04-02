@@ -53,6 +53,7 @@ typedef unsigned int uint16_t;
 volatile __xdata __at(0x5FF0) uint8_t pending_int_mask;
 volatile __xdata __at(0x5FF1) uint8_t sent_int_mask;
 __xdata __at(0x5FF2) uint8_t shadow_ie;
+__xdata __at(0x5FF3) uint8_t shadow_dpx;
 
 /*
  * SFR access - SFRs are at 0x80-0xFF and require direct addressing.
@@ -65,6 +66,7 @@ __sfr __at(0x8A) SFR_TL0;   /* Timer 0 Low */
 __sfr __at(0x8B) SFR_TL1;   /* Timer 1 Low */
 __sfr __at(0x8C) SFR_TH0;   /* Timer 0 High */
 __sfr __at(0x8D) SFR_TH1;   /* Timer 1 High */
+__sfr __at(0x93) SFR_DPX;   /* XDATA bank select (0=normal, 1=PHY regs) */
 __sfr __at(0xD0) SFR_PSW;   /* Program Status Word */
 __sfr __at(0xE0) SFR_ACC;   /* Accumulator */
 __sfr __at(0xF0) SFR_B;     /* B Register */
@@ -104,9 +106,16 @@ static uint8_t is_uart_addr(uint16_t addr)
 
 static uint8_t xdata_read(uint16_t addr)
 {
+    uint8_t val;
     if (is_uart_addr(addr)) {
         if (addr == 0xC009) return 0x60;
         return 0x00;
+    }
+    if (shadow_dpx) {
+        SFR_DPX = shadow_dpx;
+        val = *(__xdata volatile uint8_t *)addr;
+        SFR_DPX = 0x00;
+        return val;
     }
     return *(__xdata volatile uint8_t *)addr;
 }
@@ -114,12 +123,19 @@ static uint8_t xdata_read(uint16_t addr)
 static void xdata_write(uint16_t addr, uint8_t val)
 {
     if (is_uart_addr(addr)) return;
+    if (shadow_dpx) {
+        SFR_DPX = shadow_dpx;
+        *(__xdata volatile uint8_t *)addr = val;
+        SFR_DPX = 0x00;
+        return;
+    }
     *(__xdata volatile uint8_t *)addr = val;
 }
 
 static uint8_t sfr_read(uint8_t addr)
 {
     switch (addr) {
+        case 0x93: return shadow_dpx; /* Return shadow (real DPX stays 0) */
         case 0xA8: return shadow_ie;  /* Return what emulator expects */
         case 0xB8: return SFR_IP;
         case 0x88: return SFR_TCON;
@@ -142,6 +158,7 @@ static uint8_t sfr_read(uint8_t addr)
 static void sfr_write(uint8_t addr, uint8_t val)
 {
     switch (addr) {
+        case 0x93: shadow_dpx = val; break; /* Shadow only, don't set real DPX */
         case 0xA8: shadow_ie = val; break;
         case 0xB8: SFR_IP = val; break;
         case 0x88: SFR_TCON = val; break;
@@ -181,6 +198,7 @@ void main(void)
     pending_int_mask = 0;
     sent_int_mask = 0;
     shadow_ie = 0;
+    shadow_dpx = 0;
 
     /* Disable parity to get 8N1 */
     REG_UART_LCR &= 0xF7;
