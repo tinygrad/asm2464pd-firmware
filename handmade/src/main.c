@@ -511,12 +511,7 @@ void int0_isr(void) __interrupt(0) {
 }
 
 void int1_isr(void) __interrupt(1) {
-  uint8_t event = REG_POWER_EVENT_92E1;
-  uart_puts("[int1 ");
-  uart_puthex(event);
-  uart_puts("]\n");
-  REG_POWER_STATUS &= ~(POWER_STATUS_USB_PATH | 0x80);
-  REG_POWER_EVENT_92E1 = event;
+  uart_puts("[int1]\n");
 }
 
 void main(void) {
@@ -552,11 +547,6 @@ void main(void) {
   // enables CBW_RECEIVED interrupts
   REG_USB_EP_MGMT = 0x00;
 
-  // MSC buffer config -- generate 0x08 on USB3
-  /*REG_BUF_CFG_9303 = 0x33;
-  REG_BUF_CFG_9304 = 0x3F;
-  REG_BUF_CFG_9305 = 0x40;*/
-
   // PCIe TLP engine values that don't change
   REG_PCIE_TLP_CTRL   = 0x01;
   REG_PCIE_TLP_LENGTH = 0x20;
@@ -583,8 +573,7 @@ void main(void) {
   pcie_link_up = 1;
   uart_puts("[PCIe up]\n");
 
-  /* Clear stale data in command buffer */
-  { uint8_t ci; for (ci = 0; ci < 128; ci++) XDATA_REG8(0xD000 + ci) = 0x00; }
-
-  while (1) { }
+  while (1) {
+    // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
+  }
 }
