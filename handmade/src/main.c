@@ -223,66 +223,9 @@ static void handle_usb_control(void) {
         uint8_t si;
         uas_state = 0;
         /* Match stock firmware SET_INTERFACE alt=1 sequence from trace */
-
-        /* NVMe doorbell + queue init (required for C471 to stick) */
-        XDATA_REG8(0xB480) = 0x01;   /* Must be set BEFORE NVMe init */
-        XDATA_REG8(0xC42A) = 0x20;
-        XDATA_REG8(0xC428) = 0x30;
-        XDATA_REG8(0xC473) = 0x66;
-        XDATA_REG8(0xC472) = 0x00;
-        XDATA_REG8(0xC448) = 0xFF; XDATA_REG8(0xC449) = 0xFF;
-        XDATA_REG8(0xC44A) = 0xFF; XDATA_REG8(0xC44B) = 0xFF;
-        XDATA_REG8(0xC438) = 0xFF; XDATA_REG8(0xC439) = 0xFF;
-        XDATA_REG8(0xC43A) = 0xFF; XDATA_REG8(0xC43B) = 0xFF;
-        XDATA_REG8(0xC42A) = 0x00;
-        XDATA_REG8(0xC430) = 0xFF; XDATA_REG8(0xC431) = 0xFF;
-        XDATA_REG8(0xC432) = 0xFF; XDATA_REG8(0xC433) = 0xFF;
-        XDATA_REG8(0xC440) = 0xFF; XDATA_REG8(0xC441) = 0xFF;
-        XDATA_REG8(0xC442) = 0xFF; XDATA_REG8(0xC443) = 0xFF;
-
-        /* Clear EP ready and mode registers */
-        XDATA_REG8(0x9096) = 0xFF; XDATA_REG8(0x9097) = 0xFF;
-        XDATA_REG8(0x9098) = 0xFF; XDATA_REG8(0x9099) = 0xFF;
-        XDATA_REG8(0x909A) = 0xFF; XDATA_REG8(0x909B) = 0xFF;
-        XDATA_REG8(0x909C) = 0xFF; XDATA_REG8(0x909D) = 0xFF;
-        XDATA_REG8(0x909E) = 0x03;
-
-        /* Clear/re-set NVMe masks */
-        XDATA_REG8(0xC438) = 0x00; XDATA_REG8(0xC439) = 0x00;
-        XDATA_REG8(0xC43A) = 0x00; XDATA_REG8(0xC43B) = 0x00;
-        XDATA_REG8(0xC448) = 0x00; XDATA_REG8(0xC449) = 0x00;
-        XDATA_REG8(0xC44A) = 0x00; XDATA_REG8(0xC44B) = 0x00;
-
-        /* Clear FIFOs */
-        XDATA_REG8(0x9011) = 0x00; XDATA_REG8(0x9012) = 0x00;
-        XDATA_REG8(0x9013) = 0x00; XDATA_REG8(0x9014) = 0x00;
-        XDATA_REG8(0x9015) = 0x00; XDATA_REG8(0x9016) = 0x00;
-        XDATA_REG8(0x9017) = 0x00;
-
         /* Set XCVR mode to UAS */
         XDATA_REG8(0x9018) = 0x02;
         XDATA_REG8(0x9010) = 0x00;
-
-        /* Second NVMe queue init round */
-        XDATA_REG8(0xC428) = 0x30;
-        XDATA_REG8(0xC473) = 0x66;
-        XDATA_REG8(0xC472) = 0x00;
-        XDATA_REG8(0xC448) = 0xFF; XDATA_REG8(0xC449) = 0xFF;
-        XDATA_REG8(0xC44A) = 0xFF; XDATA_REG8(0xC44B) = 0xFF;
-        XDATA_REG8(0xC438) = 0xFF; XDATA_REG8(0xC439) = 0xFF;
-        XDATA_REG8(0xC43A) = 0xFF; XDATA_REG8(0xC43B) = 0xFF;
-
-        /* Doorbell sequence */
-        XDATA_REG8(0xC42A) = 0x02; XDATA_REG8(0xC42A) = 0x06;
-        XDATA_REG8(0xC42A) = 0x0E; XDATA_REG8(0xC42A) = 0x0C;
-        XDATA_REG8(0xC42A) = 0x08; XDATA_REG8(0xC42A) = 0x00;
-        XDATA_REG8(0xC471) = 0x01;   /* NVMe queue busy — enables bulk DMA */
-        XDATA_REG8(0xC472) = 0x00;
-        XDATA_REG8(0xC42A) = 0x10; XDATA_REG8(0xC42A) = 0x00;
-
-        /* MSC config toggle */
-        XDATA_REG8(0x900B) = 0x02; XDATA_REG8(0x900B) = 0x06;
-        XDATA_REG8(0x900B) = 0x04; XDATA_REG8(0x900B) = 0x00;
 
         /* USB status clear + EP setup */
         XDATA_REG8(0x9000) = 0x00;
@@ -295,9 +238,6 @@ static void handle_usb_control(void) {
         /* Activate */
         XDATA_REG8(0x9000) = 0x01;
         XDATA_REG8(0x924C) = 0x05;
-
-        /* Zero D800 buffer */
-        for (si = 0; si < 0x68; si++) XDATA_REG8(0xD800 + si) = 0x00;
       }
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
