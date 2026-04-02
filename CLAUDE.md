@@ -25,7 +25,7 @@ Flash it with:
 make -C clean flash-proxy
 
 Run it with:
-python3 emulate/emu.py --proxy --proxy-debug 2 fw_tinygrad.bin
+PYTHONUNBUFFERED=1 python3 emulate/emu.py --proxy --proxy-debug 2 fw_tinygrad.bin | tee /tmp/trace
 
 
 You can reset the device with:
@@ -33,3 +33,13 @@ You can reset the device with:
 ./ftdi_debug.py -rn
 
 If you don't need to change the code, this is faster than a reflash.
+
+
+If you want to do experiments with the stock firmware, you can flash it with:
+
+./ftdi_debug.py -bn && ./flash.py fw_tinygrad.bin && ./ftdi_debug.py -rn
+
+
+You can access the serial port with this in a different screen, then tail /tmp/serial:
+
+PYTHONUNBUFFERED=1 ./ftdi_debug.py | tee /tmp/serial
