@@ -43,9 +43,15 @@ static void uart_puthex(uint8_t val) {
 
 /*=== USB Control Transfer Helpers ===*/
 
+static uint8_t ctrl_send_total;  /* total bytes to send */
+static uint8_t ctrl_send_pos;    /* bytes already sent */
+
 static void send_control_data(uint8_t len) {
+  uint8_t chunk = (len > 64) ? 64 : len;
+  ctrl_send_total = len;
+  ctrl_send_pos = chunk;
   REG_USB_EP0_STATUS = 0x00;
-  REG_USB_EP0_LEN_L = len;
+  REG_USB_EP0_LEN_L = chunk;
   REG_USB_DMA_TRIGGER = USB_DMA_SEND;
   REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
 }
@@ -63,18 +69,46 @@ static __code const uint8_t dev_desc_30[] = {
   0xD1, 0xAD, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x01,
 };
 static __code const uint8_t cfg_desc[] = {
-  0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,  /* wTotalLength=32 */
-  0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,  /* bNumEndpoints=2 */
-  0x07, 0x05, 0x81, 0x02, 0x40, 0x00, 0x00,  /* EP1 IN bulk 64 */
-  0x07, 0x05, 0x02, 0x02, 0x40, 0x00, 0x00,  /* EP2 OUT bulk 64 */
+  /* Config: wTotalLength=85, 1 interface */
+  0x09, 0x02, 0x55, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
+  /* Alt 0: BBB — 2 bulk EPs, Mass Storage / SCSI / BBB */
+  0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,
+  0x07, 0x05, 0x81, 0x02, 0x00, 0x02, 0x00,  /* EP1 IN  bulk 512 */
+  0x07, 0x05, 0x02, 0x02, 0x00, 0x02, 0x00,  /* EP2 OUT bulk 512 */
+  /* Alt 1: UAS — 4 bulk EPs, vendor class */
+  0x09, 0x04, 0x00, 0x01, 0x04, 0xFF, 0xFF, 0xFF, 0x00,
+  0x07, 0x05, 0x81, 0x02, 0x00, 0x02, 0x00,  /* EP1 IN  bulk 512 — Status */
+  0x04, 0x24, 0x03, 0x00,                     /* Pipe Usage: Status */
+  0x07, 0x05, 0x02, 0x02, 0x00, 0x02, 0x00,  /* EP2 OUT bulk 512 — Command */
+  0x04, 0x24, 0x04, 0x00,                     /* Pipe Usage: Command */
+  0x07, 0x05, 0x83, 0x02, 0x00, 0x02, 0x00,  /* EP3 IN  bulk 512 — Data-In */
+  0x04, 0x24, 0x02, 0x00,                     /* Pipe Usage: Data-In */
+  0x07, 0x05, 0x04, 0x02, 0x00, 0x02, 0x00,  /* EP4 OUT bulk 512 — Data-Out */
+  0x04, 0x24, 0x01, 0x00,                     /* Pipe Usage: Data-Out */
 };
 static __code const uint8_t cfg_desc_30[] = {
-  0x09, 0x02, 0x2C, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,  /* wTotalLength=44 */
-  0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,  /* bNumEndpoints=2 */
-  0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,  /* EP1 IN bulk 1024 */
-  0x06, 0x30, 0x00, 0x00, 0x00, 0x00,         /* SS EP Companion */
+  /* Config: wTotalLength=121, 1 interface */
+  0x09, 0x02, 0x79, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
+  /* Alt 0: BBB — 2 bulk EPs + SS companions */
+  0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,
+  0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,  /* EP1 IN  bulk 1024 */
+  0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,         /* SS Companion: bMaxBurst=15 */
   0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,  /* EP2 OUT bulk 1024 */
-  0x06, 0x30, 0x00, 0x00, 0x00, 0x00,         /* SS EP Companion */
+  0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,         /* SS Companion: bMaxBurst=15 */
+  /* Alt 1: UAS — 4 bulk EPs + SS companions + pipe usage, vendor class */
+  0x09, 0x04, 0x00, 0x01, 0x04, 0xFF, 0xFF, 0xFF, 0x00,
+  0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,  /* EP1 IN  bulk 1024 — Status */
+  0x06, 0x30, 0x0F, 0x05, 0x00, 0x00,         /* SS Companion: bMaxBurst=15, MaxStreams=32 */
+  0x04, 0x24, 0x03, 0x00,                     /* Pipe Usage: Status */
+  0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,  /* EP2 OUT bulk 1024 — Command */
+  0x06, 0x30, 0x0F, 0x05, 0x00, 0x00,         /* SS Companion: bMaxBurst=15, MaxStreams=32 */
+  0x04, 0x24, 0x04, 0x00,                     /* Pipe Usage: Command */
+  0x07, 0x05, 0x83, 0x02, 0x00, 0x04, 0x00,  /* EP3 IN  bulk 1024 — Data-In */
+  0x06, 0x30, 0x0F, 0x05, 0x00, 0x00,         /* SS Companion: bMaxBurst=15, MaxStreams=32 */
+  0x04, 0x24, 0x02, 0x00,                     /* Pipe Usage: Data-In */
+  0x07, 0x05, 0x04, 0x02, 0x00, 0x04, 0x00,  /* EP4 OUT bulk 1024 — Data-Out */
+  0x06, 0x30, 0x00, 0x00, 0x00, 0x00,         /* SS Companion: bMaxBurst=0 */
+  0x04, 0x24, 0x01, 0x00,                     /* Pipe Usage: Data-Out */
 };
 static __code const uint8_t bos_desc[] = {
   0x05, 0x0F, 0x16, 0x00, 0x02,
@@ -161,7 +195,6 @@ static void handle_usb_control(void) {
       // enable bulk endpoint (without the clear in, it'll get a spurious IN, without the clear out, it'll miss an out)
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
-
       // receive to 0x911B
       //REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
       // receive to 0x7000
@@ -241,6 +274,20 @@ static void handle_usb_control(void) {
   } else if (phase & USB_CTRL_PHASE_DATA_IN || phase & USB_CTRL_PHASE_STAT_IN) {
     // USB_CTRL_PHASE_DATA_IN on USB 2.0, USB_CTRL_PHASE_STAT_IN on USB 3.0
     if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
+
+    /* Multi-packet EP0 continuation: copy remaining data to start of buffer and send */
+    if (ctrl_send_pos < ctrl_send_total) {
+      uint8_t remain = ctrl_send_total - ctrl_send_pos;
+      uint8_t chunk = (remain > 64) ? 64 : remain;
+      uint8_t ci;
+      for (ci = 0; ci < chunk; ci++) DESC_BUF[ci] = DESC_BUF[ctrl_send_pos + ci];
+      ctrl_send_pos += chunk;
+      REG_USB_EP0_STATUS = 0x00;
+      REG_USB_EP0_LEN_L = chunk;
+      REG_USB_DMA_TRIGGER = USB_DMA_SEND;
+      REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
+      return;
+    }
     if (REG_USB_SETUP_BREQ == 0xF0) {
       /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
        *   [0-3]  address low (LE), [4-7] address high (LE), [8-11] value (BE)
@@ -418,6 +465,8 @@ void int0_isr(void) __interrupt(0) {
       handle_usb_control();
     } else if (periph_status & USB_PERIPH_BULK_DATA) {
       handle_usb_bulk_data();
+    } else if (periph_status & USB_PERIPH_LINK_EVENT) {
+      // no print, replay_trace can trigger this
     } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
       uint8_t ep = REG_USB_EP_READY;
       //uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts(" "); uart_puthex(REG_USB_EP_STATUS_90E3); uart_puts("]\n");
@@ -442,7 +491,12 @@ void int0_isr(void) __interrupt(0) {
 }
 
 void int1_isr(void) __interrupt(1) {
-  uart_puts("[int1]\n");
+  uint8_t event = REG_POWER_EVENT_92E1;
+  uart_puts("[int1 ");
+  uart_puthex(event);
+  uart_puts("]\n");
+  REG_POWER_STATUS &= ~(POWER_STATUS_USB_PATH | 0x80);
+  REG_POWER_EVENT_92E1 = event;
 }
 
 void main(void) {

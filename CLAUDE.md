@@ -43,3 +43,6 @@ If you want to do experiments with the stock firmware, you can flash it with:
 You can access the serial port with this in a different screen, then tail /tmp/serial:
 
 PYTHONUNBUFFERED=1 ./ftdi_debug.py | tee /tmp/serial
+
+
+./ftdi_debug.py -rn && python3 replay_trace.py trace/usb2_dma --after 0-889507 --blacklist 0x9092,0x9091,0xE710,0xE717,0xCC37,0xCC3E,0xC6A8,0xCC30,0xC800,0x91C3,0x91C0,0x9002
