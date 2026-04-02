@@ -39,11 +39,8 @@ class Dev:
 
     def scsi_write(self, data):
         usb = self.usb
-        cdb = struct.pack('>BBQIBB', 0x8A, 0, 0, len(data) // 512, 0, 0)
-        usb._bulk_out(usb.ep_cmd_out, cdb)
         usb._bulk_in(usb.ep_stat_in, 64)
         usb._bulk_out(usb.ep_data_out, data)
-
 
 def main():
     dev = Dev()

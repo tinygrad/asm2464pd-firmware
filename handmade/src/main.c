@@ -198,11 +198,10 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       // receive to 0x911B
-      REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
+      //REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
 
       // setup UAS mode
-      REG_USB_STATUS = 0x01;
-      REG_USB_CTRL_924C = 0x05;
+      REG_USB_STATUS = USB_STATUS_DMA_READY;
 
       // receive to 0x7000
       REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
