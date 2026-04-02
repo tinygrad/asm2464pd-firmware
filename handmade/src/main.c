@@ -10,7 +10,7 @@
 static uint8_t is_usb3;
 static uint8_t pcie_link_up;
 static uint8_t uas_tag;        /* tag from last Command IU */
-static uint8_t uas_state;      /* 0=idle, 1=waiting for data (RTT sent), 2=done */
+static uint8_t uas_state;      /* 0=idle, 1=RTT sent (skip next I4), 2=waiting for data */
 
 /* Streaming PCIe DMA state — configured via 0xF0 control message */
 static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
@@ -552,12 +552,8 @@ static void handle_uas_command(void) {
   uart_puts("]\n");
 
   /* Send RTT on slot B (matches stock trace: 901B, 90A2, C8D4=0x81) */
-  uas_state = 1;
+  uas_state = 1;  /* next I4 = RTT completion, skip it */
   uas_send_iu(0x07, uas_tag, 1);
-
-  /* Arm endpoint for data reception — match stock firmware trace */
-  XDATA_REG8(0x9093) = 0x08;
-  XDATA_REG8(0xCE88) = 0x02;
 }
 
 void handle_usb_bulk_data(void) {
@@ -570,16 +566,13 @@ void handle_usb_bulk_data(void) {
     uart_puts("]\n");
   }
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
-    if (uas_state == 1) {
+    if (uas_state == 2) {
       /* UAS data phase complete — send Sense IU (status=GOOD) */
       uart_puts("[UAS data ok]\n");
       uas_state = 0;
-      /* Send Sense/Status on slot C (matches stock trace: 901C, 90A3, C8D4=0x82) */
       uas_send_iu(0x03, uas_tag, 2);
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
     } else if (dma_mode == 1) {
       pcie_write_chunk();
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
     } else if (XDATA_REG8(0x7000) == 0x01) {
       /* UAS Command IU (byte[0]=0x01) received on EP4 */
       handle_uas_command();
@@ -588,7 +581,6 @@ void handle_usb_bulk_data(void) {
       uart_puthex(XDATA_REG8(0x7000)); uart_puthex(XDATA_REG8(0x7001));
       uart_puthex(XDATA_REG8(0x7002)); uart_puthex(XDATA_REG8(0x7003));
       uart_puts("]\n");
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
     }
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
     if (dma_mode == 2) {
@@ -643,18 +635,21 @@ void int0_isr(void) __interrupt(0) {
   if (int0_type & 0x04) {
     /* DMA/bulk completion */
     uint8_t ep_status = XDATA_REG8(0x9118);
+    uint8_t ep_ready = REG_USB_EP_READY;
     if (uas_state == 1) {
-      uart_puts("[I4 uas_data s=");
-      uart_puthex(ep_status);
-      uart_puts("]\n");
-      /* Data arrived — send Sense/Status IU on slot C */
-      uas_state = 0;
-      uas_send_iu(0x03, uas_tag, 2);
+      /* RTT send completion — ack and advance to waiting for data */
+      XDATA_REG8(0x9093) = 0x08;
+      XDATA_REG8(0xCE88) = 0x02;
+      uas_state = 2;
+    } else if (uas_state == 2) {
+      /* Data arrived — flag for main loop to send Sense */
+      uas_state = 3;
     }
-    while (ep_status) {
-      uint8_t ep = REG_USB_EP_READY;
-      if (ep) REG_USB_EP_READY = ep;
-      ep_status = XDATA_REG8(0x9118);
+    /* Ack EP ready bits */
+    if (ep_ready) REG_USB_EP_READY = ep_ready;
+    while (XDATA_REG8(0x9118)) {
+      ep_ready = REG_USB_EP_READY;
+      if (ep_ready) REG_USB_EP_READY = ep_ready;
     }
   }
   if (int0_type & ~(INT_USB_GATE | 0x04)) {
@@ -752,10 +747,14 @@ void main(void) {
       /* Clear the IU so we don't re-trigger */
       XDATA_REG8(0xD000) = 0x00;
       /* Send RTT on slot B */
-      uas_state = 1;
+      uas_state = 1;  /* next I4 = RTT completion */
       uas_send_iu(0x07, uas_tag, 1);
-      XDATA_REG8(0x9093) = 0x08;
-      XDATA_REG8(0xCE88) = 0x02;
+    }
+    if (uas_state == 3) {
+      /* Send Sense/Status IU (deferred from ISR) — reuse slot B like RTT */
+      uart_puts("[UAS sense]\n");
+      uas_state = 0;
+      uas_send_iu(0x03, uas_tag, 1);
     }
   }
 }

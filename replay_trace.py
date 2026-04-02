@@ -169,9 +169,21 @@ def main():
               f"({GREEN}{read_match} match{RESET}, {RED}{read_mismatch} mismatch{RESET}).")
 
         # Send a SCSI WRITE(16) via UAS
-        print("\nSending SCSI WRITE(16) via UAS...", end="")
-        dev.scsi_write(b'\x00' * 512)
-        print("  done.")
+        test_data = bytes(range(256)) + bytes(range(256))
+        print(f"\nSending SCSI WRITE(16) via UAS ({len(test_data)} bytes)...", end="")
+        try:
+            dev.scsi_write(test_data)
+            print("  done.")
+        except Exception as e:
+            print(f"  {e}")
+
+        # Check if the data showed up at 0xF000
+        print("Checking 0xF000:")
+        for off in range(0, 64, 16):
+            vals = [dev.read8(0xF000 + off + i) for i in range(16)]
+            hex_str = ' '.join(f'{v:02X}' for v in vals)
+            ascii_str = ''.join(chr(v) if 32 <= v < 127 else '.' for v in vals)
+            print(f"  F{off:03X}: {hex_str}  |{ascii_str}|")
 
 
 if __name__ == "__main__":
