@@ -225,13 +225,12 @@ static void handle_usb_control(void) {
       /* DMA_INIT sequence for SRAM DMA */
       REG_NVME_DOORBELL    = 0x20;  /* 0xC42A: NVMe doorbell (gate) */
       REG_NVME_LBA_LOW     = 0x02;  /* 0xC422 */
-      REG_NVME_STREAM_START = 0x80+slot_sel;  /* 0xC414 */
-      REG_NVME_STREAM_END   = num_slots+slot_sel;  /* 0xC415 */
-      REG_NVME_CTRL_STATUS = 0x03;  /* 0xC412 */
-      /* Arm DMA for total sectors across all slots */
-      REG_NVME_COUNT_HIGH    = (uint8_t)(sectors >> 8);  /* 0xC426: sector count high */
-      REG_NVME_DMA_ADDR_C427 = (uint8_t)(sectors & 0xFF);  /* 0xC427: sector count low */
-      REG_NVME_CMD_PARAM     = slot_sel;  /* 0xC429: slot select + DMA re-arm */
+      REG_NVME_SLOT_START = NVME_SLOT_ENABLE | slot_sel;
+      REG_NVME_SLOT_END   = num_slots + slot_sel;
+      REG_NVME_SECTOR_COUNT_HI = (uint8_t)(sectors >> 8);
+      REG_NVME_SECTOR_COUNT_LO = (uint8_t)(sectors & 0xFF);
+      REG_NVME_CTRL_STATUS = 0x03;
+      REG_NVME_CMD_PARAM   = slot_sel;  /* 0xC429: slot select + DMA re-arm */
       dma_mode = 3;  /* suppress UART in bulk handler */
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {

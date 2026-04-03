@@ -1278,14 +1278,9 @@
 #define REG_NVME_CONFIG         XDATA_REG8(0xC413)
 #define   NVME_CONFIG_EP_MASK    0x3F  // Bits 0-5: Endpoint/channel index
 #define   NVME_CONFIG_MASK_HI    0xC0  // Bits 6-7: Config mode
-#define REG_NVME_DATA_CTRL      XDATA_REG8(0xC414)
-#define   NVME_DATA_CTRL_MASK     0xC0  // Bits 6-7: Data control mode
-#define   NVME_DATA_CTRL_BIT7     0x80  // Bit 7: Data control high bit
-#define REG_NVME_DEV_STATUS     XDATA_REG8(0xC415)
-#define   NVME_DEV_STATUS_MASK    0xC0  // Bits 6-7: Device status
-
-#define REG_NVME_STREAM_START XDATA_REG8(0xC414)
-#define REG_NVME_STREAM_END XDATA_REG8(0xC415)
+#define REG_NVME_SLOT_START     XDATA_REG8(0xC414)  /* Bit 7: enable DMA, bits 0-6: first slot index */
+#define   NVME_SLOT_ENABLE        0x80              /* Bit 7: enable multi-slot DMA */
+#define REG_NVME_SLOT_END       XDATA_REG8(0xC415)  /* Last slot index (exclusive) */
 
 // NVMe SCSI Command Buffer (0xC4C0-0xC4CA) - used for SCSI to NVMe translation
 #define REG_NVME_SCSI_CMD_BUF_0 XDATA_REG8(0xC4C0)  // SCSI cmd buffer byte 0
@@ -1313,6 +1308,8 @@
 #define REG_NVME_DMA_ADDR_C427  XDATA_REG8(0xC427)  /* DMA sector count (0x01=512B, 0x08=4096B) */
 #define REG_NVME_COUNT_HIGH     XDATA_REG8(0xC426)  /* Alias for compatibility */
 #define REG_NVME_ERROR          XDATA_REG8(0xC427)  /* Alias for compatibility */
+#define REG_NVME_SECTOR_COUNT_HI XDATA_REG8(0xC426)  /* Sector count high byte (C426:C427 = 16-bit sector count) */
+#define REG_NVME_SECTOR_COUNT_LO XDATA_REG8(0xC427)  /* Sector count low byte (1 sector = 512 bytes) */
 #define REG_NVME_QUEUE_CFG      XDATA_REG8(0xC428)
 #define   NVME_QUEUE_CFG_MASK_LO  0x03  // Bits 0-1: Queue config low
 #define   NVME_QUEUE_CFG_BIT3     0x08  // Bit 3: Queue config flag
