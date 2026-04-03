@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UAS explore: open device, init NVMe DMA engine, send data via SCSI WRITE to 0xF000."""
+"""UAS explore: open device, init NVMe DMA engine, send data via bulk OUT to 0xF000 and verify."""
 
 import ctypes, os, struct, sys
 from tinygrad.runtime.support.usb import USB3
@@ -21,38 +21,64 @@ class Dev:
     def __init__(self):
         self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04, use_bot=True)
 
-    def read8(self, addr):
-        buf = (ctypes.c_ubyte * 1)()
-        ret = libusb.libusb_control_transfer(self.usb.handle, 0xC0, 0xE4, addr, 0, buf, 1, 1000)
-        assert ret >= 0, f"read(0x{addr:04X}) failed: {ret}"
-        return buf[0]
+    def readn(self, addr, size):
+        buf = (ctypes.c_ubyte * size)()
+        ret = libusb.libusb_control_transfer(self.usb.handle, 0xC0, 0xE4, addr, 0, buf, size, 1000)
+        assert ret >= 0, f"read(0x{addr:04X}, {size}) failed: {ret}"
+        return bytes(buf[:ret])
 
     def write(self, addr, val):
         ret = libusb.libusb_control_transfer(self.usb.handle, 0x40, 0xE5, addr, val, None, 0, 1000)
         assert ret >= 0, f"write(0x{addr:04X}, 0x{val:02X}) failed: {ret}"
 
+    def f2_arm(self, sectors, slot=0):
+        ret = libusb.libusb_control_transfer(self.usb.handle, 0x40, 0xF2, sectors, slot * 4, None, 0, 1000)
+        assert ret >= 0, f"0xF2 arm failed (sectors={sectors}, slot={slot}): {ret}"
+
 def main():
     dev = Dev()
-    for addr, val in DMA_INIT:
-        self.write(addr, val)
+    use_f2 = getenv("F2", 0)
 
-    # NOTE: if this is less than 10, it won't work a second time and will fail with BULK IN STALL (-7)
+    if not use_f2:
+        for addr, val in DMA_INIT:
+            dev.write(addr, val)
+
+    size = getenv("SIZE", 4096)
+    assert size % 512 == 0
+
     for i in range(getenv("CNT", 3)):
         tag = os.urandom(4)
-        test_data = tag + bytes(range(252)) + bytes(range(256))
-        test_data *= getenv("SECTORS", 1)
-        print(f"[{i}] SCSI WRITE (tag={tag.hex()})...", end="")
-        assert len(test_data)%512 == 0
-        dev.write(0xC427, len(test_data)//512)
-        dev.write(0xC429, 0x00)
-        dev.usb._bulk_out(dev.usb.ep_data_out, test_data)
-        got = bytes(dev.read8(0xF000 + j) for j in range(4))
-        if got == tag:
-            print(f"  PASS ({len(test_data)})")
-        else:
-            print(f"  FAIL: expected {tag.hex()}, got {got.hex()}")
-            break
+        test_data = bytearray(size)
+        test_data[0:4] = tag
+        for j in range(4, size):
+            test_data[j] = (j * 7 + 0x42) & 0xFF
+        test_data = bytes(test_data)
 
+        print(f"[{i}] bulk OUT {size} bytes (tag={tag.hex()})...", end="")
+        if use_f2:
+            dev.f2_arm(len(test_data) // 512)
+        else:
+            dev.write(0xC427, len(test_data) // 512)
+            dev.write(0xC429, 0x00)
+        dev.usb._bulk_out(dev.usb.ep_data_out, test_data)
+
+        # read back full 0xF000-0x10000 and compare
+        got = b""
+        for off in range(0, 0x1000, 64):
+            got += dev.readn(0xF000 + off, 64)
+
+        errors = 0
+        for off in range(0, 0x1000, 4):
+            if got[off:off+4] != test_data[off:off+4]:
+                errors += 1
+                if errors <= 4:
+                    print(f"\n  FAIL @ 0x{off:04X}: got {got[off:off+4].hex()} exp {test_data[off:off+4].hex()}", end="")
+
+        if errors == 0:
+            print(f"  PASS")
+        else:
+            print(f"\n  {errors} errors total")
+            break
 
 if __name__ == "__main__":
     main()
