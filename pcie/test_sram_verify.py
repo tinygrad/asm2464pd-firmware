@@ -52,12 +52,11 @@ def main():
   # 2. Fill all SRAM slots via 0xF2 + bulk OUT
   total_bytes = NUM_SLOTS * SLOT_SIZE
   print(f"Filling {NUM_SLOTS} slots x {SLOT_SIZE//1024}KB = {total_bytes//1024}KB via 0xF2 SRAM DMA")
+  datas = [make_pattern(slot, SLOT_SIZE) for slot in range(NUM_SLOTS)]
   t0 = time.monotonic()
   for slot in range(NUM_SLOTS):
-    data = make_pattern(slot, SLOT_SIZE)
-    assert len(data) % SECTOR_SIZE == 0
-    sram_dma_arm(handle, sectors=len(data) // SECTOR_SIZE, slot=slot)
-    bulk_out(handle, data)
+    sram_dma_arm(handle, sectors=len(datas[slot]) // SECTOR_SIZE, slot=slot)
+    bulk_out(handle, datas[slot])
   elapsed = time.monotonic() - t0
   print(f"  Write done: {elapsed:.3f}s ({total_bytes/elapsed/1024:.1f} KB/s)")
 
