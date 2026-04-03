@@ -30,6 +30,8 @@ CMD_WRITE = 0x02
 CMD_SFR_READ = 0x03
 CMD_SFR_WRITE = 0x04
 CMD_INT_ACK = 0x05  # Emulator finished ISR (RETI)
+CMD_READ_DPX = 0x06  # Read XDATA with DPX=1 (PHY bank)
+CMD_WRITE_DPX = 0x07  # Write XDATA with DPX=1 (PHY bank)
 
 # Interrupt signal - 0x7E followed by int_mask (0x00-0x3F)
 # This can never be confused with a valid response since ~0x7E = 0x81,
@@ -342,6 +344,24 @@ class UARTProxy:
         if ack != 0x00:
             raise RuntimeError(f"Write ACK failed: expected 0x00, got 0x{ack:02X}")
         # Debug print handled by caller (hardware.py hook) which has PC context
+
+    def read_dpx(self, addr: int) -> int:
+        """Read byte from XDATA address with DPX=1 (PHY register bank)."""
+        addr &= 0xFFFF
+        self._write_bytes(bytes([CMD_READ_DPX, addr >> 8, addr & 0xFF]))
+        value = self._read_response(f"READ_DPX 0x{addr:04X}")
+        self.read_count += 1
+        return value
+
+    def write_dpx(self, addr: int, value: int):
+        """Write byte to XDATA address with DPX=1 (PHY register bank)."""
+        addr &= 0xFFFF
+        value &= 0xFF
+        self._write_bytes(bytes([CMD_WRITE_DPX, addr >> 8, addr & 0xFF, value]))
+        ack = self._read_response(f"WRITE_DPX 0x{addr:04X}=0x{value:02X}")
+        self.write_count += 1
+        if ack != 0x00:
+            raise RuntimeError(f"Write DPX ACK failed: expected 0x00, got 0x{ack:02X}")
 
     def sfr_read(self, addr: int) -> int:
         """

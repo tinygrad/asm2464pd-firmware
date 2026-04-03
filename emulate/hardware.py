@@ -3050,7 +3050,9 @@ def create_hardware_hooks(memory: 'Memory', hw: HardwareState, proxy: 'UARTProxy
     # In proxy mode, we proxy EVERYTHING from 0x6000-0xFFFF to real hardware.
     # In emulation mode, we only hook known MMIO ranges.
     if proxy is not None:
-        # Proxy mode: pass through ALL XDATA >= 0x6000
+        # Proxy mode: pass through ALL XDATA >= 0x6000 to real hardware.
+        # DPX-banked accesses (any address with DPX=1) are handled by
+        # dedicated CMD_READ_DPX/CMD_WRITE_DPX commands in memory.py.
         mmio_ranges = [
             (0x6000, 0x10000),  # Everything from 0x6000-0xFFFF goes to real hardware
         ]
@@ -3158,6 +3160,7 @@ def create_hardware_hooks(memory: 'Memory', hw: HardwareState, proxy: 'UARTProxy
     if proxy is not None:
         # Proxy mode - MMIO goes to real hardware (except certain ranges)
         print(f"[HW] Using UART proxy for MMIO access")
+        memory.proxy = proxy  # For DPX-banked XDATA access in memory.py
         proxy_read_hook = make_proxy_read_hook(proxy, hw)
         proxy_write_hook = make_proxy_write_hook(proxy, hw)
         emu_read_hook = make_read_hook(hw)
@@ -3204,6 +3207,8 @@ def create_hardware_hooks(memory: 'Memory', hw: HardwareState, proxy: 'UARTProxy
         # must be synchronized with real hardware.
 
         # SFRs to proxy (interrupt and timer related)
+        # Note: DPX (0x93) is NOT proxied - DPX-banked XDATA accesses use
+        # dedicated CMD_READ_DPX/CMD_WRITE_DPX commands instead.
         proxy_sfrs = [
             0xA8,  # IE - Interrupt Enable
             0xB8,  # IP - Interrupt Priority
