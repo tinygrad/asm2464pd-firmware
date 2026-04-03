@@ -160,28 +160,18 @@ MORE_INIT = [
 
 ]
 
-DMA_INIT = MORE_INIT+[
+DMA_INIT = [
     # enable streams globally
     (0x9000, int(STREAMS > 0)),
+    (0xC428, 0x30),
 
-    (0x9006, 0x10),
+    (0xDE30, 0x03),
 
     # === DMA engine init ===
     (0xC42A, 0x20),
     (0xC422, 0x02),  # REG_NVME_LBA_LOW
     (0xC412, 0x03),  # REG_NVME_CTRL_STATUS
     (0xC421, 0x01),  # DMA xfer lo
-
-    (0xC428, 0x30),
-    (0xC420, 0x00),
-    (0xC421, 0x01),
-
-    (0xCE6E, 0x00),
-    (0xCE6E, 0x01),
-    (0xCE6E, 0x02),
-    (0xCE6E, 0x03),
-
-    (0xC8D4, 0x80),
 ]
 
 class Dev:
@@ -234,7 +224,7 @@ def main():
         test_data = bytes(test_data)*4
         assert len(test_data) == 0x4000
 
-        print(f"[{i}] bulk OUT {size} bytes (tag={tag.hex()})...", end="")
+        print(f"[{i}] bulk OUT {len(test_data)} bytes (tag={tag.hex()})...", end="")
         if use_f2:
             dev.f2_arm(len(test_data) // 512)
         else:
