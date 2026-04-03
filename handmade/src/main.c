@@ -185,7 +185,7 @@ static void handle_usb_control(void) {
       // receive to 0x911B
       //REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
       // receive to 0x7000
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      //REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       // setup UAS mode
       //REG_USB_STATUS = USB_STATUS_DMA_READY;
       send_zlp_ack();
@@ -322,6 +322,9 @@ static void handle_usb_control(void) {
       /* Update dma_mode LAST — this arms the bulk/EP_COMPLETE handlers */
       dma_mode = mode;
 
+      // arm this
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+
       send_zlp_ack();
     }
     if (REG_USB_SETUP_BREQ == 0xF1) {
@@ -411,8 +414,10 @@ void handle_usb_bulk_data(void) {
       uart_puthex(XDATA_REG8(0x7002)); uart_puthex(XDATA_REG8(0x7003));
       uart_puts("]\n");
     }
-    // re-arm OUT
-    REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+    if (dma_mode != 3) {
+      // re-arm OUT
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+    }
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
     if (dma_mode == 2) {
       pcie_read_chunk((__xdata uint8_t *)0xD800, dma_count);
