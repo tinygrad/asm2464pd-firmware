@@ -9,20 +9,179 @@ from tinygrad.helpers import getenv
 
 STREAMS = getenv("STREAMS", 0)
 
-DMA_INIT = [
+EXTRA_INIT = [
+    # === SET_INTERFACE alt=1 sequence (from stock trace) ===
+
+    # Round 1: NVMe link init
+    (0xC42A, 0x20),
+    (0xC428, 0x30),
+    (0xC473, 0x66),
+    (0xC472, 0x00),
+
+    # Round 1: Init ctrl set
+    (0xC448, 0xFF), (0xC449, 0xFF), (0xC44A, 0xFF), (0xC44B, 0xFF),
+    (0xC473, 0x66),
+    (0xC472, 0x00),
+    (0xC438, 0xFF), (0xC439, 0xFF), (0xC43A, 0xFF), (0xC43B, 0xFF),
+
+    # Round 1: Doorbell clear
+    (0xC42A, 0x00),
+
+    # Round 1: PRP + Queue init
+    (0xC430, 0xFF), (0xC431, 0xFF), (0xC432, 0xFF), (0xC433, 0xFF),
+    (0xC440, 0xFF), (0xC441, 0xFF), (0xC442, 0xFF), (0xC443, 0xFF),
+
+    # Round 1: EP mode
+    (0x9096, 0xFF), (0x9097, 0xFF),
+    (0x9098, 0xFF), (0x9099, 0xFF), (0x909A, 0xFF), (0x909B, 0xFF),
+    (0x909C, 0xFF), (0x909D, 0xFF),
+    (0x909E, 0x03),
+
+    # Round 1: Init ctrl clear
+    (0xC438, 0x00), (0xC439, 0x00), (0xC43A, 0x00), (0xC43B, 0x00),
+    (0xC448, 0x00), (0xC449, 0x00), (0xC44A, 0x00), (0xC44B, 0x00),
+
+    # Round 1: FIFO/XCVR clear
+    (0x9011, 0x00), (0x9012, 0x00), (0x9013, 0x00), (0x9014, 0x00),
+    (0x9015, 0x00), (0x9016, 0x00), (0x9017, 0x00),
+    (0x9018, 0x02),
+    (0x9010, 0x00),
+
+    # Round 2: NVMe link init (again)
+    (0xC428, 0x30),
+    (0xC473, 0x66),
+    (0xC428, 0x30),
+    (0xC473, 0x66),
+    (0xC472, 0x00),
+
+    # Round 2: Init ctrl set (again, no clear this time)
+    (0xC448, 0xFF), (0xC449, 0xFF), (0xC44A, 0xFF), (0xC44B, 0xFF),
+    (0xC473, 0x66),
+    (0xC472, 0x00),
+    (0xC438, 0xFF), (0xC439, 0xFF), (0xC43A, 0xFF), (0xC43B, 0xFF),
+
+    # Round 2: Doorbell dance
+    (0xC42A, 0x02),
+    (0xC42A, 0x06),
+    (0xC42A, 0x0E),
+    (0xC42A, 0x0C),
+    (0xC42A, 0x08),
+    (0xC42A, 0x00),
+    (0xC471, 0x01),
+    (0xC472, 0x00),
+    (0xC42A, 0x10),
+    (0xC42A, 0x00),
+
+    # Round 2: MSC sequence
+    (0x900B, 0x02),
+    (0x900B, 0x06),
+    (0x900B, 0x04),
+    (0x900B, 0x00),
+
+    # Status + EP init
+    (0x9000, 0x00),
+    (0x924C, 0x04),
+    (0x905F, 0x4C),
+    (0x905D, 0x00),
+    (0x90E3, 0x01),
+    (0x90A0, 0x01),
+
+    # Enable
+    (0x9000, 0x01),
+    (0x924C, 0x05),
+
+    # Stream address config (must be before 9200 pulse to latch)
+    (0x9206, 0x03),
+    (0x9207, 0x03),
+    (0x9206, 0x07),
+    (0x9207, 0x07),
+    (0x9208, 0x00),
+    (0x9209, 0x0A),
+    (0x920A, 0x00),
+    (0x920B, 0x0A),
+    (0x9202, 0x21),
+    (0x9220, 0x04),
+
+    # Stream finalize (pulse latches the config above)
+    (0x9200, 0xF1),
+    (0x900B, 0x01),
+    (0x900B, 0x00),
+    (0x9200, 0xB1),
+]
+
+# 0x901A, 0x90A1 is per stream...
+
+MORE_INIT = [
+    # Status + EP init
+    (0x9000, 0x00),
+    (0x924C, 0x04),
+    (0x905F, 0x4C),
+    (0x905D, 0x00),
+    (0x90E3, 0x01),
+    (0x90A0, 0x01),
+
+    # Enable
+    (0x9000, 0x01),
+    (0x924C, 0x05),
+
+    # Round 1: EP mode
+    (0x9096, 0xFF), (0x9097, 0xFF),
+    (0x9098, 0xFF), (0x9099, 0xFF), (0x909A, 0xFF), (0x909B, 0xFF),
+    (0x909C, 0xFF), (0x909D, 0xFF),
+    (0x909E, 0x03),
+
+    (0xC428, 0x30),
+    (0xC473, 0x66),
+    (0xC472, 0x00),
+
+    # Round 2: Doorbell dance
+    (0xC42A, 0x02),
+    (0xC42A, 0x06),
+    (0xC42A, 0x0E),
+    (0xC42A, 0x0C),
+    (0xC42A, 0x08),
+    (0xC42A, 0x00),
+    (0xC471, 0x01),
+    (0xC472, 0x00),
+    (0xC42A, 0x10),
+    (0xC42A, 0x00),
+
+    # Round 2: MSC sequence
+    (0x900B, 0x02),
+    (0x900B, 0x06),
+    (0x900B, 0x04),
+    (0x900B, 0x00),
+
+    # Round 1: FIFO/XCVR clear
+    (0x9011, 0x00), (0x9012, 0x00), (0x9013, 0x00), (0x9014, 0x00),
+    (0x9015, 0x00), (0x9016, 0x00), (0x9017, 0x00),
+    (0x9018, 0x02),
+    (0x9010, 0x00),
+
+]
+
+DMA_INIT = MORE_INIT+[
     # enable streams globally
     (0x9000, int(STREAMS > 0)),
 
+    (0x9006, 0x10),
+
     # === DMA engine init ===
-    (0xC428, 0x30),  # not strictly needed
     (0xC42A, 0x20),
     (0xC422, 0x02),  # REG_NVME_LBA_LOW
-    (0xC414, 0x80),  # REG_NVME_DATA_CTRL
     (0xC412, 0x03),  # REG_NVME_CTRL_STATUS
-    (0xC421, 0x01),  # use streams for dma
+    (0xC421, 0x01),  # DMA xfer lo
 
-    # MSC interrupts
-    #(0xC42C, 1), (0xC42D, 0),
+    (0xC428, 0x30),
+    (0xC420, 0x00),
+    (0xC421, 0x01),
+
+    (0xCE6E, 0x00),
+    (0xCE6E, 0x01),
+    (0xCE6E, 0x02),
+    (0xCE6E, 0x03),
+
+    (0xC8D4, 0x80),
 ]
 
 class Dev:
@@ -44,6 +203,16 @@ class Dev:
         ret = libusb.libusb_control_transfer(self.usb.handle, 0x40, 0xF2, sectors, slot * 4, None, 0, 1000)
         assert ret >= 0, f"0xF2 arm failed (sectors={sectors}, slot={slot}): {ret}"
 
+def dump(dev):
+    print("Dump 0x9000")
+    hexdump(dev.readn(0x9000, 0x80))
+    print("Dump 0x9080")
+    hexdump(dev.readn(0x9080, 0x80))
+    print("Dump 0x9200")
+    hexdump(dev.readn(0x9200, 0x80))
+    print("Dump 0xc400")
+    hexdump(dev.readn(0xc400, 0x80))
+
 def main():
     dev = Dev()
     use_f2 = getenv("F2", 0)
@@ -55,34 +224,26 @@ def main():
     size = getenv("SIZE", 4096)
     assert size % 512 == 0
 
-    if getenv("DUMP"):
-        print("Dump 0x9000")
-        hexdump(dev.readn(0x9000, 0x80))
-        print("Dump 0x9080")
-        hexdump(dev.readn(0x9080, 0x80))
-        print("Dump 0x9200")
-        hexdump(dev.readn(0x9200, 0x80))
-        print("Dump 0xc400")
-        hexdump(dev.readn(0xc400, 0x80))
+    if getenv("DUMP"): dump(dev)
 
     for i in range(getenv("CNT", 3)):
         tag = os.urandom(4)
         test_data = bytearray(size)
         test_data[0:4] = tag
-        for j in range(4, size):
-            test_data[j] = (j * 7 + 0x42) & 0xFF
-        test_data = bytes(test_data)
+        for j in range(4, size): test_data[j] = (j * 7 + 0x42) & 0xFF
+        test_data = bytes(test_data)*4
+        assert len(test_data) == 0x4000
 
         print(f"[{i}] bulk OUT {size} bytes (tag={tag.hex()})...", end="")
         if use_f2:
             dev.f2_arm(len(test_data) // 512)
         else:
-            dev.write(0xC427, len(test_data) // 512)
+            dev.write(0xC427, (len(test_data) // 512) * max(1, STREAMS))
 
             # stream range
             first_stream = getenv("FIRST", 0)
             dev.write(0xC414, 0x80+first_stream)
-            dev.write(0xC415, max(1, STREAMS)+first_stream)
+            dev.write(0xC415, max(1, STREAMS) + first_stream)
             dev.write(0xC429, first_stream)
 
         if STREAMS:
@@ -91,12 +252,19 @@ def main():
             for slot in range(STREAMS):
                 stream_id = 1+slot
                 dev.usb.buf_data_out_mvs[slot][:len(test_data)] = test_data
-                tr = dev.usb._prep_transfer(dev.usb.tr[dev.usb.ep_data_out][slot], dev.usb.ep_data_out, stream_id, dev.usb.buf_data_out[slot], len(test_data))
+                tr = dev.usb._prep_transfer(dev.usb.tr[dev.usb.ep_data_out][slot],
+                                            dev.usb.ep_data_out, stream_id,
+                                            dev.usb.buf_data_out[slot], len(test_data))
                 submit.append(tr)
             try:
+                print(f"submit {len(submit)}", end="")
                 dev.usb._submit_and_wait(submit)
             except RuntimeError as e:
-                hexdump(dev.readn(0xc400, 0x80))
+                print("")
+                for j, tr in enumerate(submit):
+                    sid = libusb.libusb_transfer_get_stream_id(tr)
+                    print(f"  transfer {j}: stream_id={sid} status={tr.contents.status} actual_length={tr.contents.actual_length}")
+                dump(dev)
                 raise e
         else:
             dev.usb._bulk_out(dev.usb.ep_data_out, test_data)
@@ -118,6 +286,8 @@ def main():
         else:
             print(f"\n  {errors} errors total")
             break
+
+    if getenv("DUMP"): dump(dev)
 
 if __name__ == "__main__":
     main()
