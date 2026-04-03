@@ -55,6 +55,16 @@ def main():
     size = getenv("SIZE", 4096)
     assert size % 512 == 0
 
+    if getenv("DUMP"):
+        print("Dump 0x9000")
+        hexdump(dev.readn(0x9000, 0x80))
+        print("Dump 0x9080")
+        hexdump(dev.readn(0x9080, 0x80))
+        print("Dump 0x9200")
+        hexdump(dev.readn(0x9200, 0x80))
+        print("Dump 0xc400")
+        hexdump(dev.readn(0xc400, 0x80))
+
     for i in range(getenv("CNT", 3)):
         tag = os.urandom(4)
         test_data = bytearray(size)
@@ -70,9 +80,9 @@ def main():
             dev.write(0xC427, len(test_data) // 512)
 
             # stream range
-            first_stream = 0
+            first_stream = getenv("FIRST", 0)
             dev.write(0xC414, 0x80+first_stream)
-            dev.write(0xC415, 0x01+first_stream)
+            dev.write(0xC415, max(1, STREAMS)+first_stream)
             dev.write(0xC429, first_stream)
 
         if STREAMS:
@@ -80,17 +90,16 @@ def main():
             submit = []
             for slot in range(STREAMS):
                 stream_id = 1+slot
-                usb = dev.usb
-                buf = usb.buf_data_out[slot]
-                mv = usb.buf_data_out_mvs[slot]
-                mv[:len(test_data)] = test_data
-                tr = usb._prep_transfer(usb.tr[usb.ep_data_out][slot], usb.ep_data_out, stream_id, buf, len(test_data))
+                dev.usb.buf_data_out_mvs[slot][:len(test_data)] = test_data
+                tr = dev.usb._prep_transfer(dev.usb.tr[dev.usb.ep_data_out][slot], dev.usb.ep_data_out, stream_id, dev.usb.buf_data_out[slot], len(test_data))
                 submit.append(tr)
-            usb._submit_and_wait(submit)
+            try:
+                dev.usb._submit_and_wait(submit)
+            except RuntimeError as e:
+                hexdump(dev.readn(0xc400, 0x80))
+                raise e
         else:
             dev.usb._bulk_out(dev.usb.ep_data_out, test_data)
-
-        if getenv("DUMP"): hexdump(dev.readn(0xc400, 0x80))
 
         # read back full 0xF000-0x10000 and compare
         got = b""
