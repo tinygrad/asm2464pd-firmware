@@ -1283,6 +1283,10 @@
 #define   NVME_DATA_CTRL_BIT7     0x80  // Bit 7: Data control high bit
 #define REG_NVME_DEV_STATUS     XDATA_REG8(0xC415)
 #define   NVME_DEV_STATUS_MASK    0xC0  // Bits 6-7: Device status
+
+#define REG_NVME_STREAM_START XDATA_REG8(0xC414)
+#define REG_NVME_STREAM_END XDATA_REG8(0xC415)
+
 // NVMe SCSI Command Buffer (0xC4C0-0xC4CA) - used for SCSI to NVMe translation
 #define REG_NVME_SCSI_CMD_BUF_0 XDATA_REG8(0xC4C0)  // SCSI cmd buffer byte 0
 #define REG_NVME_SCSI_CMD_BUF_1 XDATA_REG8(0xC4C1)  // SCSI cmd buffer byte 1

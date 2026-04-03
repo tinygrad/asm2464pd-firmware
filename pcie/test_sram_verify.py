@@ -20,14 +20,12 @@ from tinygrad.runtime.autogen import libusb
 SRAM_EXPECTED = 0x80000  # 512KB, this is verified
 SECTOR_SIZE = 512
 SLOT_SIZE   = 0x4000   # 16KB per bulk transfer
-#SRAM_SIZE   = 0x80000  # 512KB total SRAM
-SRAM_SIZE   = 0x8000  # 512KB total SRAM
+SRAM_SIZE   = 0x80000  # 512KB total SRAM
 NUM_SLOTS   = SRAM_SIZE // SLOT_SIZE
-
 EP_OUT = 0x02
 
 def sram_dma_arm(handle, sectors, slot):
-  ret = libusb.libusb_control_transfer(handle, 0x40, 0xF2, sectors, slot * 4, None, 0, 1000)
+  ret = libusb.libusb_control_transfer(handle, 0x40, 0xF2, sectors, slot, None, 0, 1000)
   assert ret >= 0, f"0xF2 arm failed (sectors={sectors}, slot={slot}): {ret}"
 
 def bulk_out(handle, data):

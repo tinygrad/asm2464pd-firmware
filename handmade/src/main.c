@@ -222,8 +222,8 @@ static void handle_usb_control(void) {
       /* DMA_INIT sequence for SRAM DMA */
       REG_NVME_DOORBELL    = 0x20;  /* 0xC42A: NVMe doorbell (gate) */
       REG_NVME_LBA_LOW     = 0x02;  /* 0xC422 */
-      REG_NVME_DATA_CTRL   = 0x80+slot_sel;  /* 0xC414 */
-      REG_NVME_DEV_STATUS  = 0x01+slot_sel;  /* 0xC415 */
+      REG_NVME_STREAM_START = 0x80+slot_sel;  /* 0xC414 */
+      REG_NVME_STREAM_END   = 0x01+slot_sel;  /* 0xC415 */
       REG_NVME_CTRL_STATUS = 0x03;  /* 0xC412 */
       /* Arm DMA for slot */
       REG_NVME_DMA_ADDR_C427 = sectors;   /* 0xC427: sector count */
