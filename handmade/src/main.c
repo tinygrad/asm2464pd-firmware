@@ -185,7 +185,7 @@ static void handle_usb_control(void) {
       // receive to 0x911B
       //REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
       // receive to 0x7000
-      //REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       // setup UAS mode
       //REG_USB_STATUS = USB_STATUS_DMA_READY;
       send_zlp_ack();
@@ -228,7 +228,7 @@ static void handle_usb_control(void) {
       /* Arm DMA for slot */
       REG_NVME_DMA_ADDR_C427 = sectors;  /* 0xC427: sector count */
       REG_NVME_CMD_PARAM    = slot_sel;  /* 0xC429: slot select + DMA re-arm */
-      //dma_mode = 3;  /* suppress UART in bulk handler */
+      dma_mode = 3;  /* suppress UART in bulk handler */
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
@@ -407,15 +407,15 @@ void handle_usb_bulk_data(void) {
     if (dma_mode == 1) {
       uint16_t byte_count = ((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L;
       pcie_write_chunk((__xdata uint8_t *)0x7000, byte_count >> 2);
-      // re-arm OUT
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
-    } else {
+    } else if (dma_mode == 0) {
       // dump what's at 0x7000
       uart_puts("[7000=");
       uart_puthex(XDATA_REG8(0x7000)); uart_puthex(XDATA_REG8(0x7001));
       uart_puthex(XDATA_REG8(0x7002)); uart_puthex(XDATA_REG8(0x7003));
       uart_puts("]\n");
     }
+    // re-arm OUT
+    REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
     if (dma_mode == 2) {
       pcie_read_chunk((__xdata uint8_t *)0xD800, dma_count);
