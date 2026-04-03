@@ -1278,6 +1278,11 @@
 #define REG_NVME_CONFIG         XDATA_REG8(0xC413)
 #define   NVME_CONFIG_EP_MASK    0x3F  // Bits 0-5: Endpoint/channel index
 #define   NVME_CONFIG_MASK_HI    0xC0  // Bits 6-7: Config mode
+#define REG_NVME_DATA_CTRL      XDATA_REG8(0xC414)
+#define   NVME_DATA_CTRL_MASK     0xC0  // Bits 6-7: Data control mode
+#define   NVME_DATA_CTRL_BIT7     0x80  // Bit 7: Data control high bit
+#define REG_NVME_DEV_STATUS     XDATA_REG8(0xC415)
+#define   NVME_DEV_STATUS_MASK    0xC0  // Bits 6-7: Device status
 #define REG_NVME_SLOT_START     XDATA_REG8(0xC414)  /* Bit 7: enable DMA, bits 0-6: first slot index */
 #define   NVME_SLOT_ENABLE        0x80              /* Bit 7: enable multi-slot DMA */
 #define REG_NVME_SLOT_END       XDATA_REG8(0xC415)  /* Last slot index (exclusive) */
