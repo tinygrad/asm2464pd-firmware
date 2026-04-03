@@ -321,9 +321,6 @@ static void handle_usb_control(void) {
 
       /* Update dma_mode LAST — this arms the bulk/EP_COMPLETE handlers */
       dma_mode = mode;
-      if (dma_mode) {
-        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
-      }
 
       send_zlp_ack();
     }
