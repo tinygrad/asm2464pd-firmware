@@ -185,7 +185,7 @@ static void handle_usb_control(void) {
       // receive to 0x911B
       //REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
       // receive to 0x7000
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      //REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       // setup UAS mode
       //REG_USB_STATUS = USB_STATUS_DMA_READY;
       send_zlp_ack();
@@ -213,17 +213,33 @@ static void handle_usb_control(void) {
       XDATA_REG8(addr) = val;
       if (bank) DPX = 0x00;
       send_zlp_ack();
-    /* 0xF0 OUT: PCIe TLP engine.
-     *   wValue = fmt_type | (byte_enable << 8)
-     *   wIndex low[1:0] = mode (0=single TLP, 1=stream write, 2=stream read)
-     *   wIndex low[7:2] = dwords per read chunk (0 → 128 for writes)
-     *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 BE] */
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF2) {
+      /* 0xF2: SRAM DMA — init DMA engine and arm for bulk OUT to internal SRAM.
+      *   wValue = sector count (number of 512-byte transfers, written to 0xC427)
+      *   wIndex = slot select (written to 0xC429; slot*4 where slot picks 0x10000 chunk) */
+      uint8_t sectors = wValL;
+      uint8_t slot_sel = REG_USB_SETUP_WIDX_L;
+      /* DMA_INIT sequence for SRAM DMA */
+      REG_NVME_DOORBELL    = 0x20;  /* 0xC42A: NVMe doorbell (gate) */
+      REG_NVME_LBA_LOW     = 0x02;  /* 0xC422 */
+      REG_NVME_DATA_CTRL   = 0x80;  /* 0xC414 */
+      REG_NVME_DEV_STATUS  = 0x01;  /* 0xC415 */
+      REG_NVME_CTRL_STATUS = 0x03;  /* 0xC412 */
+      /* Arm DMA for slot */
+      REG_NVME_DMA_ADDR_C427 = sectors;  /* 0xC427: sector count */
+      REG_NVME_CMD_PARAM    = slot_sel;  /* 0xC429: slot select + DMA re-arm */
+      //dma_mode = 3;  /* suppress UART in bulk handler */
+      send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
+      /* 0xF0 OUT: PCIe TLP engine.
+      *   wValue = fmt_type | (byte_enable << 8)
+      *   wIndex low[1:0] = mode (0=single TLP, 1=stream write, 2=stream read)
+      *   wIndex low[7:2] = dwords per read chunk (0 → 128 for writes)
+      *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 BE] */
       /* Don't configure yet — wait for DATA_OUT phase.
        * SETUP params (wValue/wIndex) are readable from registers in DATA_OUT. */
-
-    /* 0xF0 IN: read TLP completion (mode=0 only). Returns 8 bytes. */
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
+      /* 0xF0 IN: read TLP completion (mode=0 only). Returns 8 bytes. */
       uint8_t ret_status = 0xFF;
       uint16_t t;
       for (t = 0; t < 50000; t++) {
@@ -305,6 +321,9 @@ static void handle_usb_control(void) {
 
       /* Update dma_mode LAST — this arms the bulk/EP_COMPLETE handlers */
       dma_mode = mode;
+      if (dma_mode) {
+        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      }
 
       send_zlp_ack();
     }
@@ -388,6 +407,8 @@ void handle_usb_bulk_data(void) {
     if (dma_mode == 1) {
       uint16_t byte_count = ((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L;
       pcie_write_chunk((__xdata uint8_t *)0x7000, byte_count >> 2);
+      // re-arm OUT
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
     } else {
       // dump what's at 0x7000
       uart_puts("[7000=");
@@ -395,20 +416,15 @@ void handle_usb_bulk_data(void) {
       uart_puthex(XDATA_REG8(0x7002)); uart_puthex(XDATA_REG8(0x7003));
       uart_puts("]\n");
     }
-    // re-arm OUT
-    REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
     if (dma_mode == 2) {
       pcie_read_chunk((__xdata uint8_t *)0xD800, dma_count);
       REG_USB_MSC_LENGTH = dma_count * 4;
-    } else {
-      /* Generic bulk IN: send 13 bytes from D800 */
-      REG_USB_MSC_LENGTH = 0xD;
+      REG_USB_BULK_DMA_TRIGGER = 0x01;
+      // unfortunately we need this to block and prevent the next one clobbering it
+      // while the DMA out the USB is happening
+      while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
     }
-    REG_USB_BULK_DMA_TRIGGER = 0x01;
-    // unfortunately we need this to block and prevent the next one clobbering it
-    // while the DMA out the USB is happening
-    while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_START) {
     // ack
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_START) {
@@ -441,6 +457,7 @@ void int0_isr(void) __interrupt(0) {
     } else if (periph_status & USB_PERIPH_LINK_EVENT) {
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
+        uart_puts("[USB2 fallback]\n");
         // fallback to USB2
         is_usb2 = 1;
         // without this, USB2 is flaky
@@ -466,7 +483,12 @@ void int0_isr(void) __interrupt(0) {
       uart_puts("]\n");
     }
   }
-  if (int0_type & ~(INT_USB_GATE)) {
+  if (int0_type & INT_USB_CTRL_PENDING) {
+    uart_puts("[MSC]\n");
+    REG_USB_MSC_CTRL = 1;
+    REG_USB_MSC_STATUS = 0;
+  }
+  if (int0_type & ~(INT_USB_GATE | INT_USB_CTRL_PENDING)) {
     uart_puts("[UNHANDLED INT0 TYPE ");
     uart_puthex(int0_type);
     uart_puts("]\n");

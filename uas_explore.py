@@ -12,10 +12,10 @@ from tinygrad.helpers import getenv
 DMA_INIT = [
     (0xC42A, 0x20),  # REG_NVME_DOORBELL = 0x20 (breaks bulk IN)
     (0xC422, 0x02),  # REG_NVME_LBA_LOW = 0x02 (data is wrong)
-    (0xC427, 0x01),  # REG_NVME_ERROR (sector count) = 0x01 (data is wrong)
     (0xC414, 0x80),  # REG_NVME_DATA_CTRL = 0x80 (breaks bulk IN)
     (0xC415, 0x01),  # REG_NVME_DEV_STATUS = 0x01 (without this, read 0xF000 fails)
     (0xC412, 0x03),  # REG_NVME_CTRL_STATUS = 0x03 (breaks bulk IN)
+    (0xC427, 0x01),  # REG_NVME_ERROR (sector count) = 0x01 (data is wrong)
 ]
 
 class Dev:
@@ -49,6 +49,7 @@ def main():
         dev.write(0xC429, 0x00) # NVMe slot 0 select + DMA re-arm (slot*4, see registers.h)
         tag = os.urandom(4)
         test_data = tag + bytes(range(252)) + bytes(range(256))
+        #test_data *= 3
         print(f"[{i}] SCSI WRITE (tag={tag.hex()})...", end="")
         dev.scsi_write(test_data)
         got = bytes(dev.read8(0xF000 + j) for j in range(4))
