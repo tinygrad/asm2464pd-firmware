@@ -227,7 +227,7 @@ static void handle_usb_control(void) {
       REG_NVME_CTRL_STATUS = 0x03;  /* 0xC412 */
       /* Arm DMA for slot */
       REG_NVME_DMA_ADDR_C427 = sectors;  /* 0xC427: sector count */
-      REG_NVME_CMD_PARAM    = slot_sel;  /* 0xC429: slot select + DMA re-arm */
+      REG_NVME_CMD_PARAM    = 0;  /* 0xC429: slot select + DMA re-arm */
       dma_mode = 3;  /* suppress UART in bulk handler */
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {

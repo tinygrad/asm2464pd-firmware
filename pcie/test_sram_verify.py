@@ -17,10 +17,12 @@ from tinygrad.runtime.ops_amd import AMDDevice, AMDCopyQueue
 from tinygrad.runtime.support.memory import AddrSpace
 from tinygrad.runtime.autogen import libusb
 
+SRAM_EXPECTED = 0x80000  # 512KB, this is verified
+
 SECTOR_SIZE = 512
-SLOT_SIZE   = 0x1000   # 16KB per bulk transfer
+SLOT_SIZE   = 0x4000   # 16KB per bulk transfer
 #SRAM_SIZE   = 0x80000  # 512KB total SRAM
-SRAM_SIZE   = 0x1000  # 512KB total SRAM
+SRAM_SIZE   = 0x8000  # 512KB total SRAM
 NUM_SLOTS   = SRAM_SIZE // SLOT_SIZE
 
 EP_OUT = 0x02
