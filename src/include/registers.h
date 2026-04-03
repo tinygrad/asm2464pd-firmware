@@ -1304,6 +1304,7 @@
 #define REG_NVME_CMD_OPCODE     XDATA_REG8(0xC421)  /* Also DMA xfer byte count low */
 #define REG_NVME_DMA_XFER_HI   XDATA_REG8(0xC420)  /* DMA transfer byte count high (alias) */
 #define REG_NVME_DMA_XFER_LO   XDATA_REG8(0xC421)  /* DMA transfer byte count low (alias) */
+#define REG_NVME_STREAM_ID      XDATA_REG8(0xC421) // this is correct, it's the stream id
 #define REG_NVME_LBA_LOW        XDATA_REG8(0xC422)
 #define REG_NVME_LBA_MID        XDATA_REG8(0xC423)
 #define REG_NVME_LBA_HIGH       XDATA_REG8(0xC424)
@@ -2002,7 +2003,7 @@
  */
 #define REG_USB_DMA_ERROR       XDATA_REG8(0xCE86)  /* DMA error flags */
 #define   USB_DMA_ERROR_BIT       0x10  /* Bit 4: DMA error flag (stock check at 0x349D) */
-#define REG_BULK_DMA_HANDSHAKE  XDATA_REG8(0xCE88)  /* Write 0x00 to start bulk DMA handshake */
+#define REG_BULK_DMA_HANDSHAKE  XDATA_REG8(0xCE88)  // you write the stream_id to this register
 #define REG_USB_DMA_STATE       XDATA_REG8(0xCE89)  /* DMA handshake status */
 #define   USB_DMA_STATE_READY     0x01  /* Bit 0: DMA ready/complete (poll after CE88 write) */
 #define   USB_DMA_STATE_CBW       0x02  /* Bit 1: 1=CBW in registers, 0=bulk data at 0x7000 */

@@ -12,7 +12,7 @@ NUM_STREAMS = max(1, STREAMS)
 
 DMA_INIT = [
     (0x9000, int(STREAMS > 0)),
-    (0xC421, 0x01),  # enable streams
+    (0xC421, 0x02),  # STREAM_ID
     (0xC428, 0x30),
     (0xC42A, 0x20),
     (0xC422, 0x02),  # REG_NVME_LBA_LOW
@@ -87,7 +87,7 @@ def main():
             # send on stream 1 using async transfer API
             submit = []
             for slot in range(STREAMS):
-                stream_id = 1 #+slot
+                stream_id = 2 #+slot
                 dev.usb.buf_data_out_mvs[slot][:len(test_data)] = test_data
                 tr = dev.usb._prep_transfer(dev.usb.tr[dev.usb.ep_data_out][slot],
                                             dev.usb.ep_data_out, stream_id,

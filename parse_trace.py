@@ -37,6 +37,7 @@ class C:
     CSW       = "\033[0;33m"   # Yellow
     INIT      = "\033[0;37m"   # White
     SCSI      = "\033[0;36m"   # Cyan
+    UAS       = "\033[1;32m"   # Bold green
     POLL      = "\033[2;33m"   # Dim yellow
     CYCLE     = "\033[2;37m"   # Dim white
     HEADER    = "\033[1;4;37m" # Bold underline white
@@ -60,6 +61,7 @@ CATEGORY_COLORS = {
     "NVME":   C.NVME,
     "DMA":    C.DMA,    "SDMA":   C.DMA,
     "SCSI":   C.SCSI,
+    "UAS":    C.UAS,
     "PCIE":   C.PCIE,
     "INIT":   C.INIT,
     "POLL":   C.POLL,
@@ -234,6 +236,14 @@ def parse_trace(filename):
     msc_cbw_tag = 0              # CBW tag for correlation
     msc_detected = False         # set when CDB is read from 0x912A (software-handled)
 
+    # UAS protocol state
+    uas_tag_c47a = 0             # last C47A value (current UAS command tag)
+    uas_tag_hi = 0               # CEB2 (tag high byte)
+    uas_tag_lo = 0               # CEB3 (tag low byte)
+    uas_cmd_iu = {}              # per-slot Command IU bytes: {slot: {offset: val}}
+    uas_cmd_iu_cycle = {}        # per-slot first read cycle
+    uas_mode = False             # set True when UAS mode detected (900D writes)
+
     # Track link status
     last_usb_speed = None
 
@@ -271,14 +281,19 @@ def parse_trace(filename):
                            f"D800+0x{base_addr - 0xD800:03X} [{count}]: {hex_bytes}  |{ascii_str}|",
                            0xD800))
 
+    uas_scsi_tag = 0  # tag associated with current SCSI command
+
     def flush_scsi():
-        nonlocal scsi_opcode, scsi_cdb, scsi_base
+        nonlocal scsi_opcode, scsi_cdb, scsi_base, uas_scsi_tag
         if scsi_opcode is not None:
             msg = decode_scsi(scsi_opcode, scsi_cdb)
+            if uas_mode and uas_scsi_tag > 0:
+                msg = f"[tag={uas_scsi_tag}] {msg}"
             events.append((scsi_opcode_cycle, "BULK", msg))
             scsi_opcode = None
             scsi_cdb = {}
             scsi_base = None
+            uas_scsi_tag = 0
 
     with open(filename) as f:
         last_cycle = 0
@@ -404,6 +419,43 @@ def parse_trace(filename):
                 dma_addr = (dma_addr_hi << 8) | dma_addr_lo
                 events.append((cycle, "SDMA", f"stream={stream} dma_addr=0x{dma_addr:04X}"))
 
+            # ── UAS protocol decoding ─────────────────────────────────────
+            # C47A: current UAS command tag (hardware-parsed from Command IU)
+            if addr == 0xC47A and is_read and val != 0xFF and val != 0x00:
+                uas_tag_c47a = val
+
+            # CE88: handshake write — the value IS the stream_id/tag
+            if addr == 0xCE88 and is_write:
+                uas_tag_c47a = val  # track for annotating next SCSI command
+                if val > 0:
+                    uas_mode = True
+                    events.append((cycle, "UAS",
+                                   f"CE88 handshake stream_id={val} (tag={val})"))
+
+            # CEB2/CEB3: next command tag (high/low bytes)
+            if addr == 0xCEB2 and is_read:
+                uas_tag_hi = val
+            if addr == 0xCEB3 and is_read:
+                uas_tag_lo = val
+
+            # 900D: UAS response stream configuration
+            if addr == 0x900D and is_write and uas_mode:
+                events.append((cycle, "UAS",
+                               f"response stream={val}"))
+            if addr == 0x900F and is_write and uas_mode:
+                events.append((cycle, "UAS",
+                               f"response stream2={val}"))
+
+            # D0xx Command IU buffer reads (slot = (addr-0xD000)//0x20)
+            # Byte layout: [0]=IU type, [2:3]=tag, [16:31]=CDB
+            if is_read and 0xD000 <= addr <= 0xD1FF:
+                slot = (addr - 0xD000) // 0x20
+                offset = (addr - 0xD000) % 0x20
+                if slot not in uas_cmd_iu:
+                    uas_cmd_iu[slot] = {}
+                    uas_cmd_iu_cycle[slot] = cycle
+                uas_cmd_iu[slot][offset] = val
+
             # MSC hardware-handled SCSI command detection:
             # Track CBW_RECEIVED events
             if addr == 0x9101 and is_read and (val & 0x40):
@@ -441,6 +493,7 @@ def parse_trace(filename):
                 cbw_received_cycle = 0
 
             # SCSI opcode read from D0xx command buffer (stock firmware, PC=0x3CBF)
+            # In UAS mode, CDB starts at offset 0x10 within each 0x20-byte Command IU slot
             if pc == 0x3CBF and is_read and 0xD000 <= addr <= 0xD1FF:
                 page_offset = addr & 0x0F
                 if page_offset == 0x00:
@@ -449,6 +502,8 @@ def parse_trace(filename):
                     scsi_opcode = val
                     scsi_opcode_cycle = cycle
                     scsi_cdb = {0: val}
+                    # Use the current UAS tag from CE88/C47A
+                    uas_scsi_tag = uas_tag_c47a
 
             # CDB param reads from D0xx buffer (stock firmware)
             if is_read and scsi_base and scsi_base >= 0xD000 and 0xD000 <= addr <= 0xD1FF:
