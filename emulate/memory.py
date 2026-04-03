@@ -43,6 +43,9 @@ class Memory:
     # Accessed via SFR but affects code reads
     SFR_DPX = 0x96
 
+    # Proxy reference for DPX-banked XDATA access (set by create_hardware_hooks)
+    proxy: object = field(default=None, repr=False)
+
     def load_firmware(self, data: bytes, offset: int = 0):
         """Load firmware binary into code memory."""
         end = min(offset + len(data), len(self.code))
@@ -113,6 +116,16 @@ class Memory:
         """Read from XDATA with MMIO hooks."""
         addr &= 0xFFFF
 
+        # DPX-banked access (SFR 0x93 != 0): entire XDATA address space maps
+        # DPX-banked access: when SFR 0x93 != 0, the entire XDATA address space
+        # maps to PHY registers.  Use dedicated DPX read/write proxy commands.
+        dpx = self.sfr[0x93 - 0x80]
+        if dpx and self.proxy is not None:
+            value = self.proxy.read_dpx(addr)
+            if self.proxy.debug >= 2:
+                print(f"Read  0x{addr:04X} = 0x{value:02X}  DPX={dpx}")
+            return value
+
         # Check for MMIO hooks
         if addr in self.xdata_read_hooks:
             return self.xdata_read_hooks[addr](addr)
@@ -138,6 +151,14 @@ class Memory:
         """Write to XDATA with MMIO hooks."""
         addr &= 0xFFFF
         value &= 0xFF
+
+        # DPX-banked access: use dedicated DPX write command to proxy.
+        dpx = self.sfr[0x93 - 0x80]
+        if dpx and self.proxy is not None:
+            if self.proxy.debug >= 2:
+                print(f"Write 0x{addr:04X} = 0x{value:02X}  DPX={dpx}")
+            self.proxy.write_dpx(addr, value)
+            return
 
         # Check for MMIO hooks
         if addr in self.xdata_write_hooks:

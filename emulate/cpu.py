@@ -59,6 +59,7 @@ class CPU8051:
     
     # Proxy mode - when True, skip interrupt checking (hardware handles it)
     proxy_mode: bool = False
+    _saved_dpx: int = 0  # DPX saved/restored around ISR dispatch
 
     # SFR addresses
     SFR_ACC = 0xE0
@@ -261,6 +262,11 @@ class CPU8051:
         if ie & 0x01:  # EX0 enabled
             if hasattr(self, '_ext0_pending') and self._ext0_pending:
                 self._ext0_pending = False
+                # Save DPX (SFR 0x93) - ISR doesn't save/restore it but
+                # DPX affects XDATA banking, so we must preserve it
+                self._saved_dpx = self.read_sfr(0x93)
+                if self._saved_dpx:
+                    self.write_sfr(0x93, 0)  # ISR runs with DPX=0
                 # Push return address onto stack before jumping to ISR
                 # Order matches LCALL: low byte first, high byte second
                 # So high is on top of stack, RET pops high first then low
@@ -296,6 +302,12 @@ class CPU8051:
         """
         if self.in_interrupt:
             return
+
+        # Save DPX (SFR 0x93) - ISR doesn't save/restore it but
+        # DPX affects XDATA banking, so we must preserve it
+        self._saved_dpx = self.read_sfr(0x93)
+        if self._saved_dpx:
+            self.write_sfr(0x93, 0)  # ISR runs with DPX=0
 
         # Push current PC onto stack (matches LCALL order)
         # Low byte first, high byte second (high ends up on top)
@@ -505,6 +517,10 @@ class CPU8051:
             lo = self.pop()
             self.pc = (hi << 8) | lo
             self.in_interrupt = False
+            # Restore DPX (SFR 0x93) saved at interrupt entry
+            if self._saved_dpx:
+                self.write_sfr(0x93, self._saved_dpx)
+                self._saved_dpx = 0
             return 2
 
         # RLC A

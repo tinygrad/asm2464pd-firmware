@@ -87,7 +87,7 @@ DESC_TYPES = {
 SCSI_OPCODES = {
     0x00: "TEST_UNIT_READY", 0x03: "REQUEST_SENSE", 0x12: "INQUIRY",
     0x1A: "MODE_SENSE_6", 0x1E: "PREVENT_ALLOW", 0x25: "READ_CAPACITY_10",
-    0x28: "READ_10", 0x2A: "WRITE_10", 0x8A: "WRITE_16",
+    0x28: "READ_10", 0x2A: "WRITE_10", 0x88: "READ_16", 0x8A: "WRITE_16",
     0xA0: "REPORT_LUNS",
     0xE4: "VENDOR_READ_REG", 0xE5: "VENDOR_WRITE_REG",
 }
@@ -118,7 +118,7 @@ def decode_setup(bmreq, breq, wval_l, wval_h, widx_l, widx_h, wlen_l, wlen_h):
 
 SCSI_DIR = {
     0x00: None, 0x03: "IN", 0x12: "IN", 0x1A: "IN", 0x1E: None,
-    0x25: "IN", 0x28: "IN", 0x2A: "OUT", 0x8A: "OUT", 0xA0: "IN",
+    0x25: "IN", 0x28: "IN", 0x2A: "OUT", 0x88: "IN", 0x8A: "OUT", 0xA0: "IN",
     0xE4: "IN", 0xE5: None,
 }
 
@@ -143,7 +143,7 @@ def decode_scsi(opcode, cdb):
         lba = (cdb.get(2,0)<<24)|(cdb.get(3,0)<<16)|(cdb.get(4,0)<<8)|cdb.get(5,0)
         cnt = (cdb.get(7,0)<<8)|cdb.get(8,0)
         return f"{name} LBA=0x{lba:08X} cnt={cnt} len={cnt*512}{ep}"
-    elif opcode == 0x8A:
+    elif opcode in (0x88, 0x8A):
         lba = 0
         for i in range(2, 10): lba = (lba << 8) | cdb.get(i, 0)
         cnt = (cdb.get(10,0)<<24)|(cdb.get(11,0)<<16)|(cdb.get(12,0)<<8)|cdb.get(13,0)
@@ -226,6 +226,13 @@ def parse_trace(filename):
     scsi_opcode = None
     scsi_opcode_cycle = 0
     scsi_cdb = {}
+
+    # MSC hardware-handled SCSI detection
+    cbw_received_cycle = 0       # cycle of last CBW_RECEIVED (9101=0x40)
+    msc_dma_state = 0            # last CE89 value after CBW
+    msc_xfer_cnt = 0             # CE55 value (sector count)
+    msc_cbw_tag = 0              # CBW tag for correlation
+    msc_detected = False         # set when CDB is read from 0x912A (software-handled)
 
     # Track link status
     last_usb_speed = None
@@ -397,7 +404,43 @@ def parse_trace(filename):
                 dma_addr = (dma_addr_hi << 8) | dma_addr_lo
                 events.append((cycle, "SDMA", f"stream={stream} dma_addr=0x{dma_addr:04X}"))
 
-            # SCSI opcode read at PC=0x3CBF from command buffer
+            # MSC hardware-handled SCSI command detection:
+            # Track CBW_RECEIVED events
+            if addr == 0x9101 and is_read and (val & 0x40):
+                if cbw_received_cycle == 0:  # first read of this CBW batch
+                    cbw_received_cycle = cycle
+                    msc_detected = False
+
+            # CE88 handshake write after CBW — start tracking MSC DMA
+            if addr == 0xCE88 and is_write and cbw_received_cycle:
+                msc_dma_state = 0
+                msc_xfer_cnt = 0
+
+            # CE89 DMA state read after CBW handshake
+            if addr == 0xCE89 and is_read and cbw_received_cycle:
+                msc_dma_state = val
+
+            # CE55 transfer sector count
+            if addr == 0xCE55 and is_read and cbw_received_cycle:
+                msc_xfer_cnt = val
+
+            # CBW tag read (0x911F) — MSC is building CSW.
+            # If no CDB read from 0x912A happened, this was hardware-handled.
+            if addr == 0x911F and is_read and cbw_received_cycle and not msc_detected:
+                if msc_dma_state in (0x01, 0x05):
+                    flush_scsi()
+                    if msc_dma_state == 0x05:
+                        opcode = 0x2A  # WRITE_10
+                    else:
+                        opcode = 0x28  # READ_10
+                    name = SCSI_OPCODES.get(opcode, f"0x{opcode:02X}")
+                    direction = SCSI_DIR.get(opcode, "?")
+                    ep = " bulk_in(EP1)" if direction == "IN" else " bulk_out(EP2)" if direction == "OUT" else ""
+                    events.append((cbw_received_cycle, "BULK",
+                                   f"{name} cnt={msc_xfer_cnt} len={msc_xfer_cnt*512} (hw-handled){ep}"))
+                cbw_received_cycle = 0
+
+            # SCSI opcode read from D0xx command buffer (stock firmware, PC=0x3CBF)
             if pc == 0x3CBF and is_read and 0xD000 <= addr <= 0xD1FF:
                 page_offset = addr & 0x0F
                 if page_offset == 0x00:
@@ -407,10 +450,26 @@ def parse_trace(filename):
                     scsi_opcode_cycle = cycle
                     scsi_cdb = {0: val}
 
-            # CDB param reads
-            if is_read and scsi_base and 0xD000 <= addr <= 0xD1FF:
+            # CDB param reads from D0xx buffer (stock firmware)
+            if is_read and scsi_base and scsi_base >= 0xD000 and 0xD000 <= addr <= 0xD1FF:
                 offset = addr - scsi_base
                 if 1 <= offset <= 15 and (cycle - scsi_opcode_cycle) < 50000:
+                    scsi_cdb[offset] = val
+
+            # SCSI opcode read from CBW register 0x912A (REG_USB_CBWCB_0)
+            if is_read and addr == 0x912A:
+                flush_scsi()
+                scsi_base = 0x912A
+                scsi_opcode = val
+                scsi_opcode_cycle = cycle
+                scsi_cdb = {0: val}
+                msc_detected = True  # mark that CDB was read by firmware
+                cbw_received_cycle = 0  # reset — firmware handles this one
+
+            # CDB param reads from CBW registers 0x912B-0x9139
+            if is_read and scsi_base == 0x912A and 0x912B <= addr <= 0x9139:
+                offset = addr - 0x912A
+                if 1 <= offset <= 15 and (cycle - scsi_opcode_cycle) < 200000:
                     scsi_cdb[offset] = val
 
     read_run.flush(events)

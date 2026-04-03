@@ -41,6 +41,8 @@ typedef unsigned int uint16_t;
 #define CMD_SFR_READ    0x03
 #define CMD_SFR_WRITE   0x04
 #define CMD_INT_ACK     0x05
+#define CMD_READ_DPX    0x06
+#define CMD_WRITE_DPX   0x07
 
 /* Interrupt signal - 0x7E followed by int_mask (0x00-0x3F)
  * This can never be confused with a valid response since ~0x7E = 0x81,
@@ -65,6 +67,7 @@ __sfr __at(0x8A) SFR_TL0;   /* Timer 0 Low */
 __sfr __at(0x8B) SFR_TL1;   /* Timer 1 Low */
 __sfr __at(0x8C) SFR_TH0;   /* Timer 0 High */
 __sfr __at(0x8D) SFR_TH1;   /* Timer 1 High */
+__sfr __at(0x93) SFR_DPX;   /* XDATA bank select (0=normal, 1=PHY regs) */
 __sfr __at(0xD0) SFR_PSW;   /* Program Status Word */
 __sfr __at(0xE0) SFR_ACC;   /* Accumulator */
 __sfr __at(0xF0) SFR_B;     /* B Register */
@@ -240,6 +243,27 @@ void main(void)
             addr_lo = uart_getc();
             val = uart_getc();
             sfr_write(addr_lo, val);
+            send_ack();
+            break;
+
+        case CMD_READ_DPX:
+            addr_hi = uart_getc();
+            addr_lo = uart_getc();
+            addr = ((uint16_t)addr_hi << 8) | addr_lo;
+            SFR_DPX = 0x01;
+            val = *(__xdata volatile uint8_t *)addr;
+            SFR_DPX = 0x00;
+            send_response(val);
+            break;
+
+        case CMD_WRITE_DPX:
+            addr_hi = uart_getc();
+            addr_lo = uart_getc();
+            val = uart_getc();
+            addr = ((uint16_t)addr_hi << 8) | addr_lo;
+            SFR_DPX = 0x01;
+            *(__xdata volatile uint8_t *)addr = val;
+            SFR_DPX = 0x00;
             send_ack();
             break;
 
