@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """UAS explore: open device, init NVMe DMA engine, send data via bulk OUT to 0xF000 and verify."""
 
-import ctypes, os, struct, sys
+import ctypes, os, struct, sys, time
 from hexdump import hexdump
 from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
 from tinygrad.helpers import getenv
 
 STREAMS = getenv("STREAMS", 0)
+NUM_STREAMS = max(1, STREAMS)
 
 DMA_INIT = [
     (0x9000, int(STREAMS > 0)),
@@ -67,16 +68,17 @@ def main():
         for j in range(4, size): test_data[j] = (j * 7 + 0x42) & 0xFF
         assert len(test_data) == 0x4000
 
-        print(f"[{i}] bulk OUT {len(test_data)} bytes (tag={tag.hex()})...", end="")
+        full_size = len(test_data)*NUM_STREAMS
+        print(f"[{i}] bulk OUT {full_size} bytes (tag={tag.hex()})...", end="")
         if use_f2:
             dev.f2_arm(len(test_data) // 512)
         else:
-            dev.write(0xC427, (len(test_data) // 512) * max(1, STREAMS))
+            dev.write(0xC427, full_size//512)
 
             # stream range
             first_stream = getenv("FIRST", 0)
-            dev.write(0xC414, 0x80+first_stream)
-            dev.write(0xC415, max(1, STREAMS) + first_stream)
+            dev.write(0xC414, first_stream+0x80)
+            dev.write(0xC415, first_stream+NUM_STREAMS)
             dev.write(0xC429, first_stream)
 
         if STREAMS:
@@ -91,7 +93,10 @@ def main():
                 submit.append(tr)
             try:
                 print(f"submit {len(submit)}", end="")
+                st = time.perf_counter()
                 dev.usb._submit_and_wait(submit)
+                et = time.perf_counter() - st
+                print(f" time {(size/1e6)/et:.2f} MB/s", end="")
             except RuntimeError as e:
                 print("")
                 for j, tr in enumerate(submit):
