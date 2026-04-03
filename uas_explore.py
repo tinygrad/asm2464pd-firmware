@@ -10,7 +10,7 @@ STREAMS = getenv("STREAMS", 0)
 
 DMA_INIT = [
     # enable streams globally
-    (0x9000, int(STREAMS)),
+    (0x9000, int(STREAMS > 0)),
 
     # === DMA engine init ===
     (0xC42A, 0x20),
@@ -18,7 +18,7 @@ DMA_INIT = [
     (0xC414, 0x80),  # REG_NVME_DATA_CTRL
     (0xC412, 0x03),  # REG_NVME_CTRL_STATUS
     (0xC421, 0x01),  # use streams for dma
-    (0xC415, 0x01),  # stream count
+    (0xC415, max(1, STREAMS)),  # stream count
 
     # MSC interrupts
     #(0xC42C, 1), (0xC42D, 0),
@@ -71,14 +71,16 @@ def main():
 
         if STREAMS:
             # send on stream 1 using async transfer API
-            slot = 0
-            stream_id = 1
-            usb = dev.usb
-            buf = usb.buf_data_out[slot]
-            mv = usb.buf_data_out_mvs[slot]
-            mv[:len(test_data)] = test_data
-            tr = usb._prep_transfer(usb.tr[usb.ep_data_out][slot], usb.ep_data_out, stream_id, buf, len(test_data))
-            usb._submit_and_wait([tr])
+            submit = []
+            for slot in range(STREAMS):
+                stream_id = 1+slot
+                usb = dev.usb
+                buf = usb.buf_data_out[slot]
+                mv = usb.buf_data_out_mvs[slot]
+                mv[:len(test_data)] = test_data
+                tr = usb._prep_transfer(usb.tr[usb.ep_data_out][slot], usb.ep_data_out, stream_id, buf, len(test_data))
+                submit.append(tr)
+            usb._submit_and_wait(submit)
         else:
             dev.usb._bulk_out(dev.usb.ep_data_out, test_data)
 
