@@ -73,7 +73,9 @@ def main():
         if use_f2:
             dev.f2_arm(len(test_data) // 512)
         else:
-            dev.write(0xC427, full_size//512)
+            sectors = full_size//512
+            dev.write(0xC426, sectors>>8)
+            dev.write(0xC427, sectors&0xFF)
 
             # stream range
             first_stream = getenv("FIRST", 0)
@@ -96,7 +98,7 @@ def main():
                 st = time.perf_counter()
                 dev.usb._submit_and_wait(submit)
                 et = time.perf_counter() - st
-                print(f" time {(size/1e6)/et:.2f} MB/s", end="")
+                print(f" time {(full_size/1e6)/et:.2f} MB/s", end="")
             except RuntimeError as e:
                 print("")
                 for j, tr in enumerate(submit):
