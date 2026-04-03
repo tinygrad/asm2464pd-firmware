@@ -2,6 +2,7 @@
 """UAS explore: open device, init NVMe DMA engine, send data via bulk OUT to 0xF000 and verify."""
 
 import ctypes, os, struct, sys
+from hexdump import hexdump
 from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
 from tinygrad.helpers import getenv
@@ -13,12 +14,12 @@ DMA_INIT = [
     (0x9000, int(STREAMS > 0)),
 
     # === DMA engine init ===
+    (0xC428, 0x30),  # not strictly needed
     (0xC42A, 0x20),
     (0xC422, 0x02),  # REG_NVME_LBA_LOW
     (0xC414, 0x80),  # REG_NVME_DATA_CTRL
     (0xC412, 0x03),  # REG_NVME_CTRL_STATUS
     (0xC421, 0x01),  # use streams for dma
-    (0xC415, max(1, STREAMS)),  # stream count
 
     # MSC interrupts
     #(0xC42C, 1), (0xC42D, 0),
@@ -67,7 +68,12 @@ def main():
             dev.f2_arm(len(test_data) // 512)
         else:
             dev.write(0xC427, len(test_data) // 512)
-            dev.write(0xC429, 0x00)
+
+            # stream range
+            first_stream = 0
+            dev.write(0xC414, 0x80+first_stream)
+            dev.write(0xC415, 0x01+first_stream)
+            dev.write(0xC429, first_stream)
 
         if STREAMS:
             # send on stream 1 using async transfer API
@@ -83,6 +89,8 @@ def main():
             usb._submit_and_wait(submit)
         else:
             dev.usb._bulk_out(dev.usb.ep_data_out, test_data)
+
+        if getenv("DUMP"): hexdump(dev.readn(0xc400, 0x80))
 
         # read back full 0xF000-0x10000 and compare
         got = b""
