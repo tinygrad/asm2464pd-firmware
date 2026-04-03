@@ -25,14 +25,51 @@ NUM_SLOTS   = SRAM_SIZE // SLOT_SIZE
 EP_OUT = 0x02
 
 def sram_dma_arm(handle, sectors, slot):
+  """Legacy per-slot arm: wValue=sectors (8-bit), wIndex=slot*4."""
   ret = libusb.libusb_control_transfer(handle, 0x40, 0xF2, sectors, slot, None, 0, 1000)
   assert ret >= 0, f"0xF2 arm failed (sectors={sectors}, slot={slot}): {ret}"
+
+def sram_dma_arm_all(handle, total_sectors, start_slot, num_slots):
+  """Batch arm: wValue=total_sectors (16-bit), wIndex=start_slot|(num_slots<<8)."""
+  wValue = total_sectors
+  wIndex = (start_slot & 0xFF) | ((num_slots & 0xFF) << 8)
+  ret = libusb.libusb_control_transfer(handle, 0x40, 0xF2, wValue, wIndex, None, 0, 1000)
+  assert ret >= 0, f"0xF2 batch arm failed (sectors={total_sectors}, start={start_slot}, num={num_slots}): {ret}"
 
 def bulk_out(handle, data):
   buf = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
   transferred = ctypes.c_int()
   ret = libusb.libusb_bulk_transfer(handle, EP_OUT, buf, len(data), ctypes.byref(transferred), 5000)
   assert ret == 0, f"bulk OUT failed: {ret}"
+
+def bulk_out_async(ctx, handle, buffers):
+  """Submit all bulk OUT transfers at once and wait for completion."""
+  transfers = []
+  for buf in buffers:
+    tr = libusb.libusb_alloc_transfer(0)
+    tr.contents.dev_handle = handle
+    tr.contents.endpoint = EP_OUT
+    tr.contents.type = libusb.LIBUSB_TRANSFER_TYPE_BULK
+    tr.contents.length = len(buf)
+    tr.contents.buffer = buf
+    tr.contents.status = 0xFF  # sentinel
+    tr.contents.flags = 0
+    tr.contents.timeout = 5000
+    tr.contents.num_iso_packets = 0
+    transfers.append(tr)
+  for tr in transfers:
+    rc = libusb.libusb_submit_transfer(tr)
+    assert rc == 0, f"libusb_submit_transfer failed: {rc}"
+  running = len(transfers)
+  while running:
+    libusb.libusb_handle_events(ctx)
+    running = 0
+    for tr in transfers:
+      if tr.contents.status == 0xFF: running += 1
+      elif tr.contents.status != libusb.LIBUSB_TRANSFER_COMPLETED:
+        raise RuntimeError(f"bulk OUT failed: status={tr.contents.status}")
+  for tr in transfers:
+    libusb.libusb_free_transfer(tr)
 
 def make_pattern(slot, size):
   """Deterministic pattern: each byte = (slot * 37 + offset * 7 + 0x42) & 0xFF."""
@@ -53,12 +90,20 @@ def main():
   total_bytes = NUM_SLOTS * SLOT_SIZE
   print(f"Filling {NUM_SLOTS} slots x {SLOT_SIZE//1024}KB = {total_bytes//1024}KB via 0xF2 SRAM DMA")
   datas = [make_pattern(slot, SLOT_SIZE) for slot in range(NUM_SLOTS)]
-  t0 = time.monotonic()
+
+  # Batch mode: single F2 arm for all slots, then submit all bulk transfers at once
+  total_sectors = total_bytes // SECTOR_SIZE
+  # Allocate persistent ctypes buffers for async transfers
+  ctypes_bufs = []
   for slot in range(NUM_SLOTS):
-    sram_dma_arm(handle, sectors=len(datas[slot]) // SECTOR_SIZE, slot=slot)
-    bulk_out(handle, datas[slot])
+    buf = (ctypes.c_ubyte * SLOT_SIZE).from_buffer_copy(datas[slot])
+    ctypes_bufs.append(buf)
+
+  t0 = time.monotonic()
+  sram_dma_arm_all(handle, total_sectors, start_slot=0, num_slots=NUM_SLOTS)
+  bulk_out_async(usb2.ctx, handle, ctypes_bufs)
   elapsed = time.monotonic() - t0
-  print(f"  Write done: {elapsed:.3f}s ({total_bytes/elapsed/1024:.1f} KB/s)")
+  print(f"  Write done (batch): {elapsed:.3f}s ({total_bytes/elapsed/1024:.1f} KB/s)")
 
   # Spot-check slot 0 via xdata readback
   check = usb2.xdata_read(0xf000, 16)

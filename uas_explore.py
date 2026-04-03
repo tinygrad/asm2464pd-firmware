@@ -34,8 +34,10 @@ class Dev:
         ret = libusb.libusb_control_transfer(self.usb.handle, 0x40, 0xE5, addr, val, None, 0, 1000)
         assert ret >= 0, f"write(0x{addr:04X}, 0x{val:02X}) failed: {ret}"
 
-    def f2_arm(self, sectors, slot=0):
-        ret = libusb.libusb_control_transfer(self.usb.handle, 0x40, 0xF2, sectors, slot * 4, None, 0, 1000)
+    def f2_arm(self, sectors, slot=0, num_slots=0):
+        """Arm SRAM DMA. wValue=sectors(16-bit), wIndex=slot_sel|(num_slots<<8)."""
+        wIndex = (slot * 4) | ((num_slots & 0xFF) << 8)
+        ret = libusb.libusb_control_transfer(self.usb.handle, 0x40, 0xF2, sectors, wIndex, None, 0, 1000)
         assert ret >= 0, f"0xF2 arm failed (sectors={sectors}, slot={slot}): {ret}"
 
 def dump(dev):
@@ -87,7 +89,7 @@ def main():
             # send on stream 1 using async transfer API
             submit = []
             for slot in range(STREAMS):
-                stream_id = 2 #+slot
+                stream_id = 2 # NOTE: all have the same stream id
                 dev.usb.buf_data_out_mvs[slot][:len(test_data)] = test_data
                 tr = dev.usb._prep_transfer(dev.usb.tr[dev.usb.ep_data_out][slot],
                                             dev.usb.ep_data_out, stream_id,

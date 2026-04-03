@@ -215,18 +215,22 @@ static void handle_usb_control(void) {
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF2) {
       /* 0xF2: SRAM DMA — init DMA engine and arm for bulk OUT to internal SRAM.
-      *   wValue = sector count (number of 512-byte transfers, written to 0xC427)
-      *   wIndex = slot select (written to 0xC429; slot*4 where slot picks 0x10000 chunk) */
-      uint8_t sectors = wValL;
+      *   wValue = total sector count (16-bit, C426:C427)
+      *   wIndex low  = start slot (slot_sel for C429, C414 base)
+      *   wIndex high = number of slots (for C415 end range; 0 means 1 slot) */
+      uint16_t sectors = ((uint16_t)wValH << 8) | wValL;
       uint8_t slot_sel = REG_USB_SETUP_WIDX_L;
+      uint8_t num_slots = REG_USB_SETUP_WIDX_H;
+      if (num_slots == 0) num_slots = 1;
       /* DMA_INIT sequence for SRAM DMA */
       REG_NVME_DOORBELL    = 0x20;  /* 0xC42A: NVMe doorbell (gate) */
       REG_NVME_LBA_LOW     = 0x02;  /* 0xC422 */
       REG_NVME_STREAM_START = 0x80+slot_sel;  /* 0xC414 */
-      REG_NVME_STREAM_END   = 0x01+slot_sel;  /* 0xC415 */
+      REG_NVME_STREAM_END   = num_slots+slot_sel;  /* 0xC415 */
       REG_NVME_CTRL_STATUS = 0x03;  /* 0xC412 */
-      /* Arm DMA for slot */
-      REG_NVME_DMA_ADDR_C427 = sectors;   /* 0xC427: sector count */
+      /* Arm DMA for total sectors across all slots */
+      REG_NVME_COUNT_HIGH    = (uint8_t)(sectors >> 8);  /* 0xC426: sector count high */
+      REG_NVME_DMA_ADDR_C427 = (uint8_t)(sectors & 0xFF);  /* 0xC427: sector count low */
       REG_NVME_CMD_PARAM     = slot_sel;  /* 0xC429: slot select + DMA re-arm */
       dma_mode = 3;  /* suppress UART in bulk handler */
       send_zlp_ack();
