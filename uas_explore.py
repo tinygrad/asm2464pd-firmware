@@ -6,27 +6,27 @@ from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
 from tinygrad.helpers import getenv
 
+STREAMS = getenv("STREAMS", 0)
+
 DMA_INIT = [
     # enable streams globally
-    (0x9000, 0x01),
+    (0x9000, int(STREAMS)),
 
     # === DMA engine init ===
     (0xC42A, 0x20),
     (0xC422, 0x02),  # REG_NVME_LBA_LOW
     (0xC414, 0x80),  # REG_NVME_DATA_CTRL
     (0xC412, 0x03),  # REG_NVME_CTRL_STATUS
-    (0xC415, 0x01),  # stream count
     (0xC421, 0x01),  # use streams for dma
+    (0xC415, 0x01),  # stream count
 
     # MSC interrupts
-    (0xC42C, 1), (0xC42D, 0),
+    #(0xC42C, 1), (0xC42D, 0),
 ]
-
-STREAMS = bool(getenv("STREAMS"))
 
 class Dev:
     def __init__(self):
-        self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04, max_streams=32, use_bot=not STREAMS)
+        self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04, max_streams=32, use_bot=STREAMS==0)
         if STREAMS: assert self.usb.use_streams, "streams are required"
 
     def readn(self, addr, size):
@@ -68,7 +68,6 @@ def main():
         else:
             dev.write(0xC427, len(test_data) // 512)
             dev.write(0xC429, 0x00)
-
 
         if STREAMS:
             # send on stream 1 using async transfer API

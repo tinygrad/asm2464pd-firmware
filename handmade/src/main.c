@@ -547,43 +547,6 @@ void main(void) {
   // enable USB_PERIPH_LINK_EVENT to fall back to USB2
   REG_BUF_CFG_9303 = 0x33;
 
-    /* Configure buffer settings */
-    REG_BUF_CFG_9300 = 0x0C;
-    REG_BUF_CFG_9301 = 0xC0;
-    REG_BUF_CFG_9302 = 0xBF;
-
-    /* Set interrupt flags */
-    REG_USB_CTRL_PHASE = 0x1F;
-
-    /* Configure endpoint */
-    REG_USB_EP_CFG1 = 0x0F;
-
-    /* Configure USB PHY control 1 */
-    REG_USB_PHY_CTRL_91C1 = 0xF0;
-
-    /* More buffer configuration */
-    REG_BUF_CFG_9303 = 0x33;
-    REG_BUF_CFG_9304 = 0x3F;
-    REG_BUF_CFG_9305 = 0x40;
-
-        /* Clear EP/NVMe/FIFO registers */
-    REG_USB_EP_READY = 0xFF; REG_USB_EP_CTRL_9097 = 0xFF;
-    REG_USB_EP_MODE_9098 = 0xFF; REG_USB_EP_MODE_9099 = 0xFF;
-    REG_USB_EP_MODE_909A = 0xFF; REG_USB_EP_MODE_909B = 0xFF;
-    REG_USB_EP_MODE_909C = 0xFF; REG_USB_EP_MODE_909D = 0xFF;
-    REG_USB_STATUS_909E = 0x03;
-    REG_USB_DATA_H = 0x00; REG_USB_FIFO_STATUS = 0x00;
-    REG_USB_FIFO_H = 0x00; REG_USB_FIFO_4 = 0x00;
-    REG_USB_FIFO_5 = 0x00; REG_USB_FIFO_6 = 0x00;
-    REG_USB_FIFO_7 = 0x00;
-    REG_USB_XCVR_MODE = 0x02; REG_USB_DATA_L = 0x00;
-
-        /* Configure USB */
-    REG_USB_CONFIG = 0xE0;
-    REG_USB_EP0_LEN_H = 0xF0;
-    REG_USB_MODE = 1;
-
-
   // enable interrupts and chill
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
