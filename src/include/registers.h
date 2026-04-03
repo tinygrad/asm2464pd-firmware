@@ -596,6 +596,7 @@
 #define   USB_PERIPH_CONTROL      0x02  // Bit 1: Setup/control packet (EP0)
 #define   USB_PERIPH_BULK_DATA    0x04  // Bit 2: Bulk OUT data available
 #define   USB_PERIPH_BULK_REQ     0x08  // Bit 3: Bulk transfer request (USB 3.0)
+#define   USB_PERIPH_ALT_LINK     0x08
 #define   USB_PERIPH_LINK_EVENT   0x10  // Bit 4: Link event (speed change, cable)
 #define   USB_PERIPH_EP_COMPLETE  0x20  // Bit 5: Bulk EP completion (IN done)
 #define   USB_PERIPH_CBW_RECEIVED 0x40  // Bit 6: CBW received (bulk OUT ready)
