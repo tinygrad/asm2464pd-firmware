@@ -14,14 +14,10 @@ DMA_INIT = [
     (0xC422, 0x02),  # REG_NVME_LBA_LOW = 0x02 (data is wrong)
     (0xC414, 0x80),  # REG_NVME_DATA_CTRL = 0x80 (breaks bulk IN)
     (0xC412, 0x03),  # REG_NVME_CTRL_STATUS = 0x03 (breaks bulk IN)
-
-    (0xC428, 0x30),  # use streams
-    (0xC426, 0x00),
-    (0xC421, 0x01),  # use streams
     (0xC415, 0x01),  # stream count
 
-    (0xC42C, 1),
-    (0xC42D, 0),
+    # MSC interrupts
+    (0xC42C, 1), (0xC42D, 0),
 ]
 
 STREAMS = bool(getenv("STREAMS"))
