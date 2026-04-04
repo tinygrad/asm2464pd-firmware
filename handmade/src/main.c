@@ -244,8 +244,8 @@ static void handle_usb_control(void) {
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 IN: read TLP completion (mode=0 only). Returns 8 bytes. */
       uint8_t ret_status = 0xFF;
-      uint16_t t;
-      for (t = 0; t < 50000; t++) {
+      uint32_t t;
+      for (t = 0; t < 500000; t++) {
         uint8_t s = REG_PCIE_STATUS;
         if (s & PCIE_STATUS_ERROR) {
           REG_PCIE_STATUS = PCIE_STATUS_ERROR;
@@ -266,6 +266,9 @@ static void handle_usb_control(void) {
         DESC_BUF[5] = REG_PCIE_CPL_HDR_LO;
         DESC_BUF[6] = REG_PCIE_COMPL_STATUS;
       } else {
+        uart_puts("[PCIE ERROR ");
+        uart_puthex(ret_status);
+        uart_puts("]\n");
         int i;
         for (i = 0; i < 7; i++) DESC_BUF[i] = 0;
       }
