@@ -559,15 +559,11 @@ void main(void) {
   // enable interrupts and chill
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
-  // wait for PCIe link training (L0)
-  // 0x48 = L0 at PCIe Gen3, 0x78 = L0 at PCIe Gen4
-  uint8_t ltssm;
-  do { ltssm = REG_PCIE_LTSSM_STATE; } while (ltssm != LTSSM_L0_GEN3 && ltssm != LTSSM_L0_GEN4);
+  // wait for PCIe
+  while (REG_PCIE_LTSSM_STATE != 0x78);
   REG_PCIE_PERST_CTRL = 0x00; // deassert PERST#
   pcie_link_up = 1;
-  uart_puts("[PCIe up ");
-  uart_puthex(ltssm);
-  uart_puts("]\n");
+  uart_puts("[PCIe up]\n");
 
   while (1) {
     // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
