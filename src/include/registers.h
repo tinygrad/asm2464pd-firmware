@@ -1128,7 +1128,9 @@
 #define   LTSSM_DETECT_QUIET      0x00
 #define   LTSSM_DETECT_ACTIVE     0x01
 #define   LTSSM_POLLING_MIN       0x10  // >= 0x10 means Polling started
-#define   LTSSM_L0                0x48  // Link trained (varies by FW version)
+#define   LTSSM_L0_GEN3           0x48  // Link trained at PCIe Gen3 (NVMe drives, ASMedia 174C:2463)
+#define   LTSSM_L0_GEN4           0x78  // Link trained at PCIe Gen4 (tinygrad ADD1:0001 GPU)
+#define   LTSSM_L0                0x48  // Link trained (legacy alias; varies by link speed)
 
 #define REG_PCIE_LTSSM_B451     XDATA_REG8(0xB451)  // LTSSM sub-state (stock=0x01)
 #define REG_PCIE_LTSSM_B452     XDATA_REG8(0xB452)  // LTSSM sub-state (stock=0x01)
