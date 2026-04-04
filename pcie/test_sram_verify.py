@@ -4,13 +4,14 @@ copy it into VRAM, then read that VRAM back via 0xF0 PCIe TLP reads and
 verify every byte matches.
 
 Usage:
-  DEBUG=2 AM_RESET=1 GMMU=0 DEV=AMD AMD_IFACE=USB2 python3 pcie/test_sram_verify.py
+  CUSTOM=1 DEBUG=2 AM_RESET=1 GMMU=0 DEV=AMD AMD_IFACE=USB python3 pcie/test_sram_verify.py
 """
 
-import os, sys, struct, ctypes, time
+import os, sys, struct, ctypes, time, types
+os.environ.setdefault("CUSTOM", "1")
 os.environ.setdefault("GMMU", "0")
 os.environ.setdefault("DEV", "AMD")
-os.environ.setdefault("AMD_IFACE", "USB2")
+os.environ.setdefault("AMD_IFACE", "USB")
 
 from tinygrad import Device
 from tinygrad.runtime.ops_amd import AMDDevice, AMDCopyQueue
@@ -47,8 +48,8 @@ def main():
   amd: AMDDevice = dev  # type: ignore
   iface = amd.iface
   pci_dev = iface.pci_dev
-  usb2 = pci_dev.usb2
-  handle = usb2.handle
+  usb = pci_dev.usb
+  handle = usb.usb.handle
   mm = iface.dev_impl.mm
 
   # 2. Fill all SRAM via 0xF2 + single bulk OUT
@@ -67,7 +68,7 @@ def main():
   print(f"  Write done (batch): {elapsed:.3f}s ({total_bytes/elapsed/1024:.1f} KB/s)")
 
   # Spot-check slot 0 via xdata readback
-  check = usb2.xdata_read(0xf000, 16)
+  check = usb.read(0xf000, 16)
   expected_first = make_pattern(0, 16)
   assert check == expected_first, f"spot-check failed: got {check.hex()}, expected {expected_first.hex()}"
   print(f"  Spot-check OK (slot 0 first 16B: {check.hex()})")
@@ -87,9 +88,10 @@ def main():
     mm.map_range(src_va, SLOT_SIZE, [(pcie_addr, SLOT_SIZE)], aspace=AddrSpace.SYS, uncached=True)
 
     vram_off = slot * SLOT_SIZE
+    src_buf, dst_buf = types.SimpleNamespace(va_addr=src_va), types.SimpleNamespace(va_addr=dst_va + vram_off)
     AMDCopyQueue(amd) \
       .wait(amd.timeline_signal, amd.timeline_value - 1) \
-      .copy(dst_va + vram_off, src_va, SLOT_SIZE) \
+      .copy(dst_buf, src_buf, SLOT_SIZE) \
       .signal(amd.timeline_signal, amd.next_timeline()) \
       .submit(amd)
   amd.timeline_signal.wait(amd.timeline_value - 1)

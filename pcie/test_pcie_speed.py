@@ -14,17 +14,17 @@ GPU_BUS = 4
 VRAM_BASE = 0x800000000
 EP_OUT = 0x02
 EP_IN = 0x81
-READ_CHUNK = 16  # 16 dwords = 64 bytes = 1 full bulk packet (no short packet termination)
+MAX_CHUNK_DWORDS = 0x10
 
 MWR64 = 0x60
 MRD64 = 0x20
 
-def dma_setup(handle, addr, mode, count=0):
-  """0xF0: wValue = fmt_type|(be<<8), wIndex = mode|(count<<2). DATA_OUT = addr[8] + value[4]."""
+def dma_setup(handle, addr, mode, ndwords=0):
+  """0xF0: wValue = fmt_type|(be<<8), wIndex = mode. DATA_OUT = addr[8] + ndwords[4 BE]."""
   fmt = {0: 0, 1: MWR64, 2: MRD64}[mode]
   wval = fmt | (0x0F << 8)
-  widx = (mode & 0x03) | ((count & 0x3F) << 2)
-  payload = struct.pack('<II', addr & 0xFFFFFFFF, addr >> 32) + struct.pack('>I', 0)
+  widx = mode & 0x03
+  payload = struct.pack('<II', addr & 0xFFFFFFFF, addr >> 32) + struct.pack('>I', ndwords)
   buf = (ctypes.c_ubyte * 12)(*payload)
   ret = libusb.libusb_control_transfer(handle, 0x40, 0xF0, wval, widx, buf, 12, 5000)
   assert ret >= 0, f"F0 setup failed: {ret}"
@@ -47,14 +47,11 @@ def main():
   total_dwords = SIZE // 4
   transferred = ctypes.c_int()
 
-  # Build write data (big-endian dwords)
-  arr = array.array('I', range(total_dwords))
-  if sys.byteorder == 'little':
-    arr.byteswap()
-  data = arr.tobytes()
+  # Build write data (little-endian dwords)
+  data = array.array('I', range(total_dwords)).tobytes()
 
   print(f"\nWriting {SIZE // 1024} KB to VRAM...")
-  dma_setup(handle, vram_base, 1)
+  dma_setup(handle, vram_base, 1, total_dwords)
   buf = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
   t0 = time.monotonic()
   ret = libusb.libusb_bulk_transfer(handle, EP_OUT, buf, len(data), ctypes.byref(transferred), 30000)
@@ -64,17 +61,18 @@ def main():
   print(f"  {t_write:.3f}s ({SIZE / t_write / 1024:.1f} KB/s)")
 
   print(f"Reading {SIZE // 1024} KB from VRAM...")
-  nbytes = READ_CHUNK * 4
-  dma_setup(handle, vram_base, 2, READ_CHUNK)
-  resp = (ctypes.c_ubyte * nbytes)()
-  errors = 0
+  chunk_bytes = MAX_CHUNK_DWORDS * 4
+  dma_setup(handle, vram_base, 2, total_dwords)
+  resp = (ctypes.c_ubyte * chunk_bytes)()
   result = []
   t0 = time.monotonic()
   while len(result) < total_dwords:
-    ret = libusb.libusb_bulk_transfer(handle, EP_IN, resp, nbytes, ctypes.byref(transferred), 5000)
+    ret = libusb.libusb_bulk_transfer(handle, EP_IN, resp, chunk_bytes, ctypes.byref(transferred), 5000)
     assert ret == 0, f"read failed: {ret}"
-    result.extend(struct.unpack(f'>{transferred.value // 4}I', bytes(resp[:transferred.value])))
+    result.extend(struct.unpack(f'<{transferred.value // 4}I', bytes(resp[:transferred.value])))
   t_read = time.monotonic() - t0
+
+  errors = 0
   for i in range(total_dwords):
     if result[i] != i:
       if errors < 10:

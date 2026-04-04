@@ -10,9 +10,11 @@
 static uint8_t is_usb2;
 static uint8_t pcie_link_up;
 
+#define MAX_CHUNK_DWORDS 0x10
+
 /* Streaming PCIe DMA state — configured via 0xF0 control message */
 static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
-static uint8_t dma_count;      /* dwords per read chunk */
+static uint32_t dma_dwords;    /* total dwords remaining for streaming read */
 static uint8_t dma_addr_0;     /* shadow of ADDR_3 (addr[7:0]) — written BEFORE trigger */
 static uint8_t dma_addr_1;     /* shadow of ADDR_2 (addr[15:8]) */
 static uint8_t dma_addr_2;     /* shadow of ADDR_1 (addr[23:16]) */
@@ -315,12 +317,13 @@ static void handle_usb_control(void) {
         REG_PCIE_STATUS  = PCIE_STATUS_KICK;
         REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
       } else {
-        /* Streaming: set address shadows for auto-increment */
+        /* Streaming: set address shadows for auto-increment, read dword count from value field (BE) */
         dma_addr_0 = DESC_BUF[0];
         dma_addr_1 = DESC_BUF[1];
         dma_addr_2 = DESC_BUF[2];
         dma_addr_3 = DESC_BUF[3];
-        dma_count  = widx_l >> 2;
+        dma_dwords = ((uint32_t)DESC_BUF[8] << 24) | ((uint32_t)DESC_BUF[9] << 16) |
+                     ((uint32_t)DESC_BUF[10] << 8) | DESC_BUF[11];
       }
 
       /* Update dma_mode LAST — this arms the bulk/EP_COMPLETE handlers */
@@ -377,10 +380,10 @@ static inline void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
     REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
     REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
     while (!(REG_PCIE_STATUS & (PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE)));
-    *dst++ = REG_PCIE_DATA_0;
-    *dst++ = REG_PCIE_DATA_1;
-    *dst++ = REG_PCIE_DATA_2;
     *dst++ = REG_PCIE_DATA_3;
+    *dst++ = REG_PCIE_DATA_2;
+    *dst++ = REG_PCIE_DATA_1;
+    *dst++ = REG_PCIE_DATA_0;
     dma_addr_inc();
   }
 }
@@ -388,10 +391,10 @@ static inline void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
 static inline void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
   uint16_t ci;
   for (ci = 0; ci < cnt; ci++) {
-    REG_PCIE_DATA_0 = *src++;
-    REG_PCIE_DATA_1 = *src++;
-    REG_PCIE_DATA_2 = *src++;
     REG_PCIE_DATA_3 = *src++;
+    REG_PCIE_DATA_2 = *src++;
+    REG_PCIE_DATA_1 = *src++;
+    REG_PCIE_DATA_0 = *src++;
     REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
     REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
     dma_addr_inc();
@@ -423,9 +426,11 @@ void handle_usb_bulk_data(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
     }
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
-    if (dma_mode == 2) {
-      pcie_read_chunk((__xdata uint8_t *)0xD800, dma_count);
-      REG_USB_MSC_LENGTH = dma_count * 4;
+    if (dma_mode == 2 && dma_dwords > 0) {
+      uint16_t chunk = (dma_dwords > MAX_CHUNK_DWORDS) ? MAX_CHUNK_DWORDS : (uint16_t)dma_dwords;
+      pcie_read_chunk((__xdata uint8_t *)0xD800, chunk);
+      REG_USB_MSC_LENGTH = chunk * 4;
+      dma_dwords -= chunk;
       REG_USB_BULK_DMA_TRIGGER = 0x01;
       // unfortunately we need this to block and prevent the next one clobbering it
       // while the DMA out the USB is happening
