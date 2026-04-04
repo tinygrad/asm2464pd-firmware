@@ -386,8 +386,9 @@ def phy_soft_reset(dev):
     # E780 = 0x00
     dev.write(E780, 0x00)
     # E716 = 0x00, then 0x03
-    dev.write(E716, 0x00)
-    dev.write(E716, 0x03)
+    # NOTE: writing E716=0x00 kills USB link; skip the toggle, E716 is already 0x03
+    #dev.write(E716, 0x00)
+    #dev.write(E716, 0x03)
     # Timer wait + E712 polling
     dev.write(CC11, 0x04)
     dev.write(CC11, 0x02)
