@@ -67,6 +67,7 @@ CATEGORY_COLORS = {
     "POLL":   C.POLL,
     "W":      C.WRITE,
     "BUF":    C.CSW,
+    "USBMON": C.UAS,
 }
 
 # ─── USB standard request names ──────────────────────────────────────────────
@@ -215,6 +216,7 @@ def parse_trace(filename):
         r'\[\s*(\d+)\]\s+PC=0x([0-9A-Fa-f]+)\s+(Read|Write)\s+0x([0-9A-Fa-f]+)\s+=\s+0x([0-9A-Fa-f]+)(?:\s+(\S.*))?')
     interrupt_re = re.compile(r'\[PROXY\] >>> INTERRUPT mask=0x(\w+) \((\w+)\)')
     reti_re = re.compile(r'\[EMU\] RETI')
+    usbmon_re = re.compile(r'\[\s*(\d+)\]\s+\[USBMON\]\s+(.*)')
 
     events = []
     read_run = ReadRun()
@@ -308,6 +310,14 @@ def parse_trace(filename):
             if reti_re.search(line):
                 read_run.flush(events)
                 events.append((last_cycle, "RETI", "return from interrupt"))
+                continue
+
+            um = usbmon_re.search(line)
+            if um:
+                read_run.flush(events)
+                cyc = int(um.group(1))
+                last_cycle = cyc
+                events.append((cyc, "USBMON", um.group(2)))
                 continue
 
             m = line_re.search(line)

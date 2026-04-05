@@ -21,6 +21,7 @@ import os
 import argparse
 import threading
 import time
+import select
 from pathlib import Path
 
 # Add emulate directory to path
@@ -91,6 +92,10 @@ class Emulator:
         # Each entry is the bitmask (1 << int_num) for the interrupt being serviced
         self._proxy_isr_pending_acks = []
 
+        # USBmon interleaving
+        self._usbmon_fd = None
+        self._usbmon_counter = 0
+
     def load_firmware(self, path: str):
         """Load firmware binary, auto-stripping ASM header if present."""
         with open(path, 'rb') as f:
@@ -119,6 +124,39 @@ class Emulator:
         # Initialize SP to default
         self.memory.write_sfr(0x81, 0x07)
 
+    def start_usbmon(self, bus: int = 2):
+        """Open usbmon text interface for the given USB bus (non-blocking)."""
+        path = f"/sys/kernel/debug/usb/usbmon/{bus}u"
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            self._usbmon_fd = fd
+            print(f"[USBMON] Opened {path}")
+        except PermissionError:
+            print(f"[USBMON] Permission denied: {path} (need root)")
+        except FileNotFoundError:
+            print(f"[USBMON] Not found: {path} (modprobe usbmon?)")
+
+    def _poll_usbmon(self):
+        """Read any available usbmon lines and print them interleaved with trace."""
+        if self._usbmon_fd is None:
+            return
+        self._usbmon_counter += 1
+        if self._usbmon_counter % 64 != 0:
+            return
+        try:
+            while True:
+                r, _, _ = select.select([self._usbmon_fd], [], [], 0)
+                if not r:
+                    break
+                data = os.read(self._usbmon_fd, 8192)
+                if not data:
+                    break
+                for line in data.decode('ascii', errors='replace').splitlines():
+                    if line.strip():
+                        print(f"[{self.hw.cycles:8d}] [USBMON] {line}")
+        except (OSError, BlockingIOError):
+            pass
+
     def step(self) -> bool:
         """Execute one instruction. Returns False if halted."""
         if self.cpu.halted:
@@ -126,6 +164,9 @@ class Emulator:
 
         self.last_pc = self.cpu.pc
         pc = self.cpu.pc
+
+        # Poll usbmon for host-side USB events
+        self._poll_usbmon()
 
         # In proxy mode, check for hardware interrupts from real device
         if self.proxy:
@@ -669,6 +710,8 @@ Examples:
                         help='FTDI device URL for proxy mode (default: ftdi://ftdi:230x/1)')
     parser.add_argument('--proxy-debug', type=int, nargs='?', const=2, default=0,
                         help='Debug level: 1=interrupts, 2=+xdata, 3=+sfr (default: 0=off, bare flag=2)')
+    parser.add_argument('--usbmon', type=int, nargs='?', const=2, default=None, metavar='BUS',
+                        help='Interleave usbmon events from USB bus (default: bus 2)')
     parser.add_argument('--proxy-mask', type=str, action='append', default=[],
                         help='MMIO range to emulate instead of proxy (e.g. 0x9000-0x9100 or 0x9000). Can repeat.')
     parser.add_argument('--vidpid', type=str, default=None,
@@ -795,6 +838,10 @@ Examples:
         emu.hw._cpu_ref = emu.cpu
         print("XDATA write tracing enabled")
 
+    # Start usbmon interleaving if requested
+    if args.usbmon is not None:
+        emu.start_usbmon(args.usbmon)
+
     # Start USB device if requested
     if args.usb_device:
         if not emu.start_usb_device(args.usb_driver, args.usb_device_name):
@@ -819,6 +866,9 @@ Examples:
         # Stop USB device if running
         if emu.usb_device:
             emu.stop_usb_device()
+        # Close usbmon fd if open
+        if emu._usbmon_fd is not None:
+            os.close(emu._usbmon_fd)
         # Close proxy connection if open
         if proxy:
             print(f"\nProxy stats: {proxy.stats()}")

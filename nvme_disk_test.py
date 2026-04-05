@@ -191,6 +191,7 @@ def main():
     dev.write16(test_lba, orig)
     verify = dev.read16(test_lba, 1)
     assert verify == orig, "restore failed!"
+    verify = dev.read16(test_lba, 1)
     print("Original data restored.")
 
 if __name__ == "__main__":

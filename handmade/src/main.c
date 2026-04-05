@@ -13,12 +13,16 @@ static uint8_t pcie_link_up;
 #define MAX_CHUNK_DWORDS 0x10
 
 /* Streaming PCIe DMA state — configured via 0xF0 control message */
-static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
+static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read, 3=sram_dma, 4=nvme_armed */
 static uint32_t dma_dwords;    /* total dwords remaining for streaming read */
 static uint8_t dma_addr_0;     /* shadow of ADDR_3 (addr[7:0]) — written BEFORE trigger */
 static uint8_t dma_addr_1;     /* shadow of ADDR_2 (addr[15:8]) */
 static uint8_t dma_addr_2;     /* shadow of ADDR_1 (addr[23:16]) */
 static uint8_t dma_addr_3;     /* shadow of ADDR_0 (addr[31:24]) */
+
+/* NVMe I/O queue state — tracks doorbell tail and DMA queue index */
+static uint8_t io_sq_tail;     /* NVMe I/O SQ tail (B251 doorbell value, increments each cmd) */
+static uint8_t dma_queue_idx;  /* DMA completion queue index (C8D5 value, increments by 2 each cmd) */
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
@@ -234,6 +238,81 @@ static void handle_usb_control(void) {
       REG_NVME_CTRL_STATUS = 0x03;
       REG_NVME_CMD_PARAM   = slot_sel;  /* 0xC429: slot select + DMA re-arm */
       dma_mode = 3;  /* suppress UART in bulk handler */
+      send_zlp_ack();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF5) {
+      /* 0xF5: Full NVMe READ — replays stock firmware BOT READ_16 trace exactly.
+       *   wValue low  = LBA byte 0 (bits 7:0)
+       *   wValue high = LBA byte 1 (bits 15:8)
+       *   wIndex low  = LBA byte 2 (bits 23:16)
+       *   wIndex high = LBA byte 3 (bits 31:24)
+       * Always reads 1 sector (512 bytes). After this, host does bulk_in().
+       *
+       * The firmware:
+       *   1. Sets up C4xx NVMe registers (stock BOT READ_16 sequence)
+       *   2. Writes NVMe READ SQE to IOSQ at A000+slot*0x40
+       *   3. Arms slot (C415/C412/C429)
+       *   4. Rings SQ doorbell (B296/B251/B254)
+       *   5. ISR handles completion (C802=0x04): DMA queue walk, CQ doorbell,
+       *      C512 ack, D808-D80B residue clear, 90A1 bulk IN trigger
+       */
+      uint8_t lba0 = wValL;   /* LBA bits 7:0 */
+      uint8_t lba1 = wValH;   /* LBA bits 15:8 */
+      uint8_t lba2 = REG_USB_SETUP_WIDX_L;  /* LBA bits 23:16 */
+      uint8_t lba3 = REG_USB_SETUP_WIDX_H;  /* LBA bits 31:24 */
+      uint8_t slot = io_sq_tail;  /* current IOSQ slot */
+      uint16_t sqe_base = 0xA000 + ((uint16_t)slot * 0x40);
+
+      /* Phase 1: NVMe controller config (C4xx registers) */
+      REG_NVME_QUEUE_CFG       = 0x10;  /* C428 */
+      REG_NVME_SECTOR_COUNT_HI = 0x00;  /* C426 */
+      REG_NVME_SECTOR_COUNT_LO = 0x01;  /* C427: 1 sector */
+      REG_NVME_STATUS           = 0x00;  /* C401: clear */
+      REG_NVME_CTRL_STATUS      = 0x02;  /* C412: start with DMA_START for subsequent cmds */
+      REG_NVME_SECTOR_COUNT_HI  = 0x00;  /* C426: again */
+      REG_NVME_SECTOR_COUNT_LO  = 0x01;  /* C427: again */
+      REG_NVME_CONFIG            = 0x00;  /* C413: BOT mode, no stream */
+      REG_NVME_DMA_XFER_HI      = 0x00;  /* C420 */
+      REG_NVME_STREAM_ID         = 0x00;  /* C421: no stream */
+      REG_NVME_SLOT_START        = NVME_SLOT_ENABLE;  /* C414: 0x80 */
+      REG_NVME_SLOT_START        = NVME_SLOT_ENABLE;  /* C414: 0x80 again (stock does this) */
+      REG_NVME_CTRL_STATUS       = 0x00;  /* C412: clear */
+
+      /* Phase 2: Write NVMe READ SQE to IOSQ at A000+slot*0x40 */
+      XDATA_REG8(sqe_base + 0x19) = 0x00;  /* PRP pointer area */
+      XDATA_REG8(sqe_base + 0x1A) = 0x20;  /* PRP: points to SRAM 0x00200000 */
+      XDATA_REG8(sqe_base + 0x20) = 0x00;  /* PRP1 low bytes */
+      XDATA_REG8(sqe_base + 0x21) = 0x00;
+      XDATA_REG8(sqe_base + 0x22) = 0x00;
+      XDATA_REG8(sqe_base + 0x23) = 0x00;
+      XDATA_REG8(sqe_base + 0x00) = 0x02;  /* NVMe READ opcode */
+      XDATA_REG8(sqe_base + 0x02) = 0x00;  /* CID low */
+      XDATA_REG8(sqe_base + 0x03) = 0x00;  /* CID high */
+      XDATA_REG8(sqe_base + 0x04) = 0x01;  /* NSID = 1 */
+      XDATA_REG8(sqe_base + 0x28) = lba0;  /* CDW10: LBA byte 0 */
+      XDATA_REG8(sqe_base + 0x29) = lba1;  /* CDW10: LBA byte 1 */
+      XDATA_REG8(sqe_base + 0x2A) = lba2;  /* CDW10: LBA byte 2 */
+      XDATA_REG8(sqe_base + 0x2B) = lba3;  /* CDW10: LBA byte 3 */
+      XDATA_REG8(sqe_base + 0x2C) = 0x00;  /* CDW11: LBA high (zero) */
+      XDATA_REG8(sqe_base + 0x2D) = 0x00;
+      XDATA_REG8(sqe_base + 0x2E) = 0x00;
+      XDATA_REG8(sqe_base + 0x2F) = 0x00;
+      XDATA_REG8(sqe_base + 0x30) = 0x00;  /* CDW12: NLB=0 (1 sector) */
+      XDATA_REG8(sqe_base + 0x31) = 0x00;
+
+      /* Phase 3: Arm slot end and kick */
+      REG_NVME_SLOT_END     = 0x04;  /* C415: first write */
+      REG_NVME_SLOT_END     = 0x01;  /* C415: actual end */
+      REG_NVME_CTRL_STATUS  = 0x02;  /* C412: ARMED */
+      REG_NVME_CMD_PARAM    = 0x00;  /* C429: slot select */
+
+      /* Phase 4: Ring NVMe I/O SQ doorbell via hardware bridge */
+      io_sq_tail++;
+      XDATA_REG8(0xB296) = 0x04;
+      XDATA_REG8(0xB251) = io_sq_tail;  /* doorbell value = new SQ tail */
+      XDATA_REG8(0xB254) = 0x03;        /* I/O SQ doorbell trigger */
+      XDATA_REG8(0xB296) = 0x04;
+
+      dma_mode = 4;  /* enable NVMe completion ISR */
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
@@ -501,7 +580,64 @@ void int0_isr(void) __interrupt(0) {
     }
   }
   if (int0_type & INT_USB_CTRL_PENDING) {
-    uart_puts("[MSC]\n");
+    if (dma_mode == 4) {
+      /* NVMe completion — replays stock firmware ISR trace exactly.
+       *
+       * Stock sequence after C802=0x04:
+       *   1. CEF3=0x08 (link active)
+       *   2. C8D6=0x01, C8D5=idx (read DMA queue entry, poll B80E)
+       *   3. C8D6=0x01, C8D5=idx+1 (advance to next)
+       *   4. C8D6=0x00 (done)
+       *   5. B296/B251/B254 CQ doorbell (B251=io_sq_tail, B254=0x13)
+       *   6. C520 poll (link status) — reads show 0x01
+       *   7. C512=0xFF (ack queue index)
+       *   8. D808-D80B=0x00 (CSW residue clear)
+       *   9. 90A1=0x01 (bulk IN DMA trigger)
+       */
+      uint8_t qidx = dma_queue_idx;
+
+      /* Step 1: Link active */
+      REG_CPU_LINK_CEF3 = 0x08;  /* CEF3 */
+
+      /* Step 2: Read first DMA queue entry */
+      REG_DMA_STATUS    = 0x01;  /* C8D6: arm read */
+      REG_DMA_QUEUE_IDX = qidx;  /* C8D5: current index */
+      /* Poll B80E bit 0 for ready */
+      while (!(REG_PCIE_QUEUE_FLAGS_LO & 0x01));
+
+      /* Step 3: Advance to next entry */
+      REG_DMA_STATUS    = 0x01;  /* C8D6: arm */
+      REG_DMA_QUEUE_IDX = qidx + 1;  /* C8D5: next index */
+      /* Step 4: Done */
+      REG_DMA_STATUS    = 0x00;  /* C8D6: clear */
+
+      /* Step 5: Ring CQ doorbell via hardware bridge */
+      XDATA_REG8(0xB296) = 0x04;
+      XDATA_REG8(0xB251) = io_sq_tail;  /* same value as SQ doorbell */
+      XDATA_REG8(0xB254) = 0x13;        /* I/O CQ doorbell trigger */
+      XDATA_REG8(0xB296) = 0x04;
+
+      /* Advance DMA queue index by 2 for next operation */
+      dma_queue_idx = qidx + 2;
+
+      /* Step 6-7: Ack NVMe queue index */
+      REG_NVME_QUEUE_INDEX = 0xFF;  /* C512 */
+
+      /* Step 8: Clear CSW residue */
+      XDATA_REG8(0xD808) = 0x00;
+      XDATA_REG8(0xD809) = 0x00;
+      XDATA_REG8(0xD80A) = 0x00;
+      XDATA_REG8(0xD80B) = 0x00;
+
+      /* Step 9: Trigger bulk IN DMA — hardware pushes SRAM data to USB */
+      REG_USB_BULK_DMA_TRIGGER = 0x01;  /* 90A1 */
+
+      dma_mode = 0;
+    } else {
+      // Not in DMA mode — just ack the interrupt and move on.
+      // Without this, spurious PCIe/NVMe interrupts during init
+      // cause the ISR to loop forever, starving USB.
+    }
     REG_USB_MSC_CTRL = 1;
     REG_USB_MSC_STATUS = 0;
   }
@@ -513,7 +649,7 @@ void int0_isr(void) __interrupt(0) {
 }
 
 void int1_isr(void) __interrupt(1) {
-  uart_puts("[int1]\n");
+  /* Timer 0 overflow — just clear and return silently. */
 }
 
 void main(void) {
@@ -522,11 +658,15 @@ void main(void) {
 
   uart_puts("\n[BOOT]\n");
 
+  // Stock firmware trace: writes that kill USB if done after enumeration.
+  // Includes E716 link reset, C2xx/C3xx SerDes, C800 int, 92E1 power.
+  #include "hw_pre_usb.h"
+
   // clear this to get USB3 interrupts
   REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
 
   // without this, it doesn't get an interrupt
-  REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
+  REG_INT_STATUS_C800 = INT_STATUS_GLOBAL | INT_ENABLE_PCIE;
 
   // without this, no USB interrupts
   REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
@@ -544,6 +684,11 @@ void main(void) {
   REG_PCIE_TLP_CTRL   = 0x01;
   REG_PCIE_TLP_LENGTH = 0x20;
 
+  // Stock firmware boot: these writes happen before USB enumeration.
+  // They kill USB if done after enumeration, so they MUST be here.
+  XDATA_REG8(0xE716) = 0x00;    // cycle 26779: USB link reset
+  XDATA_REG8(0xE716) = 0x03;    // cycle 26785: restore
+
   // PCIe bringup
   REG_TUNNEL_CTRL_B403 = 0x01;           // fix PCIe link stability
   REG_PCIE_PERST_CTRL  = 0x01;           // assert PERST#
@@ -559,13 +704,21 @@ void main(void) {
   // enable interrupts and chill
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
-  // wait for PCIe
-  while (REG_PCIE_LTSSM_STATE != 0x78);
-  REG_PCIE_PERST_CTRL = 0x00; // deassert PERST#
-  pcie_link_up = 1;
-  uart_puts("[PCIe up]\n");
-
+  // wait for PCIe (non-blocking — poll in main loop)
+  uart_puts("[PCIe wait]\n");
   while (1) {
-    // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
+    if (!pcie_link_up && REG_PCIE_LTSSM_STATE == 0x78) {
+      pcie_link_up = 1;
+      uart_puts("[PCIe up]\n");
+
+      // Initialize hardware NVMe/DMA engine from stock firmware trace
+      #include "hw_nvme_init.h"
+      uart_puts("[hw_init]\n");
+    }
+    // yield to ISR
+    __asm nop __endasm;
+    __asm nop __endasm;
+    __asm nop __endasm;
+    __asm nop __endasm;
   }
 }
