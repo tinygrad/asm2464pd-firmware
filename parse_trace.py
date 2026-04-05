@@ -257,54 +257,48 @@ def parse_trace(filename):
     dma_addr_lo = 0
     dma_addr_hi = 0
 
-    # Buffer accumulators for D800-DFFF and 8000-8FFF regions
-    buf_writes = []       # list of (addr, val) — D800 region
-    buf_start_cycle = 0
-    buf8_writes = []      # list of (addr, val) — 8000 region
-    buf8_start_cycle = 0
+    # Generic buffer accumulator for data-buffer regions.
+    # Regions: 0x8000-0x8FFF, 0x9E00-0x9FFF, 0xD800-0xDFFF
+    BUF_REGIONS = {
+        0x8000: (0x8000, 0x8FFF),
+        0x9E00: (0x9E00, 0x9FFF),
+        0xD800: (0xD800, 0xDFFF),
+    }
+    buf_acc = {}  # region_base -> {'writes': [(addr,val),...], 'cycle': int}
 
-    def flush_buf():
-        nonlocal buf_writes
-        if not buf_writes:
+    def _buf_region(addr):
+        """Return the region base for addr, or None."""
+        for base, (lo, hi) in BUF_REGIONS.items():
+            if lo <= addr <= hi:
+                return base
+        return None
+
+    def flush_buf_region(region_base):
+        """Flush accumulated writes for one buffer region."""
+        rec = buf_acc.get(region_base)
+        if not rec or not rec['writes']:
             return
-        data = buf_writes
-        buf_writes = []
+        data = rec['writes']
+        start_cycle = rec['cycle']
+        rec['writes'] = []
         count = len(data)
         base_addr = data[0][0]
-        # Check if all zeros
-        all_zero = all(v == 0 for _, v in data)
-        if all_zero:
-            events.append((buf_start_cycle, "BUF",
-                           f"D800 buf: {count}x 0x00", 0xD800))
-        else:
-            # Print hex dump, compact
-            hex_bytes = " ".join(f"{v:02X}" for _, v in data)
-            # Try to decode as ASCII where printable
-            ascii_str = "".join(chr(v) if 0x20 <= v < 0x7F else "." for _, v in data)
-            events.append((buf_start_cycle, "BUF",
-                           f"D800+0x{base_addr - 0xD800:03X} [{count}]: {hex_bytes}  |{ascii_str}|",
-                           0xD800))
-
-    def flush_buf8():
-        nonlocal buf8_writes
-        if not buf8_writes:
-            return
-        data = buf8_writes
-        buf8_writes = []
-        count = len(data)
-        base_addr = data[0][0]
-        region_base = base_addr & 0xF000  # 0x8000
         offset = base_addr - region_base
         all_zero = all(v == 0 for _, v in data)
+        tag = f"{region_base:04X}"
         if all_zero:
-            events.append((buf8_start_cycle, "BUF",
-                           f"8000 buf: {count}x 0x00", 0x8000))
+            events.append((start_cycle, "BUF",
+                           f"{tag} buf: {count}x 0x00", region_base))
         else:
             hex_bytes = " ".join(f"{v:02X}" for _, v in data)
             ascii_str = "".join(chr(v) if 0x20 <= v < 0x7F else "." for _, v in data)
-            events.append((buf8_start_cycle, "BUF",
-                           f"8000+0x{offset:03X} [{count}]: {hex_bytes}  |{ascii_str}|",
-                           0x8000))
+            events.append((start_cycle, "BUF",
+                           f"{tag}+0x{offset:03X} [{count}]: {hex_bytes}  |{ascii_str}|",
+                           region_base))
+
+    def flush_all_bufs():
+        for rb in BUF_REGIONS:
+            flush_buf_region(rb)
 
     uas_scsi_tag = 0  # tag associated with current SCSI command
 
@@ -360,8 +354,7 @@ def parse_trace(filename):
 
             # ── Polling: accumulate reads, flush on write ─────────────────
             if is_read:
-                flush_buf()
-                flush_buf8()
+                flush_all_bufs()
                 read_run.add(cycle, addr, val)
             else:
                 read_run.flush(events)
@@ -369,25 +362,23 @@ def parse_trace(filename):
             # ═══════════════════════════════════════════════════════════════
             # WRITES
             # ═══════════════════════════════════════════════════════════════
-            if is_write and 0xD800 <= addr <= 0xDFFF:
-                # Accumulate buffer writes; flush if non-consecutive address
-                flush_buf8()
-                if buf_writes and addr != buf_writes[-1][0] + 1:
-                    flush_buf()
-                if not buf_writes:
-                    buf_start_cycle = cycle
-                buf_writes.append((addr, val))
-            elif is_write and 0x8000 <= addr <= 0x8FFF:
-                # Accumulate 8000 region buffer writes
-                flush_buf()
-                if buf8_writes and addr != buf8_writes[-1][0] + 1:
-                    flush_buf8()
-                if not buf8_writes:
-                    buf8_start_cycle = cycle
-                buf8_writes.append((addr, val))
+            region = _buf_region(addr) if is_write else None
+            if is_write and region is not None:
+                # Flush all OTHER buffer regions
+                for rb in BUF_REGIONS:
+                    if rb != region:
+                        flush_buf_region(rb)
+                rec = buf_acc.get(region)
+                if rec is None:
+                    rec = {'writes': [], 'cycle': 0}
+                    buf_acc[region] = rec
+                if rec['writes'] and addr != rec['writes'][-1][0] + 1:
+                    flush_buf_region(region)
+                if not rec['writes']:
+                    rec['cycle'] = cycle
+                rec['writes'].append((addr, val))
             elif is_write:
-                flush_buf()
-                flush_buf8()
+                flush_all_bufs()
                 events.append((cycle, "W", f"{addr:04X}=0x{val:02X}  {reg_name}", addr))
 
             # ─── Decoded overlays ─────────────────────────────────────────
@@ -572,8 +563,7 @@ def parse_trace(filename):
                     scsi_cdb[offset] = val
 
     read_run.flush(events)
-    flush_buf()
-    flush_buf8()
+    flush_all_bufs()
     flush_scsi()
 
     # ─── Sort by cycle ────────────────────────────────────────────────────────

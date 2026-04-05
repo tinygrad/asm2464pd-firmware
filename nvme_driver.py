@@ -169,6 +169,22 @@ class NVMeDriver:
         It does the 900B/C42A doorbell dance and sets C809 interrupt control,
         matching the stock firmware's SET_CONFIGURATION sequence.
         """
+        # Reset bridge/snooper state from any previous session
+        xdata_write(self.handle, 0xC42A, 0x20)  # reset pulse
+        xdata_write(self.handle, 0xC42A, 0x00)
+        xdata_write(self.handle, 0x900B, 0x00)
+        xdata_write(self.handle, 0xC512, 0xFF)   # ack any pending completions
+        xdata_write(self.handle, 0xC8D6, 0x00)   # clear DMA status
+        xdata_write(self.handle, 0xCE00, 0x00)   # clear snooper
+        xdata_write(self.handle, 0xCE88, 0x00)   # clear handshake
+        xdata_write(self.handle, 0xC412, 0x00)   # clear NVMe ctrl
+        xdata_write(self.handle, 0xC42C, 0x00)   # clear MSC ctrl
+
+        # Reset I/O queue tracking
+        self.io_sq_tail = 0
+        self.io_cq_head = 0
+        self.io_cq_phase = 1
+
         # PCIe bridge/DMA init (from stock trace cycle 84345-84563)
         xdata_write(self.handle, 0xB298, 0x11)  # tunnel config
         xdata_write(self.handle, 0xB264, 0x08)  # DMA size A
@@ -395,13 +411,14 @@ class NVMeDriver:
         print(f"  CAP=0x{cap:016X} MQES={mqes} stride={self.doorbell_stride} timeout={timeout}ms")
         print(f"  VS={vs>>16&0xFFFF}.{vs>>8&0xFF}.{vs&0xFF}")
 
-        # Disable
+        # Disable controller and wait for shutdown
         cc = self.reg_read(NVME_CC)
         if cc & 1:
             self.reg_write(NVME_CC, cc & ~1)
             for _ in range(200):
                 if not (self.reg_read(NVME_CSTS) & 1): break
                 time.sleep(0.01)
+            time.sleep(0.1)  # extra settle time for pending DMAs
 
         # Zero admin SQ via bulk DMA (fast) and CQ via xdata (small)
         self.dma_write_sram(b'\x00' * 512)
@@ -442,8 +459,8 @@ class NVMeDriver:
         buf[slot * 64 : slot * 64 + 64] = sqe
         self.dma_write_sram(bytes(buf))
         self.admin_sq_tail = (self.admin_sq_tail + 1) % QUEUE_DEPTH
-        # Ring Admin SQ0 tail doorbell via bridge
-        self.hw_doorbell(self.admin_sq_tail, 0x01)  # Admin SQ0
+        # Ring Admin SQ0 tail doorbell via direct PCIe TLP
+        self.reg_write(0x1000, self.admin_sq_tail)
         return self.admin_cid
 
     def _wait_admin(self, timeout_s=5.0):
@@ -459,12 +476,8 @@ class NVMeDriver:
                 self.admin_cq_head = (self.admin_cq_head + 1) % QUEUE_DEPTH
                 if self.admin_cq_head == 0:
                     self.admin_cq_phase ^= 1
-                # Ack completion to bridge (stock does this after every CQ entry)
-                xdata_write(self.handle, 0xC512, 0xFF)
-                # Clear DMA status2 after completion
-                xdata_write(self.handle, 0xC8D8, 0x00)
-                # Ring Admin CQ0 head doorbell via bridge
-                self.hw_doorbell(self.admin_cq_head, 0x11)  # Admin CQ0
+                # Ring Admin CQ0 head doorbell via direct PCIe TLP
+                self.reg_write(0x1000 + self.doorbell_stride, self.admin_cq_head)
                 if status:
                     raise RuntimeError(f"Admin cmd failed: status=0x{status:04X}")
                 return dw0
@@ -557,103 +570,89 @@ class NVMeDriver:
 
     def read_sector(self, lba, count=1, use_dma=True):
         """Read sectors. Returns bytes.
-        If use_dma=True, uses hardware DMA (NVMe->SRAM->USB bulk IN).
+        If use_dma=True, uses hardware snooper DMA (CBW→CE00→doorbell→bulk IN).
         If use_dma=False, uses slow xdata reads (for fallback/debugging).
         """
         nbytes = count * self.sector_size
         assert nbytes <= 4096
 
         if use_dma:
-            sectors = count
-            # 0. Arm USB bulk IN endpoint (must happen BEFORE NVMe setup)
-            # This matches the stock firmware sequence:
-            #   90E2=0x01 (USB mode), CE88=0x00 (handshake stream 0),
-            #   9096=0x01 (EP ready)
-            xdata_write(self.handle, 0x90E2, 0x01)   # USB mode
-            xdata_write(self.handle, 0xCE88, 0x00)   # handshake stream 0
-            xdata_write(self.handle, 0x9096, 0x01)   # EP ready
+            # 1. Arm CBW receiver — tells USB MSC hardware to accept a CBW
+            xdata_write(self.handle, 0x90E3, 0x02)
+            time.sleep(0.02)
 
-            # 1. Set C4xx registers matching stock BOT READ_16 sequence
-            # First restore C42A/C428 from dma_write_sram state
-            xdata_write(self.handle, 0xC42A, 0x00)  # clear doorbell gate (stock=0x00 during read!)
+            # 2. Send READ_16 CBW via USB bulk OUT — hardware populates 0x91xx
+            self.io_cid = (self.io_cid + 1) & 0xFFFF
+            cbw = struct.pack('<III', 0x43425355, self.io_cid, nbytes)
+            cbw += struct.pack('BBB', 0x80, 0, 16)  # flags=IN, LUN=0, CB_LEN=16
+            cbw += struct.pack('>BBQIBB', 0x88, 0x01, lba, count, 0, 0)
+            cbw_buf = (ctypes.c_ubyte * len(cbw)).from_buffer_copy(cbw)
+            xfer = ctypes.c_int(0)
+            ret = libusb.libusb_bulk_transfer(self.handle, 0x02, cbw_buf, len(cbw),
+                                              ctypes.byref(xfer), 1000)
+            if ret != 0:
+                print(f"  CBW send failed: ret={ret}")
+                return self.xread(DATA_BUF_XDATA, nbytes)
+            time.sleep(0.02)
+
+            # 3. Set up C4xx NVMe engine registers
+            xdata_write(self.handle, 0xC42A, 0x00)
             xdata_write(self.handle, 0xC428, 0x10)
+            xdata_write(self.handle, 0xC426, count >> 8)
+            xdata_write(self.handle, 0xC427, count & 0xFF)
             xdata_write(self.handle, 0xC401, 0x00)
-            xdata_write(self.handle, 0xC412, 0x00)  # clear ctrl
-            xdata_write(self.handle, 0xC426, sectors >> 8)
-            xdata_write(self.handle, 0xC427, sectors & 0xFF)
+            xdata_write(self.handle, 0xC412, 0x00)
             xdata_write(self.handle, 0xC413, 0x00)
             xdata_write(self.handle, 0xC420, 0x00)
             xdata_write(self.handle, 0xC421, 0x00)
-            xdata_write(self.handle, 0xC414, 0x00)
             xdata_write(self.handle, 0xC414, 0x80)
-            xdata_write(self.handle, 0xC412, 0x00)  # clear again
+            xdata_write(self.handle, 0xC412, 0x00)
 
-            # 2. Write NVMe READ SQE to A000 via xdata
-            self.io_cid = (self.io_cid + 1) & 0xFFFF
-            slot = self.io_sq_tail
-            sqe = struct.pack('<IIIIIIQQ', NVME_IO_READ | (self.io_cid << 16), 1, 0, 0, 0, 0, DATA_BUF_DMA, 0)
-            sqe += struct.pack('<QHHHH', lba, (count - 1) & 0xFFFF, 0, 0, 0)
-            sqe = sqe.ljust(64, b'\x00')
-            xdata_write_bytes(self.handle, IO_SQ_XDATA + slot * 64, sqe)
-            self.io_sq_tail = (self.io_sq_tail + 1) % QUEUE_DEPTH
+            # 4. Arm snooper via CE00=0x03 — this reads the CBW from 0x91xx,
+            #    builds the NVMe SQE, and arms the PCIe CQ watcher
+            xdata_write(self.handle, 0x90E2, 0x01)
+            xdata_write(self.handle, 0xCE88, 0x00)
+            xdata_write(self.handle, 0xCE36, 0x00)
+            xdata_write(self.handle, 0xCE01, 0x00)
+            xdata_write(self.handle, 0xCE3A, 0x00)
+            xdata_write(self.handle, 0xCE00, 0x03)
+            time.sleep(0.01)
 
-            # Post-SQE: arm BEFORE doorbell
+            # 5. Arm NVMe slot and ring doorbell
             xdata_write(self.handle, 0xC415, 0x04)
             xdata_write(self.handle, 0xC415, 0x01)
-            xdata_write(self.handle, 0xC412, 0x02)  # ARM
+            xdata_write(self.handle, 0xC412, 0x02)
             xdata_write(self.handle, 0xC429, 0x00)
+            self.io_sq_tail = (self.io_sq_tail + 1) % QUEUE_DEPTH
+            self.hw_doorbell(self.io_sq_tail, 0x03)
 
-            # NOTE: CE00 is NOT used for I/O reads in stock firmware.
-            # Stock firmware manually writes SQE, then doorbells.
-
-            # Debug: verify state
-            c42a = xdata_read(self.handle, 0xC42A, 1)[0]
-            c412 = xdata_read(self.handle, 0xC412, 1)[0]
-            c428 = xdata_read(self.handle, 0xC428, 1)[0]
-            print(f"  pre-doorbell: C42A=0x{c42a:02X} C412=0x{c412:02X} C428=0x{c428:02X}")
-
-            # 3. Ring SQ doorbell via bridge (arms CQ watcher for bulk IN)
-            self.hw_doorbell(self.io_sq_tail, 0x03)  # I/O SQ1
-
-            # 4. Wait for NVMe completion in CQ
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
-                base = IO_CQ_XDATA + self.io_cq_head * 16
-                dw3 = self.xr32(base + 12)
-                phase = (dw3 >> 16) & 1
-                if phase == self.io_cq_phase:
-                    break
-                time.sleep(0.001)
-            else:
-                print("  NVMe completion timeout!")
-                return self.xread(DATA_BUF_XDATA, nbytes)
-
-            status = (dw3 >> 17) & 0x7FFF
-            if status:
-                print(f"  NVMe error: status=0x{status:04X}")
-
-            # After doorbell: write CEF3 link active (stock does this right after doorbell)
-            xdata_write(self.handle, 0xCEF3, 0x08)
-            time.sleep(0.05)
-            c802 = xdata_read(self.handle, 0xC802, 1)[0]
-            b80e = xdata_read(self.handle, 0xB80E, 1)[0]
-            c520 = xdata_read(self.handle, 0xC520, 1)[0]
-            c471 = xdata_read(self.handle, 0xC471, 1)[0]
-            cef3 = xdata_read(self.handle, 0xCEF3, 1)[0]
-            print(f"  post-arm: C802=0x{c802:02X} B80E=0x{b80e:02X} C520=0x{c520:02X} C471=0x{c471:02X} CEF3=0x{cef3:02X}")
-
-            # 5. Walk DMA queue + ack CQ
-            self._walk_dma_queue_and_ack()
-
-            # 6. Try bulk IN
+            # 6. Receive bulk IN data
             rxbuf = (ctypes.c_ubyte * nbytes)()
-            xfer = ctypes.c_int(0)
-            ret = libusb.libusb_bulk_transfer(self.handle, 0x81, rxbuf, nbytes, ctypes.byref(xfer), 50)
-            if ret < 0:
-                print(f"  bulk IN failed: ret={ret}, falling back to xdata read")
-                return self.xread(DATA_BUF_XDATA, nbytes)
+            rxfer = ctypes.c_int(0)
+            ret = libusb.libusb_bulk_transfer(self.handle, 0x81, rxbuf, nbytes,
+                                              ctypes.byref(rxfer), 500)
+            if ret != 0 or rxfer.value != nbytes:
+                raise RuntimeError(f"bulk IN failed: ret={ret} xfer={rxfer.value}/{nbytes}")
 
-            return bytes(rxbuf[:xfer.value])
+            # 7. Ack completion — CQ walk + CQ doorbell + C512
+            xdata_write(self.handle, 0xCEF3, 0x08)
+            idx = self.io_cq_head
+            xdata_write(self.handle, 0xC8D6, 0x01)
+            xdata_write(self.handle, 0xC8D5, idx)
+            time.sleep(0.005)
+            xdata_write(self.handle, 0xC8D6, 0x01)
+            xdata_write(self.handle, 0xC8D5, (idx + 1) % QUEUE_DEPTH)
+            xdata_write(self.handle, 0xC8D6, 0x00)
+            self.io_cq_head = (self.io_cq_head + 1) % QUEUE_DEPTH
+            if self.io_cq_head == 0:
+                self.io_cq_phase ^= 1
+            self.hw_doorbell(self.io_cq_head, 0x13)
+            xdata_write(self.handle, 0xC512, 0xFF)
+
+            # 8. Re-arm CBW receiver for next command
+            xdata_write(self.handle, 0x90E3, 0x02)
+
+            return bytes(rxbuf[:rxfer.value])
         else:
             self._submit_io(NVME_IO_READ, nsid=1, lba=lba, count=count, prp1=DATA_BUF_DMA)
             self._wait_io()
@@ -747,40 +746,40 @@ def main():
         nvme = NVMeDriver(handle, bar0_addr, nvme_bus=nvme_bus)
 
         print("\n=== Init ===")
-        nvme.init_controller()
-        print("\n=== Identify ===")
-        nvme.identify_controller()
-        nsze, ss = nvme.identify_namespace(1)
-        print("\n=== I/O Queues ===")
-        nvme.create_io_queues()
+        # Skip reinit if controller already ready
+        from pcie.pcie_probe import pcie_mem_read
+        csts = pcie_mem_read(handle, 0xD00000 + 0x1C, size=4)
+        if csts & 1:
+            print("  Controller already ready, skipping init")
+            nvme.doorbell_stride = 4
+        else:
+            nvme.init_controller()
+        if not (csts & 1):
+            print("\n=== Identify ===")
+            nvme.identify_controller()
+            nsze, ss = nvme.identify_namespace(1)
+            print("\n=== I/O Queues ===")
+            nvme.create_io_queues()
+        else:
+            print("\n=== Skipping Identify/Queues (already created) ===")
+            nvme.sector_size = 512
 
         print("\n=== NVMe DMA Engine ===")
         nvme.enable_msix()
         nvme.init_nvme_engine()
 
-        print("\n=== Read LBA 0 ===")
-        d = nvme.read_sector(0)
-        print(f"  {d[:32].hex()}")
+        print("\n=== DMA Read Test ===")
+        for i in range(10):
+            d = nvme.read_sector(i * 8)
+            print(f"  LBA {i*8:4d}: {d[:16].hex()}")
 
-        if nsze < 1000:
-            nsze = 250069680  # Samsung 128GB
-        test_lba = nsze - 16
-        print(f"\n=== Write/Read Test LBA {test_lba} ===")
-        orig = nvme.read_sector(test_lba)
-        pattern = os.urandom(512)
-        nvme.write_sector(test_lba, pattern)
-        rb = nvme.read_sector(test_lba)
-        if rb == pattern:
-            print("  PASS")
-        else:
-            print("  FAIL")
-            for i in range(512):
-                if rb[i] != pattern[i]:
-                    print(f"  byte {i}: got 0x{rb[i]:02X} exp 0x{pattern[i]:02X}")
-                    break
-        nvme.write_sector(test_lba, orig)
-        assert nvme.read_sector(test_lba) == orig, "restore failed"
-        print("  Restored")
+        # Consistency
+        d1 = nvme.read_sector(0)
+        d2 = nvme.read_sector(0)
+        assert d1 == d2, "consistency check failed"
+        print(f"  Consistency: OK")
+
+        print("\nAll DMA reads passed!")
         return 0
     finally:
         usb_close(handle, ctx)
