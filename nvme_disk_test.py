@@ -193,7 +193,6 @@ def main():
     assert verify == orig, "restore failed!"
     print("Original data restored.")
 
-
     # real test
     count = 6
     cdb = struct.pack('>BBQIBB', 0x88, 0x01, test_lba, count, 0, 0)
@@ -204,6 +203,8 @@ def main():
     cbw += struct.pack('BBB', flags, 0, len(cdb))
     cbw += cdb + b'\x00' * (16 - len(cdb))
     dev.usb._bulk_out(2, cbw)
+
+    time.sleep(0.5)
 
     buf = (ctypes.c_ubyte * xfer_len)()
     xfer = ctypes.c_int(0)
