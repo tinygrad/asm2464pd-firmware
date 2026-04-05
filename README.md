@@ -264,6 +264,9 @@ make flash-proxy    # Flash the UART proxy firmware instead
 
 `flash.py` uses tinygrad's USB3 library to send SCSI vendor commands (E1, E3, E8)
 over bulk transfers to the device's bootloader.
+## Contributing
+
+Contributions are welcome! Feel free to open issues or pull requests.
 
 ## License
 
