@@ -180,6 +180,13 @@ class NVMeDriver:
         # Enable interrupt control (from stock trace)
         xdata_write(self.handle, 0xC809, 0x0A)
 
+        # Set C473 NVMe queue feature enable (stock=0x66: bits 1,2,5,6)
+        # This enables the hardware CQ watcher that triggers bulk IN
+        xdata_write(self.handle, 0xC473, 0x66)
+
+        # Clear C428 bit 3 (stock=0x10, handmade boots with 0x18)
+        xdata_write(self.handle, 0xC428, 0x10)
+
         # 900B/C42A doorbell dance (from stock SET_CONFIGURATION)
         xdata_write(self.handle, 0x900B, 0x02)
         xdata_write(self.handle, 0x900B, 0x06)
@@ -252,7 +259,7 @@ class NVMeDriver:
         # 3. Bulk IN — hardware pushes data on NVMe completion
         buf = (ctypes.c_ubyte * nbytes)()
         xfer = ctypes.c_int(0)
-        ret = libusb.libusb_bulk_transfer(self.handle, 0x81, buf, nbytes, ctypes.byref(xfer), 5000)
+        ret = libusb.libusb_bulk_transfer(self.handle, 0x81, buf, nbytes, ctypes.byref(xfer), 50)
         assert ret >= 0, f"bulk IN failed: ret={ret}"
 
         # 4. Wait for NVMe I/O completion (ISR already acked via C512)
@@ -321,8 +328,8 @@ class NVMeDriver:
         buf[slot * 64 : slot * 64 + 64] = sqe
         self.dma_write_sram(bytes(buf))
         self.admin_sq_tail = (self.admin_sq_tail + 1) % QUEUE_DEPTH
-        # Ring SQ0 tail doorbell
-        self.reg_write(0x1000, self.admin_sq_tail)
+        # Ring Admin SQ0 tail doorbell via bridge
+        self.hw_doorbell(self.admin_sq_tail, 0x01)  # Admin SQ0
         return self.admin_cid
 
     def _wait_admin(self, timeout_s=5.0):
@@ -338,8 +345,8 @@ class NVMeDriver:
                 self.admin_cq_head = (self.admin_cq_head + 1) % QUEUE_DEPTH
                 if self.admin_cq_head == 0:
                     self.admin_cq_phase ^= 1
-                # Ring CQ0 head doorbell
-                self.reg_write(0x1000 + self.doorbell_stride, self.admin_cq_head)
+                # Ring Admin CQ0 head doorbell via bridge
+                self.hw_doorbell(self.admin_cq_head, 0x11)  # Admin CQ0
                 if status:
                     raise RuntimeError(f"Admin cmd failed: status=0x{status:04X}")
                 return dw0
@@ -440,6 +447,14 @@ class NVMeDriver:
 
         if use_dma:
             sectors = count
+            # 0. Arm USB bulk IN endpoint (must happen BEFORE NVMe setup)
+            # This matches the stock firmware sequence:
+            #   90E2=0x01 (USB mode), CE88=0x00 (handshake stream 0),
+            #   9096=0x01 (EP ready)
+            xdata_write(self.handle, 0x90E2, 0x01)   # USB mode
+            xdata_write(self.handle, 0xCE88, 0x00)   # handshake stream 0
+            xdata_write(self.handle, 0x9096, 0x01)   # EP ready
+
             # 1. Set C4xx registers matching stock BOT READ_16 sequence
             # First restore C42A/C428 from dma_write_sram state
             xdata_write(self.handle, 0xC42A, 0x00)  # clear doorbell gate (stock=0x00 during read!)
@@ -512,7 +527,7 @@ class NVMeDriver:
             # 6. Try bulk IN
             rxbuf = (ctypes.c_ubyte * nbytes)()
             xfer = ctypes.c_int(0)
-            ret = libusb.libusb_bulk_transfer(self.handle, 0x81, rxbuf, nbytes, ctypes.byref(xfer), 2000)
+            ret = libusb.libusb_bulk_transfer(self.handle, 0x81, rxbuf, nbytes, ctypes.byref(xfer), 50)
             if ret < 0:
                 print(f"  bulk IN failed: ret={ret}, falling back to xdata read")
                 return self.xread(DATA_BUF_XDATA, nbytes)
