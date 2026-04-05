@@ -42,11 +42,14 @@ def bulk_out(handle, buf, size):
   assert ret == 0, f"bulk OUT failed: {ret}"
   assert transferred.value == size, f"short write: {transferred.value}/{size}"
 
+def _bulk_in(handle, buf, size, transferred, timeout=5000):
+  ret = libusb.libusb_bulk_transfer(handle, EP_IN, buf, size, ctypes.byref(transferred), timeout)
+  assert ret == 0, f"bulk IN failed: {ret}"
+
 def bulk_in(handle, size, timeout=5000):
   buf = (ctypes.c_ubyte * size)()
   transferred = ctypes.c_int()
-  ret = libusb.libusb_bulk_transfer(handle, EP_IN, buf, size, ctypes.byref(transferred), timeout)
-  assert ret == 0, f"bulk IN failed: {ret}"
+  _bulk_in(handle, buf, size, transferred, timeout)
   return bytes(buf[:transferred.value])
 
 def make_pattern(slot, size):
@@ -151,8 +154,8 @@ def main():
   print("DMA OUT test: VRAM -> SRAM -> BULK IN")
   print(f"{'='*60}")
 
-  # Use 1 slot (16KB) for the DMA OUT test
-  dma_out_slots = 1
+  # Use all 32 slots (512KB) for the DMA OUT test
+  dma_out_slots = NUM_SLOTS
   dma_out_bytes = dma_out_slots * SLOT_SIZE
   dma_out_sectors = dma_out_bytes // SECTOR_SIZE
 
@@ -235,13 +238,17 @@ def main():
   print(f"  CQ @ 0xB800 after:  {cq_after.hex()}")
 
   # Perform BULK IN transfer — the CQE should have unlocked it
+  # Pre-allocate buffer and transferred outside the timed section
+  in_buf = (ctypes.c_ubyte * dma_out_bytes)()
+  in_transferred = ctypes.c_int()
   print(f"  BULK IN: reading {dma_out_bytes} bytes from EP 0x{EP_IN:02X}...")
   t0 = time.monotonic()
-  got_dma_out = bulk_in(handle, dma_out_bytes, timeout=10000)
+  _bulk_in(handle, in_buf, dma_out_bytes, in_transferred, timeout=10000)
   elapsed = time.monotonic() - t0
-  print(f"  BULK IN done: {len(got_dma_out)} bytes in {elapsed:.3f}s ({len(got_dma_out)/elapsed/1024:.1f} KB/s)")
+  print(f"  BULK IN done: {in_transferred.value} bytes in {elapsed:.3f}s ({in_transferred.value/elapsed/1024:.1f} KB/s)")
 
   # Verify the data matches
+  got_dma_out = bytes(in_buf[:in_transferred.value])
   dma_out_errors = 0
   for j in range(min(len(got_dma_out), dma_out_bytes)):
     if got_dma_out[j] != dma_out_pattern[j]:
