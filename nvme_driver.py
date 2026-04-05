@@ -10,11 +10,10 @@ Usage:
     python3 nvme_driver.py
 """
 
-import struct, sys, time, os, ctypes
+import struct, sys, time, ctypes
 from pcie.pcie_probe import (
     usb_open, usb_close, xdata_read, xdata_write, xdata_write_bytes,
-    pcie_cfg_read, pcie_cfg_write, pcie_mem_read, pcie_mem_write,
-    setup_bridges, enumerate_bus, assign_bars,
+    pcie_mem_read, pcie_mem_write, setup_bridges, enumerate_bus, assign_bars,
 )
 from tinygrad.runtime.autogen import libusb
 
@@ -43,10 +42,7 @@ ADMIN_CQ_DMA    = 0x00820000
 IO_SQ_XDATA     = 0xA000       # I/O SQ: at DMA 0x00820000
 IO_SQ_DMA       = 0x00820000
 IO_CQ_XDATA     = 0xB800       # I/O CQ: at DMA 0x00828000 (mapped via B26E:B26F)
-IO_CQ_DMA       = 0x00828000
-# Data buffer: full 4KB page at 0xF000 (DMA 0x00200000)
-DATA_BUF_XDATA  = 0xF000
-DATA_BUF_DMA    = 0x00200000
+IO_CQ_DMA       = 0x00822000
 
 QUEUE_DEPTH = 4
 
@@ -339,11 +335,8 @@ def main():
             return 1
 
         # pcie_post_train: DMA config + NVMe regs (important!)
-        xdata_write(handle, 0xB264, 0x08); xdata_write(handle, 0xB265, 0x00)
-        xdata_write(handle, 0xB266, 0x08); xdata_write(handle, 0xB267, 0x08)
         xdata_write(handle, 0xB26C, 0x08); xdata_write(handle, 0xB26D, 0x20)
-        xdata_write(handle, 0xB26E, 0x08); xdata_write(handle, 0xB26F, 0x28)
-        xdata_write(handle, 0xB250, 0x00); xdata_write(handle, 0xB251, 0x00)
+        xdata_write(handle, 0xB26E, 0x08); xdata_write(handle, 0xB26F, 0x22)
 
         print("=== Bridge Setup ===")
         # Use stock firmware's BAR base (0x00D00000) so hardware NVMe engine
