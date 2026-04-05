@@ -606,22 +606,8 @@ class NVMeDriver:
         print("got", rxfer.value)
 
         # 7. Ack completion — CQ walk + CQ doorbell + C512
-        xdata_write(self.handle, 0xCEF3, 0x08)
-        idx = self.io_cq_head
-        xdata_write(self.handle, 0xC8D6, 0x01)
-        xdata_write(self.handle, 0xC8D5, idx)
-        xdata_write(self.handle, 0xC8D6, 0x01)
-        xdata_write(self.handle, 0xC8D5, (idx + 1) % QUEUE_DEPTH)
-        xdata_write(self.handle, 0xC8D6, 0x00)
         self.io_cq_head = (self.io_cq_head + 1) % QUEUE_DEPTH
-        if self.io_cq_head == 0:
-            self.io_cq_phase ^= 1
         self.hw_doorbell(self.io_cq_head, 0x13)
-        xdata_write(self.handle, 0xC512, 0xFF)
-
-        # 8. Re-arm CBW receiver for next command
-        #xdata_write(self.handle, 0x90E3, 0x02)
-
         return bytes(rxbuf[:rxfer.value])
 
 
