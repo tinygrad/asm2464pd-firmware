@@ -141,65 +141,6 @@ class NVMeDriver:
         ret = libusb.libusb_bulk_transfer(self.handle, 0x02, buf, len(data), ctypes.byref(xfer), 5000)
         assert ret >= 0 and xfer.value == len(data), f"bulk OUT failed: ret={ret} xfer={xfer.value}"
 
-    def _f5_arm(self, sectors, slot=0):
-        """Arm NVMe hardware engine for SRAM->USB bulk IN on NVMe completion.
-
-        Sends F5 vendor command which sets C4xx registers to match stock
-        firmware's BOT READ_16 sequence. After this, ring the NVMe SQ doorbell
-        and the hardware will auto-push data to USB bulk IN on completion.
-        """
-        wValue = sectors & 0xFFFF
-        wIndex = slot & 0xFF
-        ret = libusb.libusb_control_transfer(self.handle, 0x40, 0xF5, wValue, wIndex, None, 0, 1000)
-        assert ret >= 0, f"F5 arm failed: {ret}"
-
-    def enable_msix(self):
-        """MSI-X is NOT used by stock firmware for NVMe completion detection.
-
-        The hardware engine detects completions by intercepting CQ DMA writes.
-        MSI-X vectors are zeroed/masked in the stock trace.
-        Keep MSI-X disabled to avoid corrupting SRAM.
-        """
-        print("  MSI-X: skipped (not used by hardware engine)")
-
-    def init_nvme_engine(self):
-        """Initialize the ASM2464PD hardware NVMe engine for DMA transfers.
-
-        This must be called once after PCIe bringup and before any DMA reads.
-        It does the 900B/C42A doorbell dance and sets C809 interrupt control,
-        matching the stock firmware's SET_CONFIGURATION sequence.
-        """
-        pass
-
-
-    def dma_read_sram(self, nbytes):
-        """Fast read from SRAM via NVMe-triggered bulk IN DMA.
-
-        Uses the NVMe hardware engine: arm C4xx registers (F5), submit NVMe
-        READ to fill SRAM, hardware auto-pushes to USB bulk IN on completion.
-        Returns the data bytes.
-        """
-        assert nbytes % 512 == 0, "must be sector-aligned"
-        sectors = nbytes // 512
-        assert sectors <= 8, "max 4KB (8 sectors) for now"
-
-        # 1. Arm the hardware engine for bulk IN (sets C4xx registers)
-        self._f5_arm(sectors, slot=0)
-
-        # 2. Submit NVMe READ command (SQE + doorbell)
-        self._submit_io(NVME_IO_READ, nsid=1, lba=0, count=sectors, prp1=DATA_BUF_DMA)
-
-        # 3. Bulk IN — hardware pushes data on NVMe completion
-        buf = (ctypes.c_ubyte * nbytes)()
-        xfer = ctypes.c_int(0)
-        ret = libusb.libusb_bulk_transfer(self.handle, 0x81, buf, nbytes, ctypes.byref(xfer), 50)
-        assert ret >= 0, f"bulk IN failed: ret={ret}"
-
-        # 4. Wait for NVMe I/O completion (ISR already acked via C512)
-        self._wait_io()
-
-        return bytes(buf[:xfer.value])
-
     # ========================================================================
     # NVMe Controller Init (using PCIe TLPs to NVMe BAR)
     # ========================================================================
@@ -291,32 +232,6 @@ class NVMeDriver:
     def admin_cmd(self, opcode, **kw):
         self._submit_admin(opcode, **kw)
         return self._wait_admin()
-
-    # ========================================================================
-    # Identify
-    # ========================================================================
-    def identify_controller(self):
-        self.admin_cmd(NVME_ADMIN_IDENTIFY, cdw10=1, prp1=DATA_BUF_DMA)
-        d = self.xread(DATA_BUF_XDATA, 64)
-        vid, ssvid = struct.unpack_from('<HH', d, 0)
-        sn = d[4:24].decode('ascii', errors='replace').strip()
-        mn = d[24:64].decode('ascii', errors='replace').strip()
-        print(f"  {mn} (SN: {sn})")
-        if vid < 0x1000:  # likely corrupted by MSI-X or SQ overlap
-            vid = 0x144D
-        print(f"  VID=0x{vid:04X} SSVID=0x{ssvid:04X}")
-        return vid, sn, mn
-
-    def identify_namespace(self, nsid=1):
-        self.admin_cmd(NVME_ADMIN_IDENTIFY, nsid=nsid, cdw10=0, prp1=DATA_BUF_DMA)
-        d = self.xread(DATA_BUF_XDATA, 132)
-        nsze = struct.unpack_from('<Q', d, 0)[0]
-        flbas = d[26]
-        lbaf = struct.unpack_from('<I', d, 128 + (flbas & 0xF) * 4)[0]
-        lba_ds = (lbaf >> 16) & 0xFF
-        self.sector_size = 1 << lba_ds
-        print(f"  {nsze} sectors x {self.sector_size}B = {nsze * self.sector_size / 1e9:.1f} GB")
-        return nsze, self.sector_size
 
     def create_io_queues(self):
         self.admin_cmd(NVME_ADMIN_SET_FEATURES, cdw10=0x07, cdw11=0x00010001)
@@ -423,64 +338,12 @@ def main():
             print(f"LTSSM=0x{ltssm:02X}, run pcie_bringup.py first")
             return 1
 
-        # pcie_post_train + pcie_bridge_config_init — must happen before enumeration
-        def _rmw(addr, mask, val):
-            old = xdata_read(handle, addr, 1)[0]
-            xdata_write(handle, addr, (old & ~mask) | (val & mask))
-        def _bank1_write(addr, val):
-            ret = libusb.libusb_control_transfer(handle, 0x40, 0xE5, addr, val | (1 << 8), None, 0, 1000)
-            assert ret >= 0, f"bank1_write failed: {ret}"
-        def _bank1_read(addr):
-            buf = (ctypes.c_ubyte * 1)()
-            libusb.libusb_control_transfer(handle, 0xC0, 0xE4, addr, 1 << 8, buf, 1, 1000)
-            return buf[0]
-
-        # pcie_post_train: DMA config + NVMe regs
-        _rmw(0xC659, 0x01, 0x01)  # 12V on
+        # pcie_post_train: DMA config + NVMe regs (important!)
         xdata_write(handle, 0xB264, 0x08); xdata_write(handle, 0xB265, 0x00)
         xdata_write(handle, 0xB266, 0x08); xdata_write(handle, 0xB267, 0x08)
         xdata_write(handle, 0xB26C, 0x08); xdata_write(handle, 0xB26D, 0x20)
         xdata_write(handle, 0xB26E, 0x08); xdata_write(handle, 0xB26F, 0x28)
         xdata_write(handle, 0xB250, 0x00); xdata_write(handle, 0xB251, 0x00)
-        _rmw(0xC428, 0x20, 0x20)
-        _rmw(0xC450, 0x04, 0x04)
-        _rmw(0xC472, 0x01, 0x00)
-        _rmw(0xC4EB, 0x01, 0x01)
-        _rmw(0xC4ED, 0x01, 0x01)
-        _rmw(0xCA06, 0x40, 0x00)
-
-        # pcie_bridge_config_init
-        _rmw(0xCA06, 0x10, 0x00)
-        for base in [0xB410, 0xB420]:
-            xdata_write(handle, base+0, 0x1B); xdata_write(handle, base+1, 0x21)
-            xdata_write(handle, base+2, 0x24); xdata_write(handle, base+3, 0x63)
-            xdata_write(handle, base+5, 0x06); xdata_write(handle, base+6, 0x04)
-            xdata_write(handle, base+7, 0x00)
-            xdata_write(handle, base+8, 0x24); xdata_write(handle, base+9, 0x63)
-            xdata_write(handle, base+0xA, 0x1B); xdata_write(handle, base+0xB, 0x21)
-        _rmw(0xB401, 0x01, 0x01)
-        _rmw(0xB482, 0x01, 0x01)
-        _rmw(0xB482, 0xF0, 0xF0)
-        _rmw(0xB401, 0x01, 0x00)
-        _rmw(0xB480, 0x01, 0x01)
-        _rmw(0xB430, 0x01, 0x00)
-        _rmw(0xB298, 0x10, 0x10)
-        _rmw(0xCA06, 0x10, 0x00)
-        _rmw(0xB480, 0x01, 0x01)
-        _bank1_write(0x4084, 0x22)
-        _bank1_write(0x5084, 0x22)
-        _bank1_write(0x6043, 0x70)
-        _bank1_write(0x6025, _bank1_read(0x6025) | 0x80)
-        _rmw(0xB481, 0x03, 0x03)
-
-        # B455 TLP forwarding trigger
-        xdata_write(handle, 0xB455, 0x02); xdata_write(handle, 0xB455, 0x04)
-        xdata_write(handle, 0xB2D5, 0x01); xdata_write(handle, 0xB296, 0x08)
-        for _ in range(200):
-            if xdata_read(handle, 0xB455, 1)[0] & 0x02:
-                xdata_write(handle, 0xB455, 0x02)
-                break
-            time.sleep(0.005)
 
         print("=== Bridge Setup ===")
         # Use stock firmware's BAR base (0x00D00000) so hardware NVMe engine
@@ -505,21 +368,10 @@ def main():
         if csts & 1:
             print("  Controller already ready, skipping init")
             nvme.doorbell_stride = 4
+            nvme.sector_size = 512
         else:
             nvme.init_controller()
-        if not (csts & 1):
-            print("\n=== Identify ===")
-            nvme.identify_controller()
-            nsze, ss = nvme.identify_namespace(1)
-            print("\n=== I/O Queues ===")
             nvme.create_io_queues()
-        else:
-            print("\n=== Skipping Identify/Queues (already created) ===")
-            nvme.sector_size = 512
-
-        print("\n=== NVMe DMA Engine ===")
-        nvme.enable_msix()
-        nvme.init_nvme_engine()
 
         print("\n=== DMA Read Test ===")
         for i in range(10):
