@@ -34,15 +34,16 @@ ADMIN_SQ_DMA    = 0x00200000
 ADMIN_CQ_XDATA  = 0xA000       # Admin CQ: read via xdata, at DMA 0x00820000
 ADMIN_CQ_DMA    = 0x00820000
 
-# Stock firmware layout: I/O SQ+CQ both at DMA 0x00820000 (XDATA 0xA000)
-# The hardware NVMe engine expects this for B251/B254 doorbells.
-# SQ and CQ share the same 4KB page — SQEs at slot*64, CQEs also at slot*16
-# They overlap but firmware manages them carefully (write SQE, submit, then
-# the CQE overwrites the same region after completion).
+# Stock firmware layout: I/O SQ at DMA 0x00820000, CQ at DMA 0x00828000
+# The hardware bridge page mapping (B26C:B26D / B26E:B26F) must match:
+#   B26C:B26D = 0x08:0x20 → SQ at PCI 0x00820000 (XDATA 0xA000)
+#   B26E:B26F = 0x08:0x28 → CQ at PCI 0x00828000 (XDATA 0xB800)
+# The bridge CQ watcher monitors PCIe writes to the B26E:B26F address
+# and triggers the bulk IN + C802 interrupt when it sees a CQ completion.
 IO_SQ_XDATA     = 0xA000       # I/O SQ: at DMA 0x00820000
 IO_SQ_DMA       = 0x00820000
-IO_CQ_XDATA     = 0xA000       # I/O CQ: same page
-IO_CQ_DMA       = 0x00820000
+IO_CQ_XDATA     = 0xB800       # I/O CQ: at DMA 0x00828000 (mapped via B26E:B26F)
+IO_CQ_DMA       = 0x00828000
 # Data buffer: full 4KB page at 0xF000 (DMA 0x00200000)
 DATA_BUF_XDATA  = 0xF000
 DATA_BUF_DMA    = 0x00200000
@@ -168,6 +169,14 @@ class NVMeDriver:
         It does the 900B/C42A doorbell dance and sets C809 interrupt control,
         matching the stock firmware's SET_CONFIGURATION sequence.
         """
+        # Set up PCIe page mapping for SQ and CQ (must match DMA addresses)
+        # B26C:B26D = SQ page → 0x0820 → PCI 0x00820000 (XDATA 0xA000)
+        # B26E:B26F = CQ page → 0x0828 → PCI 0x00828000 (XDATA 0xB800)
+        xdata_write(self.handle, 0xB26C, 0x08)
+        xdata_write(self.handle, 0xB26D, 0x20)
+        xdata_write(self.handle, 0xB26E, 0x08)
+        xdata_write(self.handle, 0xB26F, 0x28)
+
         # Enable interrupt control (from stock trace)
         xdata_write(self.handle, 0xC809, 0x0A)
 
@@ -369,19 +378,22 @@ class NVMeDriver:
 
     def create_io_queues(self):
         self.admin_cmd(NVME_ADMIN_SET_FEATURES, cdw10=0x07, cdw11=0x00010001)
-        # Create I/O CQ (QID=1) at DMA 0x00820000 (XDATA 0xA000)
+        # Create I/O CQ (QID=1) at DMA 0x00828000 (XDATA 0xB800, via B26E:B26F)
         self.admin_cmd(NVME_ADMIN_CREATE_IO_CQ,
                        cdw10=((QUEUE_DEPTH-1) << 16) | 1, cdw11=0x01, prp1=IO_CQ_DMA)
-        # Create I/O SQ (QID=1, CQID=1) at DMA 0x00820000 (XDATA 0xA000)
+        # Create I/O SQ (QID=1, CQID=1) at DMA 0x00820000 (XDATA 0xA000, via B26C:B26D)
         self.admin_cmd(NVME_ADMIN_CREATE_IO_SQ,
                        cdw10=((QUEUE_DEPTH-1) << 16) | 1, cdw11=(1 << 16) | 0x01, prp1=IO_SQ_DMA)
-        # Zero out shared SQ/CQ region
+        # Zero out SQ region
         for i in range(QUEUE_DEPTH * 64):
             xdata_write(self.handle, IO_SQ_XDATA + i, 0)
+        # Zero out CQ region
+        for i in range(QUEUE_DEPTH * 16):
+            xdata_write(self.handle, IO_CQ_XDATA + i, 0)
         self.io_sq_tail = 0
         self.io_cq_head = 0
         self.io_cq_phase = 1
-        print(f"  I/O queues created (QID=1, SQ+CQ@0x{IO_SQ_DMA:08X})")
+        print(f"  I/O queues created (QID=1, SQ@0x{IO_SQ_DMA:08X} CQ@0x{IO_CQ_DMA:08X})")
 
     # ========================================================================
     # I/O commands — write SQE via xdata, ring doorbell, poll CQ, DMA data
@@ -395,7 +407,8 @@ class NVMeDriver:
         # Write SQE to A000+slot*64 via xdata (SQ is at DMA 0x00820000)
         xdata_write_bytes(self.handle, IO_SQ_XDATA + slot * 64, sqe)
         self.io_sq_tail = (self.io_sq_tail + 1) % QUEUE_DEPTH
-        self.reg_write(0x1000 + 2 * self.doorbell_stride, self.io_sq_tail)
+        # Use bridge doorbell (B251/B254) so hardware arms CQ watcher
+        self.hw_doorbell(self.io_sq_tail, 0x03)  # I/O SQ1
         return self.io_cid
 
     def _wait_io(self, timeout_s=5.0):
@@ -409,8 +422,8 @@ class NVMeDriver:
                 self.io_cq_head = (self.io_cq_head + 1) % QUEUE_DEPTH
                 if self.io_cq_head == 0:
                     self.io_cq_phase ^= 1
-                # Ring I/O CQ1 head doorbell (offset = 3 * stride)
-                self.reg_write(0x1000 + 3 * self.doorbell_stride, self.io_cq_head)
+                # Ring I/O CQ1 head doorbell via bridge
+                self.hw_doorbell(self.io_cq_head, 0x13)  # I/O CQ1
                 if status:
                     raise RuntimeError(f"I/O failed: status=0x{status:04X}")
                 return
@@ -463,9 +476,8 @@ class NVMeDriver:
             c428 = xdata_read(self.handle, 0xC428, 1)[0]
             print(f"  pre-doorbell: C42A=0x{c42a:02X} C412=0x{c412:02X} C428=0x{c428:02X}")
 
-            # 3. Ring SQ doorbell via BOTH paths
+            # 3. Ring SQ doorbell via bridge (arms CQ watcher for bulk IN)
             self.hw_doorbell(self.io_sq_tail, 0x03)  # I/O SQ1
-            self.reg_write(0x1000 + 2 * self.doorbell_stride, self.io_sq_tail)
 
             # 4. Wait for NVMe completion in CQ
             deadline = time.monotonic() + 5.0
@@ -549,7 +561,6 @@ class NVMeDriver:
         if self.io_cq_head == 0:
             self.io_cq_phase ^= 1
         self.hw_doorbell(self.io_cq_head, 0x13)  # I/O CQ1 (hardware engine)
-        self.reg_write(0x1000 + 3 * self.doorbell_stride, self.io_cq_head)  # direct PCIe
 
         # Ack NVMe queue index
         xdata_write(self.handle, 0xC512, 0xFF)
@@ -570,7 +581,7 @@ class NVMeDriver:
         # Write SQE to A000+slot*64 via xdata
         xdata_write_bytes(self.handle, IO_SQ_XDATA + slot * 64, sqe)
         self.io_sq_tail = (self.io_sq_tail + 1) % QUEUE_DEPTH
-        self.reg_write(0x1000 + 2 * self.doorbell_stride, self.io_sq_tail)
+        self.hw_doorbell(self.io_sq_tail, 0x03)  # I/O SQ1 via bridge
         self._wait_io()
 
 

@@ -6,10 +6,10 @@ from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
 
 class UASDev:
-    def __init__(self):
+    def __init__(self, max_streams=4):
         # use_bot=False triggers SET_INTERFACE alt=1, stream alloc
-        self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04, use_bot=False)
-        print(f"UAS mode: use_streams={self.usb.use_streams}")
+        self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04, use_bot=False, max_streams=max_streams)
+        print(f"UAS mode: use_streams={self.usb.use_streams} max_streams={self.usb.max_streams}")
 
     def scsi(self, cdb, xfer_len=0, direction_in=True, timeout=10000):
         """Send SCSI command via UAS. Returns (data, status)."""
@@ -67,6 +67,7 @@ class UASDev:
 def main():
     dev = UASDev()
 
+    """
     # SCSI init
     dev.inquiry()
     if not dev.test_unit_ready():
@@ -108,6 +109,17 @@ def main():
     verify = dev.read16(test_lba, 1)
     assert verify == orig, "restore failed!"
     print("Original data restored.")
+    """
+
+    # 4 concurrent reads using send_batch with 4 streams
+    cdbs = []
+    for i in range(4):
+        cdb = struct.pack('>BBQIBB', 0x88, 0x01, i * 8, 1, 0, 0)
+        cdbs.append(cdb)
+    print(f"Sending {len(cdbs)} concurrent READ_16 commands...")
+    results = dev.usb.send_batch(cdbs, idata=[512]*4, odata=[None]*4)
+    for i, r in enumerate(results):
+        print(f"  cmd {i}: {len(r)} bytes, first 8: {r[:8].hex()}")
 
 if __name__ == "__main__":
     main()
