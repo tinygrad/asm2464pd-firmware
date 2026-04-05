@@ -423,6 +423,65 @@ def main():
             print(f"LTSSM=0x{ltssm:02X}, run pcie_bringup.py first")
             return 1
 
+        # pcie_post_train + pcie_bridge_config_init — must happen before enumeration
+        def _rmw(addr, mask, val):
+            old = xdata_read(handle, addr, 1)[0]
+            xdata_write(handle, addr, (old & ~mask) | (val & mask))
+        def _bank1_write(addr, val):
+            ret = libusb.libusb_control_transfer(handle, 0x40, 0xE5, addr, val | (1 << 8), None, 0, 1000)
+            assert ret >= 0, f"bank1_write failed: {ret}"
+        def _bank1_read(addr):
+            buf = (ctypes.c_ubyte * 1)()
+            libusb.libusb_control_transfer(handle, 0xC0, 0xE4, addr, 1 << 8, buf, 1, 1000)
+            return buf[0]
+
+        # pcie_post_train: DMA config + NVMe regs
+        _rmw(0xC659, 0x01, 0x01)  # 12V on
+        xdata_write(handle, 0xB264, 0x08); xdata_write(handle, 0xB265, 0x00)
+        xdata_write(handle, 0xB266, 0x08); xdata_write(handle, 0xB267, 0x08)
+        xdata_write(handle, 0xB26C, 0x08); xdata_write(handle, 0xB26D, 0x20)
+        xdata_write(handle, 0xB26E, 0x08); xdata_write(handle, 0xB26F, 0x28)
+        xdata_write(handle, 0xB250, 0x00); xdata_write(handle, 0xB251, 0x00)
+        _rmw(0xC428, 0x20, 0x20)
+        _rmw(0xC450, 0x04, 0x04)
+        _rmw(0xC472, 0x01, 0x00)
+        _rmw(0xC4EB, 0x01, 0x01)
+        _rmw(0xC4ED, 0x01, 0x01)
+        _rmw(0xCA06, 0x40, 0x00)
+
+        # pcie_bridge_config_init
+        _rmw(0xCA06, 0x10, 0x00)
+        for base in [0xB410, 0xB420]:
+            xdata_write(handle, base+0, 0x1B); xdata_write(handle, base+1, 0x21)
+            xdata_write(handle, base+2, 0x24); xdata_write(handle, base+3, 0x63)
+            xdata_write(handle, base+5, 0x06); xdata_write(handle, base+6, 0x04)
+            xdata_write(handle, base+7, 0x00)
+            xdata_write(handle, base+8, 0x24); xdata_write(handle, base+9, 0x63)
+            xdata_write(handle, base+0xA, 0x1B); xdata_write(handle, base+0xB, 0x21)
+        _rmw(0xB401, 0x01, 0x01)
+        _rmw(0xB482, 0x01, 0x01)
+        _rmw(0xB482, 0xF0, 0xF0)
+        _rmw(0xB401, 0x01, 0x00)
+        _rmw(0xB480, 0x01, 0x01)
+        _rmw(0xB430, 0x01, 0x00)
+        _rmw(0xB298, 0x10, 0x10)
+        _rmw(0xCA06, 0x10, 0x00)
+        _rmw(0xB480, 0x01, 0x01)
+        _bank1_write(0x4084, 0x22)
+        _bank1_write(0x5084, 0x22)
+        _bank1_write(0x6043, 0x70)
+        _bank1_write(0x6025, _bank1_read(0x6025) | 0x80)
+        _rmw(0xB481, 0x03, 0x03)
+
+        # B455 TLP forwarding trigger
+        xdata_write(handle, 0xB455, 0x02); xdata_write(handle, 0xB455, 0x04)
+        xdata_write(handle, 0xB2D5, 0x01); xdata_write(handle, 0xB296, 0x08)
+        for _ in range(200):
+            if xdata_read(handle, 0xB455, 1)[0] & 0x02:
+                xdata_write(handle, 0xB455, 0x02)
+                break
+            time.sleep(0.005)
+
         print("=== Bridge Setup ===")
         # Use stock firmware's BAR base (0x00D00000) so hardware NVMe engine
         # can generate doorbells via B251/B254 to the correct address
