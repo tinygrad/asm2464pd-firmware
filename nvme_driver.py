@@ -63,21 +63,20 @@ class NVMeDriver:
         xdata_write(self.handle, 0xB254, doorbell_id)
         xdata_write(self.handle, 0xB296, 0x04)
 
+    def _f2_dma(self, sectors, slot=0, num_slots=1, bulk_in=False):
+        """Vendor 0xF2: arm DMA engine for bulk transfer.
+        wValue = (direction << 15) | sector_count, wIndex = slot | (num_slots << 8)"""
+        wValH = (0x80 if bulk_in else 0x00) | ((sectors >> 8) & 0x7F)
+        wValL = sectors & 0xFF
+        wValue = (wValH << 8) | wValL
+        wIndex = slot | (num_slots << 8)
+        ret = libusb.libusb_control_transfer(self.handle, 0x40, 0xF2, wValue, wIndex, None, 0, 1000)
+        assert ret >= 0, f"F2 DMA failed: {ret}"
+
     def dma_write_sram(self, data):
-        """Write to SRAM 0xF000 via bulk OUT DMA."""
+        """Write to SRAM 0xF000 via 0xF2 + bulk OUT."""
         assert len(data) % 512 == 0
-        sectors = len(data) // 512
-        xdata_write(self.handle, 0x9000, 0)
-        xdata_write(self.handle, 0xC421, 0x02)
-        xdata_write(self.handle, 0xC428, 0x30)
-        xdata_write(self.handle, 0xC42A, 0x20)
-        xdata_write(self.handle, 0xC422, 0x02)
-        xdata_write(self.handle, 0xC412, 0x03)
-        xdata_write(self.handle, 0xC426, sectors >> 8)
-        xdata_write(self.handle, 0xC427, sectors & 0xFF)
-        xdata_write(self.handle, 0xC414, 0x80)
-        xdata_write(self.handle, 0xC415, 0x01)
-        xdata_write(self.handle, 0xC429, 0x00)
+        self._f2_dma(len(data) // 512, bulk_in=False)
         buf = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
         xfer = ctypes.c_int(0)
         ret = libusb.libusb_bulk_transfer(self.handle, 0x02, buf, len(data), ctypes.byref(xfer), 5000)
@@ -156,25 +155,11 @@ class NVMeDriver:
     # === DMA Read ===
 
     def read_sector(self, lba, count=1):
-        """Read sectors via hardware NVMe DMA → USB bulk IN."""
+        """Read sectors via 0xF2 DMA (bulk IN) + NVMe doorbell."""
         nbytes = count * self.sector_size
-        # NVMe engine setup
-        xdata_write(self.handle, 0xC42A, 0x00)
-        xdata_write(self.handle, 0xC428, 0x10)
-        xdata_write(self.handle, 0xC426, count >> 8)
-        xdata_write(self.handle, 0xC427, count & 0xFF)
-        xdata_write(self.handle, 0xC401, 0x00)
-        xdata_write(self.handle, 0xC412, 0x00)
-        xdata_write(self.handle, 0xC413, 0x00)
-        xdata_write(self.handle, 0xC420, 0x00)
-        xdata_write(self.handle, 0xC421, 0x00)
-        xdata_write(self.handle, 0xC414, 0x80)
-        xdata_write(self.handle, 0xC412, 0x00)
-        # Arm + doorbell
-        xdata_write(self.handle, 0xC415, 0x04)
-        xdata_write(self.handle, 0xC415, 0x01)
-        xdata_write(self.handle, 0xC412, 0x02)
-        xdata_write(self.handle, 0xC429, 0x00)
+        # Arm DMA engine for bulk IN via 0xF2
+        self._f2_dma(count, bulk_in=True)
+        # Ring SQ doorbell
         self.io_sq_tail = (self.io_sq_tail + 1) % QUEUE_DEPTH
         self.hw_doorbell(self.io_sq_tail, 0x03)
         # Bulk IN
