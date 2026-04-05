@@ -1034,8 +1034,10 @@
 #define REG_PCIE_DMA_SIZE_B     XDATA_REG8(0xB265)   // DMA size config B
 #define REG_PCIE_DMA_SIZE_C     XDATA_REG8(0xB266)   // DMA size config C
 #define REG_PCIE_DMA_SIZE_D     XDATA_REG8(0xB267)   // DMA size config D
+// 08 20 xxx = submission queue
 #define REG_PCIE_DMA_BUF_A      XDATA_REG8(0xB26C)   // DMA buffer config A
 #define REG_PCIE_DMA_BUF_B      XDATA_REG8(0xB26D)   // DMA buffer config B
+// 08 28 xxx = completion queue
 #define REG_PCIE_DMA_BUF_C      XDATA_REG8(0xB26E)   // DMA buffer config C
 #define REG_PCIE_DMA_BUF_D      XDATA_REG8(0xB26F)   // DMA buffer config D
 #define REG_PCIE_DMA_CTRL_B281  XDATA_REG8(0xB281)   // DMA control

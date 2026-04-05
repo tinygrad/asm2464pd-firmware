@@ -195,9 +195,9 @@ def main():
 
 
     # real test
-    count = 1
+    count = 6
     cdb = struct.pack('>BBQIBB', 0x88, 0x01, test_lba, count, 0, 0)
-    xfer_len = 512
+    xfer_len = 512*count
     dev._tag += 1
     flags = 0x80
     cbw = struct.pack('<III', 0x43425355, dev._tag, xfer_len)
@@ -207,7 +207,11 @@ def main():
 
     buf = (ctypes.c_ubyte * xfer_len)()
     xfer = ctypes.c_int(0)
-    ret = libusb.libusb_bulk_transfer(dev.usb.handle, 0x81, buf, xfer_len, ctypes.byref(xfer), 1000)
+    ret = libusb.libusb_bulk_transfer(dev.usb.handle, 0x81, buf, 1024, ctypes.byref(xfer), 1000)
+    print(ret)
+    ret = libusb.libusb_bulk_transfer(dev.usb.handle, 0x81, buf, 1024, ctypes.byref(xfer), 1000)
+    print(ret)
+    ret = libusb.libusb_bulk_transfer(dev.usb.handle, 0x81, buf, xfer_len-2048, ctypes.byref(xfer), 1000)
     print(ret)
 
     csw = (ctypes.c_ubyte * 13)()
