@@ -576,149 +576,53 @@ class NVMeDriver:
         nbytes = count * self.sector_size
         assert nbytes <= 4096
 
-        if use_dma:
-            # 1. Arm CBW receiver — tells USB MSC hardware to accept a CBW
-            xdata_write(self.handle, 0x90E3, 0x02)
-            time.sleep(0.02)
+        # 3. Set up C4xx NVMe engine registers
+        xdata_write(self.handle, 0xC42A, 0x00)
+        xdata_write(self.handle, 0xC428, 0x10)
+        xdata_write(self.handle, 0xC426, count >> 8)
+        xdata_write(self.handle, 0xC427, count & 0xFF)
+        xdata_write(self.handle, 0xC401, 0x00)
+        xdata_write(self.handle, 0xC412, 0x00)
+        xdata_write(self.handle, 0xC413, 0x00)
+        xdata_write(self.handle, 0xC420, 0x00)
+        xdata_write(self.handle, 0xC421, 0x00)
+        xdata_write(self.handle, 0xC414, 0x80)
+        xdata_write(self.handle, 0xC412, 0x00)
 
-            # 2. Send READ_16 CBW via USB bulk OUT — hardware populates 0x91xx
-            self.io_cid = (self.io_cid + 1) & 0xFFFF
-            cbw = struct.pack('<III', 0x43425355, self.io_cid, nbytes)
-            cbw += struct.pack('BBB', 0x80, 0, 16)  # flags=IN, LUN=0, CB_LEN=16
-            cbw += struct.pack('>BBQIBB', 0x88, 0x01, lba, count, 0, 0)
-            cbw_buf = (ctypes.c_ubyte * len(cbw)).from_buffer_copy(cbw)
-            xfer = ctypes.c_int(0)
-            ret = libusb.libusb_bulk_transfer(self.handle, 0x02, cbw_buf, len(cbw),
-                                              ctypes.byref(xfer), 1000)
-            if ret != 0:
-                print(f"  CBW send failed: ret={ret}")
-                return self.xread(DATA_BUF_XDATA, nbytes)
-            time.sleep(0.02)
+        # 5. Arm NVMe slot and ring doorbell
+        xdata_write(self.handle, 0xC415, 0x04)
+        xdata_write(self.handle, 0xC415, 0x01)
+        xdata_write(self.handle, 0xC412, 0x02)
+        xdata_write(self.handle, 0xC429, 0x00)
+        self.io_sq_tail = (self.io_sq_tail + 1) % QUEUE_DEPTH
+        self.hw_doorbell(self.io_sq_tail, 0x03)
 
-            # 3. Set up C4xx NVMe engine registers
-            xdata_write(self.handle, 0xC42A, 0x00)
-            xdata_write(self.handle, 0xC428, 0x10)
-            xdata_write(self.handle, 0xC426, count >> 8)
-            xdata_write(self.handle, 0xC427, count & 0xFF)
-            xdata_write(self.handle, 0xC401, 0x00)
-            xdata_write(self.handle, 0xC412, 0x00)
-            xdata_write(self.handle, 0xC413, 0x00)
-            xdata_write(self.handle, 0xC420, 0x00)
-            xdata_write(self.handle, 0xC421, 0x00)
-            xdata_write(self.handle, 0xC414, 0x80)
-            xdata_write(self.handle, 0xC412, 0x00)
+        # 6. Receive bulk IN data
+        rxbuf = (ctypes.c_ubyte * nbytes)()
+        rxfer = ctypes.c_int(0)
+        ret = libusb.libusb_bulk_transfer(self.handle, 0x81, rxbuf, nbytes, ctypes.byref(rxfer), 500)
+        if ret != 0 or rxfer.value != nbytes:
+            raise RuntimeError(f"bulk IN failed: ret={ret} xfer={rxfer.value}/{nbytes}")
+        print("got", rxfer.value)
 
-            # 4. Arm snooper via CE00=0x03 — this reads the CBW from 0x91xx,
-            #    builds the NVMe SQE, and arms the PCIe CQ watcher
-            xdata_write(self.handle, 0x90E2, 0x01)
-            xdata_write(self.handle, 0xCE88, 0x00)
-            xdata_write(self.handle, 0xCE36, 0x00)
-            xdata_write(self.handle, 0xCE01, 0x00)
-            xdata_write(self.handle, 0xCE3A, 0x00)
-            xdata_write(self.handle, 0xCE00, 0x03)
-            time.sleep(0.01)
-
-            # 5. Arm NVMe slot and ring doorbell
-            xdata_write(self.handle, 0xC415, 0x04)
-            xdata_write(self.handle, 0xC415, 0x01)
-            xdata_write(self.handle, 0xC412, 0x02)
-            xdata_write(self.handle, 0xC429, 0x00)
-            self.io_sq_tail = (self.io_sq_tail + 1) % QUEUE_DEPTH
-            self.hw_doorbell(self.io_sq_tail, 0x03)
-
-            # 6. Receive bulk IN data
-            rxbuf = (ctypes.c_ubyte * nbytes)()
-            rxfer = ctypes.c_int(0)
-            ret = libusb.libusb_bulk_transfer(self.handle, 0x81, rxbuf, nbytes,
-                                              ctypes.byref(rxfer), 500)
-            if ret != 0 or rxfer.value != nbytes:
-                raise RuntimeError(f"bulk IN failed: ret={ret} xfer={rxfer.value}/{nbytes}")
-
-            # 7. Ack completion — CQ walk + CQ doorbell + C512
-            xdata_write(self.handle, 0xCEF3, 0x08)
-            idx = self.io_cq_head
-            xdata_write(self.handle, 0xC8D6, 0x01)
-            xdata_write(self.handle, 0xC8D5, idx)
-            time.sleep(0.005)
-            xdata_write(self.handle, 0xC8D6, 0x01)
-            xdata_write(self.handle, 0xC8D5, (idx + 1) % QUEUE_DEPTH)
-            xdata_write(self.handle, 0xC8D6, 0x00)
-            self.io_cq_head = (self.io_cq_head + 1) % QUEUE_DEPTH
-            if self.io_cq_head == 0:
-                self.io_cq_phase ^= 1
-            self.hw_doorbell(self.io_cq_head, 0x13)
-            xdata_write(self.handle, 0xC512, 0xFF)
-
-            # 8. Re-arm CBW receiver for next command
-            xdata_write(self.handle, 0x90E3, 0x02)
-
-            return bytes(rxbuf[:rxfer.value])
-        else:
-            self._submit_io(NVME_IO_READ, nsid=1, lba=lba, count=count, prp1=DATA_BUF_DMA)
-            self._wait_io()
-            return self.xread(DATA_BUF_XDATA, nbytes)
-
-    def _walk_dma_queue_and_ack(self, timeout_s=5.0):
-        """Walk C8D5/C8D6 DMA completion queue, then ack CQ via hardware doorbell.
-
-        This mirrors the stock firmware's sequence after the SQ doorbell:
-          1. CEF3=0x08 (link active)
-          2. C8D6=0x01, C8D5=idx (read queue entries, poll B80E for ready)
-          3. C8D6=0x00 (done)
-          4. CQ doorbell via B254=0x13
-          5. C802=0x04 fires (NVMe interrupt)
-          6. C512=0xFF (ack queue index)
-        """
-        # CEF3 = link active
+        # 7. Ack completion — CQ walk + CQ doorbell + C512
         xdata_write(self.handle, 0xCEF3, 0x08)
-
-        # Walk DMA queue at the correct CQ head index
         idx = self.io_cq_head
-        xdata_write(self.handle, 0xC8D6, 0x01)  # arm read
-        xdata_write(self.handle, 0xC8D5, idx)    # current CQ entry
-        # Poll B80E for ready (bit 0)
-        for _ in range(1000):
-            flags = xdata_read(self.handle, 0xB80E, 1)[0]
-            if flags & 0x01:
-                break
-            time.sleep(0.001)
-        # Read queue entry fields
-        b80c = xdata_read(self.handle, 0xB80C, 1)[0]
-        b80d = xdata_read(self.handle, 0xB80D, 1)[0]
-        b80f = xdata_read(self.handle, 0xB80F, 1)[0]
-
-        # Check next entry
+        xdata_write(self.handle, 0xC8D6, 0x01)
+        xdata_write(self.handle, 0xC8D5, idx)
         xdata_write(self.handle, 0xC8D6, 0x01)
         xdata_write(self.handle, 0xC8D5, (idx + 1) % QUEUE_DEPTH)
-        xdata_write(self.handle, 0xC8D6, 0x00)  # done
-
-        # CQ doorbell via BOTH hardware bridge and direct PCIe TLP
+        xdata_write(self.handle, 0xC8D6, 0x00)
         self.io_cq_head = (self.io_cq_head + 1) % QUEUE_DEPTH
         if self.io_cq_head == 0:
             self.io_cq_phase ^= 1
-        self.hw_doorbell(self.io_cq_head, 0x13)  # I/O CQ1 (hardware engine)
-
-        # Ack NVMe queue index
+        self.hw_doorbell(self.io_cq_head, 0x13)
         xdata_write(self.handle, 0xC512, 0xFF)
 
-    def write_sector(self, lba, data):
-        """Write sectors. SQE via xdata to A000, data via bulk DMA to F000."""
-        count = len(data) // self.sector_size
-        assert count * self.sector_size == len(data) and len(data) <= 4096
-        self.io_cid = (self.io_cid + 1) & 0xFFFF
-        slot = self.io_sq_tail
-        # SQE with PRP1 = DATA_BUF_DMA (0x00200000 = XDATA 0xF000)
-        sqe = struct.pack('<IIIIIIQQ', NVME_IO_WRITE | (self.io_cid << 16), 1, 0, 0, 0, 0, DATA_BUF_DMA, 0)
-        sqe += struct.pack('<QHHHH', lba, (count - 1) & 0xFFFF, 0, 0, 0)
-        sqe = sqe.ljust(64, b'\x00')
-        # Write data to SRAM at F000 via bulk DMA
-        padded = data + b'\x00' * ((-len(data)) % 512)
-        self.dma_write_sram(padded)
-        # Write SQE to A000+slot*64 via xdata
-        xdata_write_bytes(self.handle, IO_SQ_XDATA + slot * 64, sqe)
-        self.io_sq_tail = (self.io_sq_tail + 1) % QUEUE_DEPTH
-        self.hw_doorbell(self.io_sq_tail, 0x03)  # I/O SQ1 via bridge
-        self._wait_io()
+        # 8. Re-arm CBW receiver for next command
+        #xdata_write(self.handle, 0x90E3, 0x02)
+
+        return bytes(rxbuf[:rxfer.value])
 
 
 def main():
@@ -774,8 +678,8 @@ def main():
             print(f"  LBA {i*8:4d}: {d[:16].hex()}")
 
         # Consistency
-        d1 = nvme.read_sector(0)
-        d2 = nvme.read_sector(0)
+        d1 = nvme.read_sector(0, count=8)
+        d2 = nvme.read_sector(0, count=8)
         assert d1 == d2, "consistency check failed"
         print(f"  Consistency: OK")
 
