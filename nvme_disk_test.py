@@ -191,8 +191,30 @@ def main():
     dev.write16(test_lba, orig)
     verify = dev.read16(test_lba, 1)
     assert verify == orig, "restore failed!"
-    verify = dev.read16(test_lba, 1)
     print("Original data restored.")
+
+
+    # real test
+    count = 1
+    cdb = struct.pack('>BBQIBB', 0x88, 0x01, test_lba, count, 0, 0)
+    xfer_len = 512
+    dev._tag += 1
+    flags = 0x80
+    cbw = struct.pack('<III', 0x43425355, dev._tag, xfer_len)
+    cbw += struct.pack('BBB', flags, 0, len(cdb))
+    cbw += cdb + b'\x00' * (16 - len(cdb))
+    dev.usb._bulk_out(2, cbw)
+
+    buf = (ctypes.c_ubyte * xfer_len)()
+    xfer = ctypes.c_int(0)
+    ret = libusb.libusb_bulk_transfer(dev.usb.handle, 0x81, buf, xfer_len, ctypes.byref(xfer), 1000)
+    print(ret)
+
+    csw = (ctypes.c_ubyte * 13)()
+    xfer2 = ctypes.c_int(0)
+    ret = libusb.libusb_bulk_transfer(dev.usb.handle, 0x81, csw, 13, ctypes.byref(xfer2), 1000)
+    print(ret)
+
 
 if __name__ == "__main__":
     main()
