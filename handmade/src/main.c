@@ -545,6 +545,7 @@ void main(void) {
   REG_PCIE_TLP_LENGTH = 0x20;
 
   // PCIe bringup
+  REG_TUNNEL_LINK_STATUS = 0xC;          // this is not needed for AMD GPU, but needed for NVMe
   REG_TUNNEL_CTRL_B403 = 0x01;           // fix PCIe link stability
   REG_PCIE_PERST_CTRL  = 0x01;           // assert PERST#
   REG_TUNNEL_LINK_STATE = 0x00;          // clear tunnel link state
