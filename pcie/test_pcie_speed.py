@@ -62,16 +62,12 @@ def main():
   print(f"Reading {SIZE // 1024} KB from VRAM...")
   dma_setup(handle, vram_base, 2, total_dwords)
   resp = (ctypes.c_ubyte * SIZE)()
-  result = bytearray()
   t0 = time.monotonic()
-  while len(result) < SIZE:
-    want = SIZE - len(result)
-    buf = (ctypes.c_ubyte * want)()
-    ret = libusb.libusb_bulk_transfer(handle, EP_IN, buf, want, ctypes.byref(transferred), 30000)
-    assert ret == 0, f"read failed: {ret} (got {len(result)}/{SIZE} bytes so far)"
-    result.extend(bytes(buf[:transferred.value]))
+  ret = libusb.libusb_bulk_transfer(handle, EP_IN, resp, SIZE, ctypes.byref(transferred), 30000)
   t_read = time.monotonic() - t0
-  result = list(struct.unpack(f'<{total_dwords}I', bytes(result)))
+  assert ret == 0, f"read failed: {ret} (transferred {transferred.value})"
+  assert transferred.value == SIZE, f"short read: {transferred.value}/{SIZE}"
+  result = list(struct.unpack(f'<{total_dwords}I', bytes(resp)))
 
   errors = 0
   for i in range(len(result)):
