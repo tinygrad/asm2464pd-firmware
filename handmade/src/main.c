@@ -5,7 +5,6 @@
 
 #include "types.h"
 #include "registers.h"
-#include "globals.h"
 
 static uint8_t is_usb2;
 static uint8_t pcie_link_up;
@@ -14,7 +13,7 @@ static uint8_t pcie_link_up;
 
 /* Streaming PCIe DMA state — configured via 0xF0 control message */
 static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
-static uint32_t dma_dwords;    /* total dwords remaining for streaming read */
+static int32_t dma_dwords;     /* total dwords remaining for streaming read */
 static uint8_t dma_addr_0;     /* shadow of ADDR_3 (addr[7:0]) — written BEFORE trigger */
 static uint8_t dma_addr_1;     /* shadow of ADDR_2 (addr[15:8]) */
 static uint8_t dma_addr_2;     /* shadow of ADDR_1 (addr[23:16]) */
@@ -235,8 +234,7 @@ static void handle_usb_control(void) {
       REG_NVME_SECTOR_COUNT_HI = (uint8_t)(sectors >> 8);
       REG_NVME_SECTOR_COUNT_LO = (uint8_t)(sectors & 0xFF);
       REG_NVME_CTRL_STATUS = NVME_CTRL_DMA_START | (bulk_in ? 0 : NVME_CTRL_WRITE_DIR);
-      REG_NVME_CMD_PARAM   = slot_sel;  /* 0xC429: slot select + DMA re-arm */
-      dma_mode = 3;  /* suppress UART in bulk handler */
+      REG_NVME_CMD_PARAM   = slot_sel;
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
@@ -327,14 +325,17 @@ static void handle_usb_control(void) {
         dma_addr_3 = DESC_BUF[3];
         dma_dwords = ((uint32_t)DESC_BUF[8] << 24) | ((uint32_t)DESC_BUF[9] << 16) |
                      ((uint32_t)DESC_BUF[10] << 8) | DESC_BUF[11];
+        if (dma_dwords > 0) {
+          if (mode == 1) {
+            // host to device, we arm the OUT endpoint
+            REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+          }
+          if (mode == 2) {
+            // device to host, we do the first IN
+            do_usb_bulk_in();
+          }
+        }
       }
-
-      /* Update dma_mode LAST — this arms the bulk/EP_COMPLETE handlers */
-      dma_mode = mode;
-
-      // arm this
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
-
       send_zlp_ack();
     }
     if (REG_USB_SETUP_BREQ == 0xF1) {
@@ -404,41 +405,35 @@ static inline void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
   }
 }
 
+void do_usb_bulk_in(void) {
+  uint16_t max_chunk = is_usb2 ? 512 : 1024;
+  uint16_t chunk = (dma_dwords > max_chunk) ? max_chunk : (uint16_t)dma_dwords;
+  pcie_read_chunk((__xdata uint8_t *)0x8000, chunk);
+  REG_USB_BULK_IN_LEN_H = (chunk*4)>>6;
+  REG_USB_BULK_IN_LEN_H = (chunk*4)&0xFF;
+  dma_dwords -= chunk;
+  REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
+}
+
 void handle_usb_bulk_data(void) {
   uint8_t bulk_cfg1, bulk_cfg2;
   bulk_cfg1 = REG_USB_EP_CFG1;
   bulk_cfg2 = REG_USB_EP_CFG2;
-  /*if (dma_mode == 0) {
+  if (dma_dwords == 0) {
+    // this shouldn't happen
     uart_puts("[BULK ");
     uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
     uart_puts("]\n");
-  }*/
+  }
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
-    if (dma_mode == 1) {
-      uint16_t byte_count = ((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L;
-      pcie_write_chunk((__xdata uint8_t *)0x7000, byte_count >> 2);
-    } else if (dma_mode == 0) {
-      // dump what's at 0x7000
-      uart_puts("[7000=");
-      uart_puthex(XDATA_REG8(0x7000)); uart_puthex(XDATA_REG8(0x7001));
-      uart_puthex(XDATA_REG8(0x7002)); uart_puthex(XDATA_REG8(0x7003));
-      uart_puts("]\n");
-    }
-    if (dma_mode != 3) {
-      // re-arm OUT
-      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+    uint16_t dword_count = (((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L) >> 2;
+    if (dma_dwords >= dword_count) {
+      pcie_write_chunk((__xdata uint8_t *)0x7000, dword_count);
+      dma_dwords -= dword_count;
+      if (dma_dwords > 0) REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT; // re-arm OUT
     }
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
-    if (dma_mode == 2 && dma_dwords > 0) {
-      uint16_t chunk = (dma_dwords > MAX_CHUNK_DWORDS) ? MAX_CHUNK_DWORDS : (uint16_t)dma_dwords;
-      pcie_read_chunk((__xdata uint8_t *)0xD800, chunk);
-      REG_USB_MSC_LENGTH = chunk * 4;
-      dma_dwords -= chunk;
-      REG_USB_BULK_DMA_TRIGGER = 0x01;
-      // unfortunately we need this to block and prevent the next one clobbering it
-      // while the DMA out the USB is happening
-      while (!(REG_USB_PERIPH_STATUS & USB_PERIPH_EP_COMPLETE)) { }
-    }
+    if (dma_dwords > 0) do_usb_bulk_in();
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_START) {
     // ack
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_START) {
@@ -504,6 +499,7 @@ void int0_isr(void) __interrupt(0) {
     }
   }
   if (int0_type & INT_USB_CTRL_PENDING) {
+    // NOTE: MSC interrupts are not enabled, if you want them, you can do the two writes here
     uart_puts("[MSC]\n");
     REG_USB_MSC_CTRL = 1;
     REG_USB_MSC_STATUS = 0;

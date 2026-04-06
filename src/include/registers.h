@@ -256,6 +256,9 @@
 #define REG_USB_SCSI_BUF_LEN    XDATA_REG16(0x9007)
 #define REG_USB_SCSI_BUF_LEN_L  XDATA_REG8(0x9007)
 #define REG_USB_SCSI_BUF_LEN_H  XDATA_REG8(0x9008)
+// real names
+#define REG_USB_BULK_IN_LEN_H  XDATA_REG8(0x9007)
+#define REG_USB_BULK_IN_LEN_L  XDATA_REG8(0x9008)
 /*
  * USB MSC Config (0x900B)
  * Controls MSC (Mass Storage Class) engine state.
