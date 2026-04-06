@@ -60,16 +60,20 @@ def main():
   print(f"  {t_write:.3f}s ({SIZE / t_write / 1024:.1f} KB/s)")
 
   print(f"Reading {SIZE // 1024} KB from VRAM...")
+  chunk_bytes = 512  # firmware sends 512-byte chunks (short packets on USB3)
   dma_setup(handle, vram_base, 2, total_dwords)
-  resp = (ctypes.c_ubyte * SIZE)()
+  result = bytearray()
   t0 = time.monotonic()
-  ret = libusb.libusb_bulk_transfer(handle, EP_IN, resp, SIZE, ctypes.byref(transferred), 30000)
-  assert ret == 0, f"read failed: {ret}"
-  result = list(struct.unpack(f'<{transferred.value // 4}I', bytes(resp[:transferred.value])))
+  while len(result) < SIZE:
+    resp = (ctypes.c_ubyte * chunk_bytes)()
+    ret = libusb.libusb_bulk_transfer(handle, EP_IN, resp, chunk_bytes, ctypes.byref(transferred), 30000)
+    assert ret == 0, f"read failed: {ret} (got {len(result)}/{SIZE} bytes so far)"
+    result.extend(bytes(resp[:transferred.value]))
   t_read = time.monotonic() - t0
+  result = list(struct.unpack(f'<{len(result) // 4}I', bytes(result)))
 
   errors = 0
-  for i in range(total_dwords):
+  for i in range(len(result)):
     if result[i] != i:
       if errors < 10:
         print(f"  MISMATCH at dword {i}: expected 0x{i:08X}, got 0x{result[i]:08X}")

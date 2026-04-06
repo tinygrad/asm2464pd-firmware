@@ -72,10 +72,6 @@ static inline void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
 static void do_usb_bulk_in(void) {
   uint16_t max_chunk_dwords = is_usb2 ? (512/4) : (512/4);
   uint16_t chunk = (dma_dwords > max_chunk_dwords) ? max_chunk_dwords : (uint16_t)dma_dwords;
-  uart_puts("[read chunk ");
-  uart_puthex(chunk>>8);
-  uart_puthex(chunk&0xFF);
-  uart_puts("]\n");
   pcie_read_chunk((__xdata uint8_t *)0x8000, chunk);
   uint16_t nbytes = chunk * 4;
   REG_USB_BULK_IN_LEN_H = nbytes >> 8;
@@ -418,13 +414,11 @@ void handle_usb_bulk_data(void) {
   uint8_t bulk_cfg1, bulk_cfg2;
   bulk_cfg1 = REG_USB_EP_CFG1;
   bulk_cfg2 = REG_USB_EP_CFG2;
-  if (dma_dwords == 0) {
-    // this shouldn't happen
-    uart_puts("[BULK ");
-    uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
-    uart_puts("]\n");
-  }
+  /*uart_puts("[BULK ");
+  uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
+  uart_puts("]\n");*/
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
+    REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_OUT_COMPLETE;
     uint16_t dword_count = (((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L) >> 2;
     if (dma_dwords >= dword_count) {
       pcie_write_chunk((__xdata uint8_t *)0x7000, dword_count);
@@ -432,17 +426,10 @@ void handle_usb_bulk_data(void) {
       if (dma_dwords > 0) REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT; // re-arm OUT
     }
   } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
+    REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_IN_COMPLETE;
     if (dma_dwords > 0) do_usb_bulk_in();
-  } else if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_START) {
-    // ack
-  } else if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_START) {
-    // ack
-  } else {
-    // don't ack
     return;
   }
-  // ack
-  REG_USB_EP_CFG1 = bulk_cfg1;
 }
 
 
@@ -466,7 +453,7 @@ void int0_isr(void) __interrupt(0) {
       handle_usb_bulk_data();
     } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
       uint8_t ep = REG_USB_EP_READY;
-      //uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts(" "); uart_puthex(REG_USB_EP_STATUS_90E3); uart_puts("]\n");
+      uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts("]\n");
       REG_USB_EP_READY = ep;
     } else if (periph_status & USB_PERIPH_LINK_EVENT) {
       uint8_t ep = REG_BUF_CFG_9300;
