@@ -4537,7 +4537,7 @@ uint8_t check_pcie_status_e239(void)
  */
 uint8_t nvme_clear_ep0_status(void)
 {
-    REG_USB_EP0_STATUS = 0;
+    REG_USB_EP0_LEN_H = 0;
     return 0;
 }
 

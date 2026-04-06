@@ -3006,7 +3006,7 @@ uint8_t nvme_queue_mask_0acf(void)
  */
 void nvme_queue_clear_9003(void)
 {
-    REG_USB_EP0_STATUS = 0;
+    REG_USB_EP0_LEN_H = 0;
 }
 
 /*
@@ -3658,7 +3658,7 @@ uint8_t check_nvme_ready_e03c(void)
     }
 
     /* All checks passed - initialize NVMe registers */
-    REG_USB_EP0_STATUS = 0x00;
+    REG_USB_EP0_LEN_H = 0x00;
     REG_USB_EP0_LEN_L = 0x01;
     REG_USB_SETUP_TYPE = 0x00;
 

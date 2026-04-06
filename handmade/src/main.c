@@ -52,9 +52,9 @@ static void desc_copy(__code const uint8_t *src, uint8_t len) {
 
 /*=== USB Control Transfer Helpers ===*/
 
-static void send_control_data(uint8_t len) {
-  REG_USB_EP0_STATUS = 0x00;
-  REG_USB_EP0_LEN_L = len;
+static void send_control_data(uint16_t len) {
+  REG_USB_EP0_LEN_H = (uint8_t)(len >> 8);
+  REG_USB_EP0_LEN_L = (uint8_t)(len & 0xFF);
   REG_USB_DMA_TRIGGER = USB_DMA_SEND;
   REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
 }
@@ -211,9 +211,9 @@ static void handle_usb_control(void) {
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
       uint8_t bank = REG_USB_SETUP_WIDX_H;
-      uint8_t maxlen = is_usb2 ? 64 : 255;
-      uint8_t rlen = (wLen > maxlen) ? maxlen : (uint8_t)wLen;
-      uint8_t vi;
+      uint16_t maxlen = is_usb2 ? 64 : 512;
+      uint16_t rlen = (wLen > maxlen) ? maxlen : wLen;
+      uint16_t vi;
       for (vi = 0; vi < rlen; vi++) {
         if (bank) DPX = bank;
         uint8_t val = XDATA_REG8(addr + vi);
@@ -473,8 +473,8 @@ void main(void) {
   // without this, no USB interrupts
   REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
 
-  // enable BULK interrupt. mislabeled
-  REG_USB_EP0_LEN_H = 0xF0;
+  // enable BULK interrupt
+  REG_USB_EP0_CFG = 0xF0;
 
   // enables EP_COMPLETE interrupts
   REG_USB_DATA_L = 0x00;

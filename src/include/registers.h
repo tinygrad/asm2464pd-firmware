@@ -241,9 +241,9 @@
 #define   USB_CONFIG_MASK        0x0F  // Bits 0-3: USB configuration value
 #define   USB_CONFIG_BIT1        0x02  // Bit 1: Must be CLEAR to reach 0x9091 check at 0xCDF5
 #define   USB_CONFIG_MSC_INIT    0xE0  // MSC engine init value (stock 0xB203; partially volatile)
-#define REG_USB_EP0_STATUS      XDATA_REG8(0x9003)
+#define REG_USB_EP0_LEN_H       XDATA_REG8(0x9003)  /* EP0 transfer length high byte */
 #define REG_USB_EP0_LEN_L       XDATA_REG8(0x9004)  /* EP0 transfer length low byte */
-#define REG_USB_EP0_LEN_H       XDATA_REG8(0x9005)  /* EP0 transfer length high byte */
+#define REG_USB_EP0_CFG         XDATA_REG8(0x9005)  /* EP0 config / bulk interrupt enable (not length) */
 /*
  * USB EP0 Config / Bulk Ready (0x9006)
  * Dual purpose: EP0 config during enumeration, bulk ready during transfers.
