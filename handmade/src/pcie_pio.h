@@ -5,8 +5,19 @@
  * auto-incrementing the PCIe address by 4 after each dword.
  *
  * PCIe ADDR registers must be primed with the starting address before calling.
+ * Carry propagates through the full 64-bit address (low 32 + high 32).
  *
  * Data byte order (LE): buf[0]=LSB -> DATA_3, buf[3]=MSB -> DATA_0.
+ *
+ * ADDR register layout (consecutive):
+ *   0xB218 ADDR_0  (addr[31:24])   — MSB of low 32
+ *   0xB219 ADDR_1  (addr[23:16])
+ *   0xB21A ADDR_2  (addr[15:8])
+ *   0xB21B ADDR_3  (addr[7:0])     — LSB of low 32
+ *   0xB21C ADDR_HIGH   (addr[39:32]) — LSB of high 32
+ *   0xB21D ADDR_HIGH_1 (addr[47:40])
+ *   0xB21E ADDR_HIGH_2 (addr[55:48])
+ *   0xB21F ADDR_HIGH_3 (addr[63:56]) — MSB of high 32
  */
 #ifndef PCIE_PIO_H
 #define PCIE_PIO_H
@@ -23,7 +34,6 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
   __asm
     mov   r6, dpl
     mov   r7, dph
-    ; load count into r4:r5 (count down to zero)
     mov   r4, (_pcie_read_chunk_PARM_2)
     mov   r5, (_pcie_read_chunk_PARM_2 + 1)
 
@@ -36,7 +46,6 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
     movx  @dptr, a
 
   _pcie_rd_loop:
-    ; poll for completion
   _pcie_rd_poll:
     mov   dptr, #0xB296
     movx  a, @dptr
@@ -57,34 +66,54 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
     movx  a, @dptr
     mov   r0, a           ; DATA_0 (MSB)
 
-    ; increment ADDR_3 (0xB21B), propagate carry
+    ; increment 64-bit PCIe address by 4 (low 32 inline, high 32 via C call)
     mov   dptr, #0xB21B
     movx  a, @dptr
     add   a, #0x04
     movx  @dptr, a
-    jnc   _pcie_rd_noc1
-    dec   dpl
+    jnc   _pcie_rd_noc
+    dec   dpl             ; B21A = ADDR_2
     movx  a, @dptr
     add   a, #0x01
     movx  @dptr, a
-    jnc   _pcie_rd_noc1
-    dec   dpl
+    jnc   _pcie_rd_noc
+    dec   dpl             ; B219 = ADDR_1
     movx  a, @dptr
     add   a, #0x01
     movx  @dptr, a
-    jnc   _pcie_rd_noc1
-    dec   dpl
+    jnc   _pcie_rd_noc
+    dec   dpl             ; B218 = ADDR_0
     movx  a, @dptr
     add   a, #0x01
     movx  @dptr, a
-  _pcie_rd_noc1:
+    jnc   _pcie_rd_noc
+    ; carry into high 32: ADDR_HIGH_3 (B21F) = LSB
+    mov   dptr, #0xB21F
+    movx  a, @dptr
+    add   a, #0x01
+    movx  @dptr, a
+    jnc   _pcie_rd_noc
+    dec   dpl             ; B21E = ADDR_HIGH_2
+    movx  a, @dptr
+    add   a, #0x01
+    movx  @dptr, a
+    jnc   _pcie_rd_noc
+    dec   dpl             ; B21D = ADDR_HIGH_1
+    movx  a, @dptr
+    add   a, #0x01
+    movx  @dptr, a
+    jnc   _pcie_rd_noc
+    dec   dpl             ; B21C = ADDR_HIGH
+    movx  a, @dptr
+    add   a, #0x01
+    movx  @dptr, a
+  _pcie_rd_noc:
 
-    ; decrement count (r4:r5), check if more remain
+    ; decrement count, check if more remain
     dec   r4
     cjne  r4, #0xFF, _pcie_rd_nodec5
     dec   r5
   _pcie_rd_nodec5:
-    ; if r4:r5 == 0, this is the last — skip triggering next TLP
     mov   a, r4
     orl   a, r5
     jz    _pcie_rd_last
@@ -116,10 +145,10 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
     mov   r6, dpl
     mov   r7, dph
 
-    ; loop if count != 0
     mov   a, r4
     orl   a, r5
-    jnz   _pcie_rd_loop
+    jz    _pcie_rd_done
+    ljmp  _pcie_rd_loop
 
   _pcie_rd_done:
   __endasm;
@@ -176,27 +205,48 @@ static void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
     mov   a, #0x0F
     movx  @dptr, a
 
-    ; increment ADDR_3 (0xB21B), propagate carry
+    ; increment 64-bit PCIe address by 4 (low 32 inline, high 32 via C call)
     mov   dptr, #0xB21B
     movx  a, @dptr
     add   a, #0x04
     movx  @dptr, a
-    jnc   _pcie_wr_noc1
-    dec   dpl
+    jnc   _pcie_wr_noc
+    dec   dpl             ; B21A = ADDR_2
     movx  a, @dptr
     add   a, #0x01
     movx  @dptr, a
-    jnc   _pcie_wr_noc1
-    dec   dpl
+    jnc   _pcie_wr_noc
+    dec   dpl             ; B219 = ADDR_1
     movx  a, @dptr
     add   a, #0x01
     movx  @dptr, a
-    jnc   _pcie_wr_noc1
-    dec   dpl
+    jnc   _pcie_wr_noc
+    dec   dpl             ; B218 = ADDR_0
     movx  a, @dptr
     add   a, #0x01
     movx  @dptr, a
-  _pcie_wr_noc1:
+    jnc   _pcie_wr_noc
+    ; carry into high 32: ADDR_HIGH_3 (B21F) = LSB
+    mov   dptr, #0xB21F
+    movx  a, @dptr
+    add   a, #0x01
+    movx  @dptr, a
+    jnc   _pcie_wr_noc
+    dec   dpl             ; B21E = ADDR_HIGH_2
+    movx  a, @dptr
+    add   a, #0x01
+    movx  @dptr, a
+    jnc   _pcie_wr_noc
+    dec   dpl             ; B21D = ADDR_HIGH_1
+    movx  a, @dptr
+    add   a, #0x01
+    movx  @dptr, a
+    jnc   _pcie_wr_noc
+    dec   dpl             ; B21C = ADDR_HIGH
+    movx  a, @dptr
+    add   a, #0x01
+    movx  @dptr, a
+  _pcie_wr_noc:
 
     ; count down, loop if nonzero
     dec   r4

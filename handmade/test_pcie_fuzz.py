@@ -415,5 +415,160 @@ class TestFuzz(unittest.TestCase):
     self.assertEqual(got, data)
 
 
+  # === Address carry tests for streaming ===
+
+  def test_addr_16mb_boundary_streaming(self):
+    """Stream write/read across a 16MB (ADDR_0 carry) boundary."""
+    boundary = (self.vram + 0x1000000) & ~0xFFFFFF
+    base = boundary - 512  # 512 bytes before
+    n = 512  # 2048 bytes, 512 bytes past the boundary
+    data = make_pattern(n, seed=0xE00)
+    stream_write(self.handle, base, data)
+    got = stream_read(self.handle, base, len(data))
+    self.assertEqual(got, data)
+
+  def test_addr_4gb_boundary_streaming(self):
+    """Stream write/read across a 4GB boundary (carry from low 32 into high 32 bits).
+    VRAM BAR is at 0x800000000, so 0x8FFFFFFFC + 8 bytes = crosses 0x900000000."""
+    boundary = (self.vram & ~0xFFFFFFFF) + 0x100000000  # next 4GB boundary
+    base = boundary - 64  # 64 bytes before
+    n = 64  # 256 bytes, crossing the 4GB boundary
+    data = make_pattern(n, seed=0xE01)
+    print(f"\n  4GB test: base=0x{base:X} boundary=0x{boundary:X} end=0x{base+n*4:X}")
+    stream_write(self.handle, base, data)
+    got = stream_read(self.handle, base, len(data))
+    print(f"  got {len(got)} bytes, expected {len(data)}")
+    if got != data:
+      # find first mismatch
+      for i in range(min(len(got), len(data))):
+        if got[i] != data[i]:
+          dw = i // 4
+          print(f"  first mismatch at byte {i} (dword {dw}, addr 0x{base+i:X})")
+          print(f"  got:  {got[i:i+16].hex()}")
+          print(f"  want: {data[i:i+16].hex()}")
+          break
+    self.assertEqual(got, data)
+
+  def test_addr_256byte_carry_exact(self):
+    """Start exactly at a 256-byte boundary, write 256 bytes (forces ADDR_3 carry at end)."""
+    base = (self.vram + 0x70000) & ~0xFF
+    n = 64  # 256 bytes exactly
+    data = make_pattern(n, seed=0xE10)
+    stream_write(self.handle, base, data)
+    got = stream_read(self.handle, base, len(data))
+    self.assertEqual(got, data)
+
+  # === Cross-mode verification ===
+
+  def test_single_write_stream_read_many(self):
+    """Write 64 dwords via single TLP, read all 64 back via streaming."""
+    addr = self.vram + 0xE0000
+    vals = [0xFACE0000 | i for i in range(64)]
+    for i, v in enumerate(vals):
+      single_tlp_write(self.handle, addr + i * 4, v)
+    got = stream_read(self.handle, addr, 64 * 4)
+    got_vals = list(array.array('I', got))
+    self.assertEqual(got_vals, vals)
+
+  def test_stream_write_single_read_byte(self):
+    """Stream write, then single-TLP read individual bytes."""
+    addr = self.vram + 0xE1000
+    data = bytes(range(256)) * 4  # 1024 bytes of 0x00..0xFF repeated
+    stream_write(self.handle, addr, data)
+    for off in [0, 1, 2, 3, 100, 255, 256, 511]:
+      with self.subTest(offset=off):
+        expected = data[off]
+        got = single_tlp_read(self.handle, addr + off, size=1)
+        self.assertEqual(got, expected, f"byte at offset {off}: got 0x{got:02X}, expected 0x{expected:02X}")
+
+  # === Byte enable edge cases ===
+
+  def test_single_tlp_3byte_write_read(self):
+    """Write 3 bytes at offset 0 (byte enables 0x07), read back."""
+    base = self.vram + 0xE2000
+    single_tlp_write(self.handle, base, 0x00000000)  # clear
+    single_tlp_write(self.handle, base, 0x00ABCDEF, size=3)  # write bytes 0-2
+    got = single_tlp_read(self.handle, base)
+    self.assertEqual(got & 0x00FFFFFF, 0x00ABCDEF & 0x00FFFFFF,
+      f"3-byte write: got 0x{got:08X}")
+
+  def test_single_tlp_byte_at_each_offset(self):
+    """Write byte 0xAA at each offset 0-3, verify only that byte changed."""
+    base = self.vram + 0xE3000
+    for off in range(4):
+      single_tlp_write(self.handle, base, 0x00000000)  # clear
+      single_tlp_write(self.handle, base + off, 0xAA, size=1)
+      got = single_tlp_read(self.handle, base)
+      expected = 0xAA << (off * 8)
+      self.assertEqual(got, expected,
+        f"byte at offset {off}: got 0x{got:08X}, expected 0x{expected:08X}")
+
+  # === Large odd-size transfers ===
+
+  def test_large_odd_size(self):
+    """Write and read 100KB - 4 bytes (not a power of 2, not chunk-aligned)."""
+    n = (100 * 1024 // 4) - 1  # 25599 dwords
+    data = make_pattern(n, seed=0xF00)
+    addr = self.vram + 0x100000
+    stream_write(self.handle, addr, data)
+    got = stream_read(self.handle, addr, len(data))
+    self.assertEqual(got, data)
+
+  def test_1mb_minus_4(self):
+    """Write and read 1MB - 4 bytes."""
+    n = (1024 * 1024 // 4) - 1  # 262143 dwords
+    data = make_pattern(n, seed=0xF01)
+    addr = self.vram + 0x200000
+    stream_write(self.handle, addr, data)
+    got = stream_read(self.handle, addr, len(data))
+    self.assertEqual(got, data)
+
+  # === 0xF2 SRAM DMA then 0xF0 streaming ===
+
+  def test_sram_dma_then_streaming(self):
+    """Do an 0xF2 SRAM DMA write, then a normal 0xF0 streaming write/read."""
+    # 0xF2: write 1 sector (512 bytes) to SRAM
+    sectors = 1
+    wValue = sectors & 0x7FFF
+    wIndex = (1 & 0xFF) << 8  # 1 slot
+    ret = libusb.libusb_control_transfer(self.handle, 0x40, 0xF2, wValue, wIndex, None, 0, 1000)
+    assert ret >= 0, f"0xF2 setup failed: {ret}"
+    sram_data = bytes([i & 0xFF for i in range(512)])
+    buf = (ctypes.c_ubyte * 512)(*sram_data)
+    transferred = ctypes.c_int()
+    ret = libusb.libusb_bulk_transfer(self.handle, EP_OUT, buf, 512, ctypes.byref(transferred), 5000)
+    assert ret == 0, f"SRAM bulk write failed: {ret}"
+    time.sleep(0.01)
+
+    # Now do normal 0xF0 streaming
+    addr = self.vram + 0x300000
+    n = 128
+    data = make_pattern(n, seed=0xF10)
+    stream_write(self.handle, addr, data)
+    got = stream_read(self.handle, addr, len(data))
+    self.assertEqual(got, data, "streaming after SRAM DMA failed")
+
+  # === One dword ===
+
+  def test_one_dword_write_read(self):
+    """Streaming write and read of exactly 1 dword."""
+    addr = self.vram + 0x310000
+    data = struct.pack('<I', 0xDEADBEEF)
+    stream_write(self.handle, addr, data)
+    got = stream_read(self.handle, addr, 4)
+    self.assertEqual(struct.unpack('<I', got)[0], 0xDEADBEEF)
+
+  def test_one_dword_cross_verify(self):
+    """Write 1 dword via streaming, read via single TLP (and vice versa)."""
+    addr = self.vram + 0x311000
+    stream_write(self.handle, addr, struct.pack('<I', 0xCAFEBABE))
+    got = single_tlp_read(self.handle, addr)
+    self.assertEqual(got, 0xCAFEBABE)
+
+    single_tlp_write(self.handle, addr, 0x12345678)
+    got = stream_read(self.handle, addr, 4)
+    self.assertEqual(struct.unpack('<I', got)[0], 0x12345678)
+
+
 if __name__ == '__main__':
   pytest.main([__file__, "-v", "-s", "--tb=short", *sys.argv[1:]])

@@ -948,6 +948,7 @@
 #define REG_PCIE_ADDR_2         XDATA_REG8V(0xB21A)
 #define REG_PCIE_ADDR_3         XDATA_REG8V(0xB21B)
 #define REG_PCIE_ADDR_HIGH      XDATA_REG8V(0xB21C)
+#define REG_PCIE_ADDR_HIGH_0    XDATA_REG8V(0xB21C)
 #define REG_PCIE_ADDR_HIGH_1    XDATA_REG8V(0xB21D)  // Upper address byte 1 (64-bit addressing)
 #define REG_PCIE_ADDR_HIGH_2    XDATA_REG8V(0xB21E)  // Upper address byte 2 (64-bit addressing)
 #define REG_PCIE_ADDR_HIGH_3    XDATA_REG8V(0xB21F)  // Upper address byte 3 (64-bit addressing)
