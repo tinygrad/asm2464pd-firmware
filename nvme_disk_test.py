@@ -63,6 +63,39 @@ class BOTDev:
         ret = libusb.libusb_bulk_transfer(self.usb.handle, 0x81, csw, 13, ctypes.byref(xfer2), timeout)
         return csw[12] if xfer2.value == 13 else -1
 
+    def read_reg(self, addr, size=1):
+        """Read XDATA register via SCSI vendor command 0xE4 (stock firmware encoding)."""
+        addr_enc = (addr & 0x1FFFF) | 0x500000
+        cdb = struct.pack('>BBBHB', 0xE4, size, addr_enc >> 16, addr_enc & 0xFFFF, 0)
+        data, s = self.scsi(cdb, size)
+        assert s == 0, f"E4 read 0x{addr:04X} failed: status={s}"
+        return data
+
+    def write_reg(self, addr, val):
+        """Write XDATA register via SCSI vendor command 0xE5 (stock firmware encoding)."""
+        addr_enc = (addr & 0x1FFFF) | 0x500000
+        cdb = struct.pack('>BBBHB', 0xE5, val, addr_enc >> 16, addr_enc & 0xFFFF, 0)
+        _, s = self.scsi(cdb, 0)
+        assert s == 0, f"E5 write 0x{addr:04X}=0x{val:02X} failed: status={s}"
+
+    def dump_regs(self):
+        """Dump key PCIe/NVMe link state registers."""
+        regs = [
+            (0xB450, "LTSSM_STATE"),
+            (0xB451, "LTSSM_B451"),
+            (0xB455, "LTSSM_B455"),
+            (0xB434, "PCIE_LINK_STATE"),
+            (0xB436, "PCIE_LANE_CONFIG"),
+            (0xB432, "POWER_CTRL_B432"),
+            (0xB431, "TUNNEL_LINK_STATUS"),
+            (0xB480, "PCIE_PERST_CTRL"),
+            (0xC659, "PCIE_LANE_CTRL"),
+            (0xB403, "TUNNEL_CTRL_B403"),
+        ]
+        for addr, name in regs:
+            val = self.read_reg(addr)
+            print(f"  0x{addr:04X} {name:24s} = 0x{val[0]:02X}")
+
     def inquiry(self):
         data, s = self.scsi(b'\x12\x00\x00\x00\x24\x00', 36)
         assert s == 0, f"INQUIRY failed: status={s}"
@@ -114,6 +147,11 @@ class BOTDev:
 def main():
     dev = BOTDev()
 
+    if "--dump-regs" in sys.argv:
+        print("=== Register Dump ===")
+        dev.dump_regs()
+        return
+
     # SCSI init
     dev.inquiry()
     if not dev.test_unit_ready():
@@ -154,6 +192,34 @@ def main():
     verify = dev.read16(test_lba, 1)
     assert verify == orig, "restore failed!"
     print("Original data restored.")
+
+    # real test
+    count = 6
+    cdb = struct.pack('>BBQIBB', 0x88, 0x01, test_lba, count, 0, 0)
+    xfer_len = 512*count
+    dev._tag += 1
+    flags = 0x80
+    cbw = struct.pack('<III', 0x43425355, dev._tag, xfer_len)
+    cbw += struct.pack('BBB', flags, 0, len(cdb))
+    cbw += cdb + b'\x00' * (16 - len(cdb))
+    dev.usb._bulk_out(2, cbw)
+
+    time.sleep(0.5)
+
+    buf = (ctypes.c_ubyte * xfer_len)()
+    xfer = ctypes.c_int(0)
+    ret = libusb.libusb_bulk_transfer(dev.usb.handle, 0x81, buf, 1024, ctypes.byref(xfer), 1000)
+    print(ret)
+    ret = libusb.libusb_bulk_transfer(dev.usb.handle, 0x81, buf, 1024, ctypes.byref(xfer), 1000)
+    print(ret)
+    ret = libusb.libusb_bulk_transfer(dev.usb.handle, 0x81, buf, xfer_len-2048, ctypes.byref(xfer), 1000)
+    print(ret)
+
+    csw = (ctypes.c_ubyte * 13)()
+    xfer2 = ctypes.c_int(0)
+    ret = libusb.libusb_bulk_transfer(dev.usb.handle, 0x81, csw, 13, ctypes.byref(xfer2), 1000)
+    print(ret)
+
 
 if __name__ == "__main__":
     main()

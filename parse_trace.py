@@ -67,6 +67,7 @@ CATEGORY_COLORS = {
     "POLL":   C.POLL,
     "W":      C.WRITE,
     "BUF":    C.CSW,
+    "USBMON": C.UAS,
 }
 
 # ─── USB standard request names ──────────────────────────────────────────────
@@ -215,6 +216,7 @@ def parse_trace(filename):
         r'\[\s*(\d+)\]\s+PC=0x([0-9A-Fa-f]+)\s+(Read|Write)\s+0x([0-9A-Fa-f]+)\s+=\s+0x([0-9A-Fa-f]+)(?:\s+(\S.*))?')
     interrupt_re = re.compile(r'\[PROXY\] >>> INTERRUPT mask=0x(\w+) \((\w+)\)')
     reti_re = re.compile(r'\[EMU\] RETI')
+    usbmon_re = re.compile(r'\[\s*(\d+)\]\s+\[USBMON\]\s+(.*)')
 
     events = []
     read_run = ReadRun()
@@ -255,31 +257,48 @@ def parse_trace(filename):
     dma_addr_lo = 0
     dma_addr_hi = 0
 
-    # D800-DFFF buffer accumulator
-    buf_writes = []       # list of (addr, val)
-    buf_start_cycle = 0
+    # Generic buffer accumulator for data-buffer regions.
+    # Regions: 0x8000-0x8FFF, 0x9E00-0x9FFF, 0xD800-0xDFFF
+    BUF_REGIONS = {
+        0x8000: (0x8000, 0x8FFF),
+        0x9E00: (0x9E00, 0x9FFF),
+        0xD800: (0xD800, 0xDFFF),
+    }
+    buf_acc = {}  # region_base -> {'writes': [(addr,val),...], 'cycle': int}
 
-    def flush_buf():
-        nonlocal buf_writes
-        if not buf_writes:
+    def _buf_region(addr):
+        """Return the region base for addr, or None."""
+        for base, (lo, hi) in BUF_REGIONS.items():
+            if lo <= addr <= hi:
+                return base
+        return None
+
+    def flush_buf_region(region_base):
+        """Flush accumulated writes for one buffer region."""
+        rec = buf_acc.get(region_base)
+        if not rec or not rec['writes']:
             return
-        data = buf_writes
-        buf_writes = []
+        data = rec['writes']
+        start_cycle = rec['cycle']
+        rec['writes'] = []
         count = len(data)
         base_addr = data[0][0]
-        # Check if all zeros
+        offset = base_addr - region_base
         all_zero = all(v == 0 for _, v in data)
+        tag = f"{region_base:04X}"
         if all_zero:
-            events.append((buf_start_cycle, "BUF",
-                           f"D800 buf: {count}x 0x00", 0xD800))
+            events.append((start_cycle, "BUF",
+                           f"{tag} buf: {count}x 0x00", region_base))
         else:
-            # Print hex dump, compact
             hex_bytes = " ".join(f"{v:02X}" for _, v in data)
-            # Try to decode as ASCII where printable
             ascii_str = "".join(chr(v) if 0x20 <= v < 0x7F else "." for _, v in data)
-            events.append((buf_start_cycle, "BUF",
-                           f"D800+0x{base_addr - 0xD800:03X} [{count}]: {hex_bytes}  |{ascii_str}|",
-                           0xD800))
+            events.append((start_cycle, "BUF",
+                           f"{tag}+0x{offset:03X} [{count}]: {hex_bytes}  |{ascii_str}|",
+                           region_base))
+
+    def flush_all_bufs():
+        for rb in BUF_REGIONS:
+            flush_buf_region(rb)
 
     uas_scsi_tag = 0  # tag associated with current SCSI command
 
@@ -310,6 +329,14 @@ def parse_trace(filename):
                 events.append((last_cycle, "RETI", "return from interrupt"))
                 continue
 
+            um = usbmon_re.search(line)
+            if um:
+                read_run.flush(events)
+                cyc = int(um.group(1))
+                last_cycle = cyc
+                events.append((cyc, "USBMON", um.group(2)))
+                continue
+
             m = line_re.search(line)
             if not m:
                 continue
@@ -327,7 +354,7 @@ def parse_trace(filename):
 
             # ── Polling: accumulate reads, flush on write ─────────────────
             if is_read:
-                flush_buf()
+                flush_all_bufs()
                 read_run.add(cycle, addr, val)
             else:
                 read_run.flush(events)
@@ -335,15 +362,23 @@ def parse_trace(filename):
             # ═══════════════════════════════════════════════════════════════
             # WRITES
             # ═══════════════════════════════════════════════════════════════
-            if is_write and 0xD800 <= addr <= 0xDFFF:
-                # Accumulate buffer writes; flush if non-consecutive address
-                if buf_writes and addr != buf_writes[-1][0] + 1:
-                    flush_buf()
-                if not buf_writes:
-                    buf_start_cycle = cycle
-                buf_writes.append((addr, val))
+            region = _buf_region(addr) if is_write else None
+            if is_write and region is not None:
+                # Flush all OTHER buffer regions
+                for rb in BUF_REGIONS:
+                    if rb != region:
+                        flush_buf_region(rb)
+                rec = buf_acc.get(region)
+                if rec is None:
+                    rec = {'writes': [], 'cycle': 0}
+                    buf_acc[region] = rec
+                if rec['writes'] and addr != rec['writes'][-1][0] + 1:
+                    flush_buf_region(region)
+                if not rec['writes']:
+                    rec['cycle'] = cycle
+                rec['writes'].append((addr, val))
             elif is_write:
-                flush_buf()
+                flush_all_bufs()
                 events.append((cycle, "W", f"{addr:04X}=0x{val:02X}  {reg_name}", addr))
 
             # ─── Decoded overlays ─────────────────────────────────────────
@@ -528,7 +563,7 @@ def parse_trace(filename):
                     scsi_cdb[offset] = val
 
     read_run.flush(events)
-    flush_buf()
+    flush_all_bufs()
     flush_scsi()
 
     # ─── Sort by cycle ────────────────────────────────────────────────────────
@@ -541,6 +576,235 @@ def parse_trace(filename):
             norm.append(ev)  # (cycle, "W"/"BUF", msg, addr)
         else:
             norm.append((ev[0], ev[1], ev[2], 0))
+
+    # ─── Collapse PCIe TLP transactions ─────────────────────────────────────
+    # Detect sequences of register writes/polls that form a single PCIe
+    # config/memory read or write, and replace them with one PCIE event.
+    #
+    # PCIe TLP register set:
+    #   B210-B21F: TLP header (fmt/type, ctrl, length, byte_en, address)
+    #   B220-B223: TLP data (write payload / completion read data)
+    #   B254:      Trigger (write 0x0F to execute)
+    #   B296:      Status/arm (0x01=error, 0x02=complete, 0x04=kick, 0x08=reset)
+    #   B284:      Completion type (bit 0 = has data)
+    #   B22A-B22D: Completion header
+    #
+    # Transaction patterns:
+    #   Stock FW cfg read:  clear B210-B21B, set header, B296 arm, B254 trigger,
+    #                       B296 completion, POLL B22x/B284/B220-B223, store to 80xx
+    #   Handmade MWr64:     B296=0x08, B220-B223 data, B218-B21F addr, B217 byte_en,
+    #                       B210 fmt_type, B254 trigger, B296=0x04
+
+    PCIE_SETUP_REGS = set(range(0xB210, 0xB224))  # B210-B223: header + data
+    PCIE_STATUS_ADDR = 0xB296
+    PCIE_TRIGGER_ADDR = 0xB254
+
+    TLP_TYPES = {
+        0x00: "MRd",       0x04: "CfgRd0",   0x05: "CfgRd1",
+        0x40: "MWr",       0x44: "CfgWr0",   0x45: "CfgWr1",
+        0x20: "MRd64",    0x60: "MWr64",
+    }
+
+    def _extract_val(msg):
+        """Extract value from 'XXXX=0xYY  ...' message."""
+        idx = msg.find("=0x")
+        if idx >= 0:
+            return int(msg[idx+3:idx+5], 16)
+        return 0
+
+    def _decode_pcie_txn(tlp_header, tlp_data, cpl_data, store_vals):
+        """Decode a PCIe TLP transaction from accumulated register values."""
+        fmt_type = tlp_header.get(0xB210, None)
+        if fmt_type is None:
+            # No header set — streaming pattern (fmt_type set by prior txn)
+            if cpl_data or store_vals:
+                # Read completion
+                if store_vals and len(store_vals) >= 4:
+                    data_val = (store_vals[0] << 24) | (store_vals[1] << 16) | \
+                               (store_vals[2] << 8) | store_vals[3]
+                elif cpl_data:
+                    d0 = cpl_data.get(0xB220, 0)
+                    d1 = cpl_data.get(0xB221, 0)
+                    d2 = cpl_data.get(0xB222, 0)
+                    d3 = cpl_data.get(0xB223, 0)
+                    data_val = (d0 << 24) | (d1 << 16) | (d2 << 8) | d3
+                else:
+                    data_val = 0
+                return f"TLP read -> 0x{data_val:08X}"
+            elif tlp_data:
+                d0 = tlp_data.get(0xB220, 0)
+                d1 = tlp_data.get(0xB221, 0)
+                d2 = tlp_data.get(0xB222, 0)
+                d3 = tlp_data.get(0xB223, 0)
+                data_val = (d0 << 24) | (d1 << 16) | (d2 << 8) | d3
+                return f"TLP write data=0x{data_val:08X}"
+            else:
+                return "TLP exec"
+
+        has_data = bool(fmt_type & 0x40)
+        is_4dw = bool(fmt_type & 0x20)
+        type_name = TLP_TYPES.get(fmt_type, f"TLP(0x{fmt_type:02X})")
+
+        a0 = tlp_header.get(0xB218, 0)
+        a1 = tlp_header.get(0xB219, 0)
+        a2 = tlp_header.get(0xB21A, 0)
+        a3 = tlp_header.get(0xB21B, 0)
+        addr32 = (a0 << 24) | (a1 << 16) | (a2 << 8) | a3
+
+        is_cfg = (fmt_type & 0x1F) in (0x04, 0x05)
+
+        if is_4dw:
+            ah0 = tlp_header.get(0xB21C, 0)
+            ah1 = tlp_header.get(0xB21D, 0)
+            ah2 = tlp_header.get(0xB21E, 0)
+            ah3 = tlp_header.get(0xB21F, 0)
+            addr_hi = (ah0 << 24) | (ah1 << 16) | (ah2 << 8) | ah3
+        else:
+            addr_hi = 0
+
+        if is_cfg:
+            bus = (addr32 >> 24) & 0xFF
+            dev = (addr32 >> 19) & 0x1F
+            func = (addr32 >> 16) & 0x07
+            reg = addr32 & 0x0FFC
+            addr_str = f"B{bus}:D{dev}:F{func} reg=0x{reg:03X}"
+        elif is_4dw and addr_hi:
+            addr_str = f"0x{addr_hi:08X}_{addr32:08X}"
+        else:
+            addr_str = f"0x{addr32:08X}"
+
+        if has_data:
+            d0 = tlp_data.get(0xB220, 0)
+            d1 = tlp_data.get(0xB221, 0)
+            d2 = tlp_data.get(0xB222, 0)
+            d3 = tlp_data.get(0xB223, 0)
+            data_val = (d0 << 24) | (d1 << 16) | (d2 << 8) | d3
+            return f"{type_name} {addr_str} data=0x{data_val:08X}"
+        elif cpl_data or store_vals:
+            src = cpl_data if cpl_data else {}
+            # Prefer store_vals (actual data stored) if available
+            if store_vals and len(store_vals) >= 4:
+                data_val = (store_vals[0] << 24) | (store_vals[1] << 16) | \
+                           (store_vals[2] << 8) | store_vals[3]
+            else:
+                d0 = src.get(0xB220, 0)
+                d1 = src.get(0xB221, 0)
+                d2 = src.get(0xB222, 0)
+                d3 = src.get(0xB223, 0)
+                data_val = (d0 << 24) | (d1 << 16) | (d2 << 8) | d3
+            return f"{type_name} {addr_str} -> 0x{data_val:08X}"
+        else:
+            return f"{type_name} {addr_str}"
+
+    def _try_pcie_txn(norm, start):
+        """Try to parse a PCIe TLP transaction starting at index `start`.
+
+        Returns (collapsed_event, end_index) on success, or None if not a TLP.
+        The start event must be a write to a PCIe setup/status register.
+        """
+        tlp_header = {}
+        tlp_data = {}
+        cpl_data = {}
+        store_vals = []
+        triggered = False
+        start_cycle = norm[start][0]
+
+        j = start
+        while j < len(norm):
+            cy, etype, msg, addr = norm[j]
+
+            if etype == "W":
+                # TLP header + address registers
+                if 0xB210 <= addr <= 0xB21F:
+                    tlp_header[addr] = _extract_val(msg)
+                    j += 1
+                    continue
+                # TLP data registers
+                if 0xB220 <= addr <= 0xB223:
+                    if not triggered:
+                        tlp_data[addr] = _extract_val(msg)
+                    j += 1
+                    continue
+                # PCIe status/arm
+                if addr == PCIE_STATUS_ADDR:
+                    j += 1
+                    continue
+                # Trigger
+                if addr == PCIE_TRIGGER_ADDR:
+                    triggered = True
+                    j += 1
+                    continue
+                # Result store to 80xx after trigger (individual writes)
+                if 0x8000 <= addr <= 0x8FFF and triggered:
+                    store_vals.append(_extract_val(msg))
+                    j += 1
+                    if len(store_vals) >= 4:
+                        break
+                    continue
+                # Any other write — stop
+                break
+            elif etype == "BUF":
+                # BUF at 0x8000: accumulated 80xx writes (result store)
+                if addr == 0x8000 and triggered:
+                    # Extract byte values from BUF hex dump
+                    # Format: "8000+0xNNN [count]: XX XX XX ...  |ascii|"
+                    hex_match = re.search(r'\]: ((?:[0-9A-F]{2} ?)+)', msg)
+                    if hex_match:
+                        for hb in hex_match.group(1).strip().split():
+                            store_vals.append(int(hb, 16))
+                    j += 1
+                    break
+                break
+            elif etype == "POLL":
+                if triggered and ("B22" in msg or "B284" in msg):
+                    # Extract completion data from POLL message
+                    for part in msg.split("  "):
+                        part = part.strip()
+                        if "=" in part:
+                            preg, prest = part.split("=", 1)
+                            pval = prest.split(" ")[0]
+                            try:
+                                preg_addr = int(preg.strip(), 16)
+                                pval_int = int(pval, 16)
+                                if 0xB220 <= preg_addr <= 0xB223:
+                                    cpl_data[preg_addr] = pval_int
+                            except ValueError:
+                                pass
+                    j += 1
+                    continue
+                break
+            else:
+                break
+
+        if not triggered:
+            return None
+
+        txn_msg = _decode_pcie_txn(tlp_header, tlp_data, cpl_data, store_vals)
+        if txn_msg:
+            return ((start_cycle, "PCIE", txn_msg, 0xB200), j)
+        return None
+
+    # Walk events and collapse PCIe transactions
+    pcie_out = []
+    i_pcie = 0
+    while i_pcie < len(norm):
+        ev = norm[i_pcie]
+        cy, etype, msg, addr = ev
+
+        # Candidate start: write to any PCIe TLP setup register
+        if etype == "W" and (addr in PCIE_SETUP_REGS or addr == PCIE_STATUS_ADDR
+                              or addr == PCIE_TRIGGER_ADDR):
+            result = _try_pcie_txn(norm, i_pcie)
+            if result:
+                collapsed_ev, end_idx = result
+                pcie_out.append(collapsed_ev)
+                i_pcie = end_idx
+                continue
+
+        pcie_out.append(ev)
+        i_pcie += 1
+
+    norm = pcie_out
 
     # ─── Collapse repeating blocks ───────────────────────────────────────────
     # Build a signature for each event (type + msg, ignoring cycle/addr).
