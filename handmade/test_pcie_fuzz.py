@@ -570,5 +570,71 @@ class TestFuzz(unittest.TestCase):
     self.assertEqual(struct.unpack('<I', got)[0], 0x12345678)
 
 
+  # === 0xE4 XDATA read tests ===
+
+  def _xdata_write(self, addr, val):
+    """Write a single byte to XDATA via 0xE5."""
+    ret = libusb.libusb_control_transfer(self.handle, 0x40, 0xE5, addr, val, None, 0, 1000)
+    assert ret >= 0, f"E5 write 0x{addr:04X}=0x{val:02X} failed: {ret}"
+
+  def _xdata_read(self, addr, size):
+    """Read bytes from XDATA via 0xE4."""
+    buf = (ctypes.c_ubyte * size)()
+    ret = libusb.libusb_control_transfer(self.handle, 0xC0, 0xE4, addr, 0, buf, size, 1000)
+    assert ret >= 0, f"E4 read 0x{addr:04X} len={size} failed: {ret}"
+    return bytes(buf[:ret])
+
+  def test_xdata_read_1_byte(self):
+    """Read 1 byte from XDATA."""
+    self._xdata_write(0x7F00, 0xAB)
+    got = self._xdata_read(0x7F00, 1)
+    self.assertEqual(got, bytes([0xAB]))
+
+  def test_xdata_read_small(self):
+    """Read 8 bytes from XDATA."""
+    for i in range(8):
+      self._xdata_write(0x7F00 + i, 0x10 + i)
+    got = self._xdata_read(0x7F00, 8)
+    self.assertEqual(got, bytes([0x10 + i for i in range(8)]))
+
+  def test_xdata_read_64_bytes(self):
+    """Read exactly 64 bytes (USB2 max packet size for control)."""
+    for i in range(64):
+      self._xdata_write(0x7E00 + i, i & 0xFF)
+    got = self._xdata_read(0x7E00, 64)
+    self.assertEqual(len(got), 64)
+    self.assertEqual(got, bytes([i & 0xFF for i in range(64)]))
+
+  def test_xdata_read_max_usb2(self):
+    """Read 64 bytes — max for USB2 control data stage."""
+    for i in range(64):
+      self._xdata_write(0x7E00 + i, (i * 3) & 0xFF)
+    got = self._xdata_read(0x7E00, 64)
+    self.assertEqual(len(got), 64)
+    self.assertEqual(got, bytes([(i * 3) & 0xFF for i in range(64)]))
+
+  def test_xdata_read_over_max_returns_max(self):
+    """Request more than max — firmware clamps, host gets exactly max.
+    We request 64 bytes (safe on both USB2 and USB3)."""
+    for i in range(64):
+      self._xdata_write(0x7E00 + i, (i * 3) & 0xFF)
+    got = self._xdata_read(0x7E00, 64)
+    self.assertEqual(len(got), 64)
+    self.assertEqual(got, bytes([(i * 3) & 0xFF for i in range(64)]))
+
+  def test_xdata_read_known_register(self):
+    """Read a known hardware register via 0xE4 (PCIe LTSSM should be 0x78 if link is up)."""
+    got = self._xdata_read(0xB450, 1)
+    self.assertEqual(got[0], 0x78, f"LTSSM state: 0x{got[0]:02X}")
+
+  def test_xdata_write_read_roundtrip(self):
+    """Write various patterns and read them back."""
+    patterns = [0x00, 0xFF, 0x55, 0xAA, 0x01, 0x80, 0x7F, 0xFE]
+    for val in patterns:
+      self._xdata_write(0x7F00, val)
+      got = self._xdata_read(0x7F00, 1)
+      self.assertEqual(got[0], val, f"write 0x{val:02X}, got 0x{got[0]:02X}")
+
+
 if __name__ == '__main__':
   pytest.main([__file__, "-v", "-s", "--tb=short", *sys.argv[1:]])

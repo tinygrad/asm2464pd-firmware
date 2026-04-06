@@ -211,7 +211,8 @@ static void handle_usb_control(void) {
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
       uint8_t bank = REG_USB_SETUP_WIDX_H;
-      uint8_t rlen = (wLen > 255) ? 255 : (uint8_t)wLen;
+      uint8_t maxlen = is_usb2 ? 64 : 255;
+      uint8_t rlen = (wLen > maxlen) ? maxlen : (uint8_t)wLen;
       uint8_t vi;
       for (vi = 0; vi < rlen; vi++) {
         if (bank) DPX = bank;
