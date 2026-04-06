@@ -52,8 +52,9 @@ def flash_transaction(h, cmd, addr=0, data_len=0, addr_len=0x07, mode=0x00):
   xdata_write(h, 0xC8A1, addr & 0xFF)
   xdata_write(h, 0xC8A2, (addr >> 8) & 0xFF)
   xdata_write(h, 0xC8AB, (addr >> 16) & 0xFF)
-  xdata_write(h, 0xC8A3, data_len & 0xFF)
-  xdata_write(h, 0xC8A4, (data_len >> 8) & 0xFF)
+  # DATA_LEN is big-endian: C8A3=high byte, C8A4=low byte
+  xdata_write(h, 0xC8A3, (data_len >> 8) & 0xFF)
+  xdata_write(h, 0xC8A4, data_len & 0xFF)
   xdata_write(h, 0xC8A9, 0x01)
   flash_poll_busy(h)
   xdata_write(h, 0xC8AD, 0x00)
@@ -87,13 +88,19 @@ def flash_jedec_id(h):
   return xdata_read(h, 0x7000, 3)
 
 def flash_read(h, addr, size):
-  """Read from SPI flash. Uses DATA_LEN=0xFF00 to get up to 255 valid bytes per transaction."""
+  """Read from SPI flash. DATA_LEN registers: C8A3=page_count(hi), C8A4=byte_offset(lo).
+  Reads in 4KB chunks (A3=0x10) — fills 0x7000-0x7FFF, read back via E4."""
   result = bytearray()
   offset = 0
   while offset < size:
-    chunk = min(255, size - offset)
-    flash_transaction(h, cmd=0x03, addr=addr + offset, data_len=0xFF00, addr_len=0x07, mode=0x00)
-    result.extend(xdata_read(h, 0x7000, chunk))
+    chunk = min(4096, size - offset)
+    flash_transaction(h, cmd=0x03, addr=addr + offset, data_len=chunk, addr_len=0x07, mode=0x00)
+    # Read from 0x7000 via E4 (255 bytes max per E4 call)
+    read = 0
+    while read < chunk:
+      n = min(255, chunk - read)
+      result.extend(xdata_read(h, 0x7000 + read, n))
+      read += n
     offset += chunk
   return bytes(result)
 
@@ -105,9 +112,10 @@ def flash_block_erase(h, addr):
   flash_wait_wip(h)
 
 def flash_page_program(h, addr, size):
-  """Write size bytes from 0x7000 buffer to flash."""
+  """Write size bytes from 0x7000 buffer to flash.
+  Stock trace uses data_len=0x8000 (32KB) for page program."""
   flash_wren(h)
-  flash_transaction(h, cmd=0x02, addr=addr, data_len=size, addr_len=0x07, mode=0x01)
+  flash_transaction(h, cmd=0x02, addr=addr, data_len=0x8000, addr_len=0x07, mode=0x01)
   flash_wait_wip(h)
 
 def bulk_out(h, data):
@@ -121,13 +129,30 @@ def bulk_out(h, data):
   time.sleep(0.001)
 
 def flash_write(h, addr, firmware):
-  """Write firmware to flash: erase blocks, then write pages via bulk OUT + page program."""
+  """Write firmware to flash: save config, erase blocks, restore config, write firmware."""
   total = len(firmware)
+
+  # Save config (first 256 bytes) if erase would destroy it
+  config = None
+  erase_start = addr & ~0xFFFF
+  if erase_start == 0:
+    print("  Saving config (0x000-0x0FF)...")
+    config = flash_read(h, 0, 256)
+
   # Erase needed 64KB blocks
   erase_end = (addr + total + 0xFFFF) & ~0xFFFF
-  for block in range(addr & ~0xFFFF, erase_end, 0x10000):
+  for block in range(erase_start, erase_end, 0x10000):
     print(f"  Erasing block at 0x{block:05X}...")
     flash_block_erase(h, block)
+
+  # Restore config if we saved it
+  if config is not None:
+    print("  Restoring config...")
+    for off in range(0, 256, 128):
+      chunk = config[off:off+128]
+      if not all(b == 0xFF for b in chunk):
+        bulk_out(h, chunk)
+        flash_page_program(h, off, 128)
 
   # Write in 128-byte chunks — 0x7000 buffer only reliably holds 128 bytes
   # (upper half gets overwritten by firmware code/ISR)
@@ -186,7 +211,7 @@ def main():
       print(f"  {addr + off:05X}: {hex_str:<48s} {ascii_str}")
   elif len(sys.argv) >= 2 and not sys.argv[1].startswith('-'):
     fw_path = sys.argv[1]
-    flash_addr = int(sys.argv[sys.argv.index('--addr') + 1], 0) if '--addr' in sys.argv else 0x0000
+    flash_addr = int(sys.argv[sys.argv.index('--addr') + 1], 0) if '--addr' in sys.argv else 0x100
     with open(fw_path, 'rb') as f:
       fw = f.read()
     print(f"Firmware: {fw_path} ({len(fw)} bytes)")
@@ -203,8 +228,19 @@ def main():
     else:
       print(f"FAIL: {errors} byte mismatches")
       sys.exit(1)
+    # Reboot device to run new firmware
+    if '--no-reset' not in sys.argv:
+      print("\nResetting device...")
+      libusb.libusb_release_interface(h, 0)
+      libusb.libusb_close(h)
+      libusb.libusb_exit(ctx)
+      import subprocess
+      subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), '..', 'ftdi_debug.py'), '-rn'],
+                     capture_output=True)
+      print("Done! Device should reboot with new firmware.")
+      return
   else:
-    print(f"Usage: {sys.argv[0]} <firmware.bin> [--addr 0xNNNN]")
+    print(f"Usage: {sys.argv[0]} <firmware.bin>")
     print(f"       {sys.argv[0]} --read <addr> [size]")
     print(f"       {sys.argv[0]} --id")
 

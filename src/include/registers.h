@@ -1594,17 +1594,21 @@
 // SPI Flash Controller (0xC89F-0xC8AE)
 //=============================================================================
 #define REG_FLASH_CON           XDATA_REG8(0xC89F)
-#define REG_FLASH_ADDR_LO       XDATA_REG8(0xC8A1)
-#define REG_FLASH_ADDR_MD       XDATA_REG8(0xC8A2)
-#define REG_FLASH_DATA_LEN      XDATA_REG8(0xC8A3)
-#define REG_FLASH_DATA_LEN_HI   XDATA_REG8(0xC8A4)
-#define REG_FLASH_DIV           XDATA_REG8(0xC8A6)
-#define REG_FLASH_CSR           XDATA_REG8(0xC8A9)
-#define   FLASH_CSR_BUSY          0x01  // Bit 0: Flash controller busy
-#define REG_FLASH_CMD           XDATA_REG8(0xC8AA)
-#define REG_FLASH_ADDR_HI       XDATA_REG8(0xC8AB)
-#define REG_FLASH_ADDR_LEN      XDATA_REG8(0xC8AC)
-#define   FLASH_ADDR_LEN_MASK     0xFC  // Bits 2-7: Address length (upper bits)
+#define REG_FLASH_ADDR_LO       XDATA_REG8(0xC8A1)  /* SPI addr[7:0] */
+#define REG_FLASH_ADDR_MD       XDATA_REG8(0xC8A2)  /* SPI addr[15:8] */
+#define REG_FLASH_DATA_PAGE_CNT XDATA_REG8(0xC8A3)  /* Transfer length: page count (256 bytes per page) */
+#define REG_FLASH_DATA_BYTE_OFS XDATA_REG8(0xC8A4)  /* Transfer length: byte offset within page */
+#define REG_FLASH_DATA_LEN      REG_FLASH_DATA_PAGE_CNT  /* Legacy alias */
+#define REG_FLASH_DATA_LEN_HI   REG_FLASH_DATA_BYTE_OFS  /* Legacy alias */
+#define REG_FLASH_DIV           XDATA_REG8(0xC8A6)  /* SPI clock divider */
+#define REG_FLASH_CSR           XDATA_REG8(0xC8A9)  /* Write 0x01 to trigger transaction */
+#define   FLASH_CSR_BUSY          0x01  // Bit 0: Transaction in progress
+#define REG_FLASH_CMD           XDATA_REG8(0xC8AA)  /* SPI command byte */
+#define REG_FLASH_ADDR_HI       XDATA_REG8(0xC8AB)  /* SPI addr[23:16] */
+#define REG_FLASH_ADDR_LEN      XDATA_REG8(0xC8AC)  /* SPI address mode control */
+#define   FLASH_ADDR_LEN_MASK     0xFC  // Bits 2-7 (stock code reads & masks these)
+#define   FLASH_ADDR_LEN_NOADDR   0x04  // No address bytes sent (bits 0-1 = 0)
+#define   FLASH_ADDR_LEN_3BYTE    0x07  // 3 address bytes sent (bits 0-1 = 0x03)
 #define REG_FLASH_MODE          XDATA_REG8(0xC8AD)
 #define   FLASH_MODE_ENABLE       0x01  // Bit 0: Flash mode enable
 #define REG_FLASH_BUF_OFFSET    XDATA_REG16(0xC8AE)

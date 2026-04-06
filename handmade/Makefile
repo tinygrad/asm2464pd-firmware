@@ -42,7 +42,7 @@ PROXY_TARGET = $(BUILD_DIR)/proxy
 PROXY_HEX = $(PROXY_TARGET).ihx
 PROXY_BIN = $(PROXY_TARGET).bin
 
-.PHONY: all clean flash wrapped proxy flash-proxy
+.PHONY: all clean flash wrapped proxy flash-proxy uflash
 
 all: $(BIN)
 	@echo "Built: $(BIN)"
@@ -106,6 +106,9 @@ open('$@', 'wb').write(body_len + body + magic + checksum + crc)"
 	@ls -la $@
 
 wrapped: $(BUILD_DIR)/firmware_wrapped.bin
+
+uflash: $(BUILD_DIR)/firmware_wrapped.bin
+	@python3 e4_flash.py $<
 
 nflash: $(BUILD_DIR)/firmware_wrapped.bin
 	@echo "Resetting to bootloader..."
