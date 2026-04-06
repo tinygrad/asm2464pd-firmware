@@ -227,14 +227,15 @@ static void handle_usb_control(void) {
       uint8_t num_slots = REG_USB_SETUP_WIDX_H;
       if (num_slots == 0) num_slots = 1;
       /* DMA_INIT sequence for SRAM DMA */
-      REG_NVME_DOORBELL    = 0x20;  /* 0xC42A: NVMe doorbell (gate) */
-      REG_NVME_LBA_LOW     = 0x02;  /* 0xC422 */
+      REG_NVME_DOORBELL       = 0x0;
+      REG_NVME_SECTOR_SIZE_HI = 0x02;
+      REG_NVME_SECTOR_SIZE_LO = 0x00;
       REG_NVME_SLOT_START = NVME_SLOT_ENABLE | slot_sel;
       REG_NVME_SLOT_END   = num_slots + slot_sel;
       REG_NVME_SECTOR_COUNT_HI = (uint8_t)(sectors >> 8);
       REG_NVME_SECTOR_COUNT_LO = (uint8_t)(sectors & 0xFF);
       /* 0x03 = WRITE_DIR|DMA_START (bulk OUT), 0x02 = DMA_START only (bulk IN) */
-      REG_NVME_CTRL_STATUS = bulk_in ? 0x02 : 0x03;
+      REG_NVME_CTRL_STATUS = NVME_CTRL_DMA_START | (bulk_in ? 0 : NVME_CTRL_WRITE_DIR);
       REG_NVME_CMD_PARAM   = slot_sel;  /* 0xC429: slot select + DMA re-arm */
       dma_mode = 3;  /* suppress UART in bulk handler */
       send_zlp_ack();
