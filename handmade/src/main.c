@@ -295,12 +295,15 @@ static void handle_usb_control(void) {
     if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
     if (REG_USB_SETUP_BREQ == 0xF0) {
       /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
-       *   [0-3]  address low (LE), [4-7] address high (LE), [8-11] value (BE)
+       *   [0-3]  address low (LE), [4-7] address high (LE), [8-11] value (LE)
        * Read SETUP params now and configure everything atomically. */
       uint8_t fmt_type = REG_USB_SETUP_WVAL_L;
       uint8_t byte_en  = REG_USB_SETUP_WVAL_H;
       uint8_t widx_l   = REG_USB_SETUP_WIDX_L;
       uint8_t mode  = widx_l & 0x03;
+
+      /* Reset any in-flight streaming transfer so stale ISRs are no-ops. */
+      dma_dwords = 0;
 
       /* Configure PCIe TLP engine */
       REG_PCIE_FMT_TYPE   = fmt_type;
