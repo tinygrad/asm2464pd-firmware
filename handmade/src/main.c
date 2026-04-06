@@ -234,7 +234,6 @@ static void handle_usb_control(void) {
       REG_NVME_SLOT_END   = num_slots + slot_sel;
       REG_NVME_SECTOR_COUNT_HI = (uint8_t)(sectors >> 8);
       REG_NVME_SECTOR_COUNT_LO = (uint8_t)(sectors & 0xFF);
-      /* 0x03 = WRITE_DIR|DMA_START (bulk OUT), 0x02 = DMA_START only (bulk IN) */
       REG_NVME_CTRL_STATUS = NVME_CTRL_DMA_START | (bulk_in ? 0 : NVME_CTRL_WRITE_DIR);
       REG_NVME_CMD_PARAM   = slot_sel;  /* 0xC429: slot select + DMA re-arm */
       dma_mode = 3;  /* suppress UART in bulk handler */

@@ -1178,7 +1178,7 @@ def print_pcie_status(dev):
 # Main Bringup Orchestration
 # =============================================================================
 
-def full_bringup(dev, skip_hw=False, skip_post_train=False):
+def full_bringup(dev, skip_hw=False):
     """Run the full PCIe bringup sequence matching pcie4_main.c:main()."""
     print("=" * 60)
     print("ASM2464PD PCIe Bringup via USB E4/E5")
@@ -1220,20 +1220,7 @@ def full_bringup(dev, skip_hw=False, skip_post_train=False):
     print("\n--- Phase 6: Post-Train ---")
     b22b = dev.read8(B22B)
     if link_ok or b22b == 0x04:
-        if skip_post_train:
-            # Minimal: just 12V power and tunnel enable
-            dev.set_bits(C659, 0x01)
-            pcie_bridge_config_init(dev)
-            dev.write(B455, 0x02); dev.write(B455, 0x04)
-            dev.write(B2D5, 0x01); dev.write(B296, 0x08)
-            for _ in range(200):
-                if dev.read8(B455) & 0x02:
-                    dev.write(B455, 0x02)
-                    break
-                time.sleep(0.005)
-            print("  [minimal post-train — replay handles the rest]")
-        else:
-            pcie_post_train(dev)
+        pcie_post_train(dev)
         print("\n*** PCIe link is UP! ***")
     else:
         print(f"\n*** PCIe link FAILED (link_ok={link_ok}, B22B=0x{b22b:02X}) ***")
@@ -1255,7 +1242,6 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose register trace")
     parser.add_argument("--dry-run", action="store_true", help="Print sequence without writing")
     parser.add_argument("--status-only", action="store_true", help="Only read and print PCIe status")
-    parser.add_argument("--skip-post-train", action="store_true", help="Skip post-train bridge config (for stock replay)")
     args = parser.parse_args()
 
     dev = ASM2464PD(verbose=args.verbose, dry_run=args.dry_run)
@@ -1265,7 +1251,7 @@ def main():
         if args.status_only:
             print_pcie_status(dev)
         else:
-            ok = full_bringup(dev, skip_hw=args.skip_hw, skip_post_train=getattr(args, 'skip_post_train', False))
+            ok = full_bringup(dev, skip_hw=args.skip_hw)
             sys.exit(0 if ok else 1)
     finally:
         dev.close()
