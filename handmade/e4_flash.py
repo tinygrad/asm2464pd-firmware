@@ -36,6 +36,18 @@ def flash_init(h):
   xdata_write(h, 0xC805, 0x02)
   xdata_write(h, 0xC8A6, 0x04)  # SPI clock divider
 
+  # Clear block protection bits — retry until SR shows BP=0
+  for attempt in range(5):
+    flash_wren(h)
+    bulk_out(h, bytes([0x00] * 4))
+    flash_transaction(h, cmd=0x01, data_len=1, addr_len=0x04, mode=0x01)
+    time.sleep(0.01)
+    sr = flash_read_status(h)
+    if not (sr & 0x1C):
+      break
+  else:
+    raise RuntimeError(f"Failed to clear block protection after 5 attempts: SR=0x{sr:02X}")
+
 def flash_poll_busy(h):
   for _ in range(100000):
     if not (xdata_read(h, 0xC8A9, 1)[0] & 0x01): return
@@ -73,7 +85,7 @@ def flash_wren(h):
   flash_poll_busy(h)
 
 def flash_read_status(h):
-  flash_transaction(h, cmd=0x05, data_len=0x100, addr_len=0x04, mode=0x00)
+  flash_transaction(h, cmd=0x05, data_len=1, addr_len=0x04, mode=0x00)
   return xdata_read(h, 0x7000, 1)[0]
 
 def flash_wait_wip(h, timeout=10.0):
@@ -88,20 +100,20 @@ def flash_jedec_id(h):
   return xdata_read(h, 0x7000, 3)
 
 def flash_read(h, addr, size):
-  """Read from SPI flash. DATA_LEN registers: C8A3=page_count(hi), C8A4=byte_offset(lo).
-  Reads in 4KB chunks (A3=0x10) — fills 0x7000-0x7FFF, read back via E4."""
+  """Read from SPI flash in 4KB DMA chunks, return requested bytes."""
   result = bytearray()
   offset = 0
   while offset < size:
-    chunk = min(4096, size - offset)
-    flash_transaction(h, cmd=0x03, addr=addr + offset, data_len=chunk, addr_len=0x07, mode=0x00)
-    # Read from 0x7000 via E4 (255 bytes max per E4 call)
+    want = min(4096, size - offset)
+    # DMA needs at least 4KB to fill buffer reliably
+    dma_len = max(4096, want)
+    flash_transaction(h, cmd=0x03, addr=addr + offset, data_len=dma_len, addr_len=0x07, mode=0x00)
     read = 0
-    while read < chunk:
-      n = min(255, chunk - read)
+    while read < want:
+      n = min(255, want - read)
       result.extend(xdata_read(h, 0x7000 + read, n))
       read += n
-    offset += chunk
+    offset += want
   return bytes(result)
 
 def flash_block_erase(h, addr):
@@ -112,10 +124,9 @@ def flash_block_erase(h, addr):
   flash_wait_wip(h)
 
 def flash_page_program(h, addr, size):
-  """Write size bytes from 0x7000 buffer to flash.
-  Stock trace uses data_len=0x8000 (32KB) for page program."""
+  """Write size bytes from 0x7000 buffer to flash."""
   flash_wren(h)
-  flash_transaction(h, cmd=0x02, addr=addr, data_len=0x8000, addr_len=0x07, mode=0x01)
+  flash_transaction(h, cmd=0x02, addr=addr, data_len=size, addr_len=0x07, mode=0x01)
   flash_wait_wip(h)
 
 def bulk_out(h, data):
@@ -188,6 +199,50 @@ def flash_verify(h, addr, firmware):
   print()
   return errors
 
+def flash_test(h):
+  """Write a test block to a safe area, read back and verify."""
+  import random
+  TEST_ADDR = 0x10000  # block 1, safe area (not config or firmware)
+  TEST_SIZE = 4096
+
+  print(f"Flash write/read test at 0x{TEST_ADDR:05X} ({TEST_SIZE} bytes)")
+
+  # Generate random test pattern
+  rng = random.Random(42)
+  pattern = bytes(rng.randint(0, 255) for _ in range(TEST_SIZE))
+
+  # Erase
+  print("  Erasing...")
+  flash_block_erase(h, TEST_ADDR)
+  erased = flash_read(h, TEST_ADDR, 16)
+  assert all(b == 0xFF for b in erased), f"Erase failed: {erased.hex()}"
+
+  # Write in 128-byte pages
+  print("  Writing...")
+  for off in range(0, TEST_SIZE, 128):
+    chunk = pattern[off:off+128]
+    bulk_out(h, chunk)
+    flash_page_program(h, TEST_ADDR + off, 128)
+
+  # Read back and verify
+  print("  Verifying...")
+  got = flash_read(h, TEST_ADDR, TEST_SIZE)
+  errors = 0
+  for i in range(TEST_SIZE):
+    if got[i] != pattern[i]:
+      if errors < 5:
+        print(f"    MISMATCH at +0x{i:04X}: got 0x{got[i]:02X}, expected 0x{pattern[i]:02X}")
+      errors += 1
+
+  # Clean up: re-erase the test block
+  flash_block_erase(h, TEST_ADDR)
+
+  if errors == 0:
+    print(f"  PASS: {TEST_SIZE} bytes verified")
+  else:
+    print(f"  FAIL: {errors} mismatches")
+  return errors
+
 def main():
   ctx = ctypes.POINTER(libusb.libusb_context)()
   libusb.libusb_init(ctypes.byref(ctx))
@@ -196,7 +251,13 @@ def main():
   libusb.libusb_claim_interface(h, 0)
   flash_init(h)
 
-  if '--id' in sys.argv:
+  if '--test' in sys.argv:
+    errors = flash_test(h)
+    libusb.libusb_release_interface(h, 0)
+    libusb.libusb_close(h)
+    libusb.libusb_exit(ctx)
+    sys.exit(1 if errors else 0)
+  elif '--id' in sys.argv:
     jedec = flash_jedec_id(h)
     print(f"JEDEC ID: {jedec.hex()} (mfr=0x{jedec[0]:02X} type=0x{jedec[1]:02X} cap=0x{jedec[2]:02X})")
   elif '--read' in sys.argv:
