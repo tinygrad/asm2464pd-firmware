@@ -119,20 +119,16 @@ class TestBadStates(unittest.TestCase):
 
   def _reset_state(self):
     """Get firmware + host back to a clean state."""
-    # Send a benign 0xF0 mode=0 — this sets dma_dwords=0 in firmware
-    dma_setup(self.handle, self.vram, 0, 0)
-    time.sleep(0.01)
-    # Drain stale IN data
-    try_bulk_in(self.handle, 65536, timeout=200)
-    # Reset the USB device to clear all endpoint states on both sides
-    libusb.libusb_reset_device(self.handle)
-    time.sleep(0.1)
-    # Reclaim interface after reset
-    libusb.libusb_claim_interface(self.handle, 0)
+    # Clear halts — firmware handles CLEAR_FEATURE(ENDPOINT_HALT)
+    # which resets the endpoint and sets dma_dwords=0
+    clear_halt(self.handle, EP_OUT)
+    clear_halt(self.handle, EP_IN)
+    # Drain any data that was already in the USB TX FIFO before CLEAR_IN took effect
+    try_bulk_in(self.handle, 65536, timeout=100)
+    clear_halt(self.handle, EP_IN)
 
   def _verify_normal_op(self, label=""):
     """Verify firmware is still functional with a basic write/read cycle."""
-    # Reset state first to ensure clean endpoints
     self._reset_state()
     addr = self.vram + 0xF0000
     vals = [0xDEAD0000 | i for i in range(16)]
@@ -144,7 +140,6 @@ class TestBadStates(unittest.TestCase):
 
   # === Abandoned write tests ===
 
-  @unittest.skip("partial bulk OUT wedges host USB stack — not a firmware bug")
   def test_abandoned_write_then_read(self):
     """Set up write for 100 dwords, send only 16, then do a normal read."""
     addr = self.vram + 0x100000
@@ -165,7 +160,6 @@ class TestBadStates(unittest.TestCase):
     got = stream_read(self.handle, addr, 16 * 4)
     self.assertEqual(got, data16, "read after abandoned write returned wrong data")
 
-  @unittest.skip("partial bulk OUT wedges host USB stack — not a firmware bug")
   def test_abandoned_write_then_write(self):
     """Set up write for 100 dwords, send only 16, then do another write+read."""
     addr_a = self.vram + 0x110000
@@ -185,7 +179,6 @@ class TestBadStates(unittest.TestCase):
     got = stream_read(self.handle, addr_b, len(data32))
     self.assertEqual(got, data32, "write after abandoned write failed")
 
-  @unittest.skip("partial bulk IN/OUT wedges host USB stack — not a firmware bug")
   def test_abandoned_read_then_write(self):
     """Set up read for 256 dwords but only consume 64 bytes, then do a write."""
     addr = self.vram + 0x120000
@@ -247,7 +240,6 @@ class TestBadStates(unittest.TestCase):
     got = stream_read(self.handle, addr, len(data))
     self.assertEqual(got, data, "read after abandoned write setup failed")
 
-  @unittest.skip("abandoned read setup leaves stale IN data that wedges host — not a firmware bug")
   def test_read_setup_then_write_setup(self):
     """Set up read, then immediately set up write without reading."""
     addr = self.vram + 0x160000
@@ -282,7 +274,6 @@ class TestBadStates(unittest.TestCase):
 
   # === Single TLP interleaving ===
 
-  @unittest.skip("partial bulk OUT mid-stream wedges host — not a firmware bug")
   def test_single_tlp_during_write_stream(self):
     """Start a write stream, do a single TLP read mid-stream, then continue."""
     addr = self.vram + 0x190000
@@ -307,7 +298,6 @@ class TestBadStates(unittest.TestCase):
     # Try to continue normal operation
     self._verify_normal_op("single TLP during write stream")
 
-  @unittest.skip("partial bulk IN mid-stream wedges host — not a firmware bug")
   def test_single_tlp_during_read_stream(self):
     """Start a read stream, do a single TLP write mid-stream, then verify."""
     addr = self.vram + 0x1A0000
@@ -334,7 +324,6 @@ class TestBadStates(unittest.TestCase):
 
   # === Recovery tests ===
 
-  @unittest.skip("partial bulk transfers wedge host USB stack — not a firmware bug")
   def test_recovery_after_multiple_abandoned(self):
     """Abandon 5 writes and 5 reads, then verify normal op."""
     for i in range(5):
@@ -365,7 +354,6 @@ class TestBadStates(unittest.TestCase):
 
   # === Large dword count ===
 
-  @unittest.skip("partial bulk OUT wedges host USB stack — not a firmware bug")
   def test_very_large_dword_count(self):
     """Set up with a huge dword count (0x100000 = 4MB), send 16 dwords, then normal op."""
     dma_setup(self.handle, self.vram + 0x1C0000, 1, 0x100000)

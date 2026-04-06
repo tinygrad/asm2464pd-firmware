@@ -186,18 +186,25 @@ static void handle_usb_control(void) {
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       handle_get_descriptor(wValH, wValL, wLen);
+    } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
+      /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
+       * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
+       * wIndex = endpoint address (0x02=OUT, 0x81=IN). */
+      uint8_t ep_addr = REG_USB_SETUP_WIDX_L;
+      if (ep_addr == 0x02) {
+        REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
+      } else if (ep_addr == 0x81) {
+        REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
+      }
+      dma_dwords = 0;
+      send_zlp_ack();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
       // enable USB bulk mode (bypass MSC)
       REG_USB_MSC_CFG = 0x00;
-      // enable bulk endpoint (without the clear in, it'll get a spurious IN, without the clear out, it'll miss an out)
+      // clearn bulk endpoints
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
-      // receive to 0x911B
-      //REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
-      // receive to 0x7000
-      //REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
-      // setup UAS mode
-      //REG_USB_STATUS = USB_STATUS_DMA_READY;
+      dma_dwords = 0;
       send_zlp_ack();
       uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
