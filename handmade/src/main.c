@@ -25,49 +25,7 @@ static uint8_t dma_addr_1;     /* shadow of ADDR_2 (addr[15:8]) */
 static uint8_t dma_addr_2;     /* shadow of ADDR_1 (addr[23:16]) */
 static uint8_t dma_addr_3;     /* shadow of ADDR_0 (addr[31:24]) */
 
-static inline void dma_addr_inc(void) {
-  dma_addr_0 += 4;
-  REG_PCIE_ADDR_3 = dma_addr_0;
-  if (dma_addr_0 < 4) {
-    dma_addr_1++;
-    REG_PCIE_ADDR_2 = dma_addr_1;
-    if (dma_addr_1 == 0) {
-      dma_addr_2++;
-      REG_PCIE_ADDR_1 = dma_addr_2;
-      if (dma_addr_2 == 0) {
-        dma_addr_3++;
-        REG_PCIE_ADDR_0 = dma_addr_3;
-      }
-    }
-  }
-}
-
-static inline void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
-  uint16_t ci;
-  for (ci = 0; ci < cnt; ci++) {
-    REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
-    REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
-    while (!(REG_PCIE_STATUS & (PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE)));
-    *dst++ = REG_PCIE_DATA_3;
-    *dst++ = REG_PCIE_DATA_2;
-    *dst++ = REG_PCIE_DATA_1;
-    *dst++ = REG_PCIE_DATA_0;
-    dma_addr_inc();
-  }
-}
-
-static inline void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
-  uint16_t ci;
-  for (ci = 0; ci < cnt; ci++) {
-    REG_PCIE_DATA_3 = *src++;
-    REG_PCIE_DATA_2 = *src++;
-    REG_PCIE_DATA_1 = *src++;
-    REG_PCIE_DATA_0 = *src++;
-    REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
-    REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
-    dma_addr_inc();
-  }
-}
+#include "pcie_pio.h"
 
 static void do_usb_bulk_in(void) {
   uint16_t max_dwords = is_usb2 ? (512/4) : (1024/4);
