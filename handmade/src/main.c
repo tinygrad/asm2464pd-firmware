@@ -43,7 +43,7 @@ static inline void dma_addr_inc(void) {
 }
 
 static inline void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
-  uint8_t ci;
+  uint16_t ci;
   for (ci = 0; ci < cnt; ci++) {
     REG_PCIE_STATUS  = PCIE_STATUS_ERROR | PCIE_STATUS_COMPLETE | PCIE_STATUS_KICK;
     REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
@@ -70,8 +70,8 @@ static inline void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
 }
 
 static void do_usb_bulk_in(void) {
-  uint16_t max_chunk_dwords = is_usb2 ? (512/4) : (512/4);
-  uint16_t chunk = (dma_dwords > max_chunk_dwords) ? max_chunk_dwords : (uint16_t)dma_dwords;
+  uint16_t max_dwords = is_usb2 ? (512/4) : (1024/4);
+  uint16_t chunk = (dma_dwords > max_dwords) ? max_dwords : (uint16_t)dma_dwords;
   pcie_read_chunk((__xdata uint8_t *)0x8000, chunk);
   uint16_t nbytes = chunk * 4;
   REG_USB_BULK_IN_LEN_H = nbytes >> 8;
@@ -386,12 +386,6 @@ static void handle_usb_control(void) {
           }
           if (mode == 2) {
             // device to host, we do the first IN
-            uart_puts("[R ");
-            uart_puthex((uint8_t)(dma_dwords >> 24));
-            uart_puthex((uint8_t)(dma_dwords >> 16));
-            uart_puthex((uint8_t)(dma_dwords >> 8));
-            uart_puthex((uint8_t)dma_dwords);
-            uart_puts("]\n");
             do_usb_bulk_in();
           }
         }
