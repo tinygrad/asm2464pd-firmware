@@ -66,7 +66,7 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
     movx  a, @dptr
     mov   r0, a           ; DATA_0 (MSB)
 
-    ; increment 64-bit PCIe address by 4 (low 32 inline, high 32 via C call)
+    ; increment 64-bit PCIe address by 4, carry through all 8 bytes
     mov   dptr, #0xB21B
     movx  a, @dptr
     add   a, #0x04
@@ -205,7 +205,7 @@ static void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
     mov   a, #0x0F
     movx  @dptr, a
 
-    ; increment 64-bit PCIe address by 4 (low 32 inline, high 32 via C call)
+    ; increment 64-bit PCIe address by 4, carry through all 8 bytes
     mov   dptr, #0xB21B
     movx  a, @dptr
     add   a, #0x04

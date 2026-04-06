@@ -17,9 +17,8 @@ static void uart_puthex(uint8_t val) {
 static uint8_t is_usb2;
 static uint8_t pcie_link_up;
 
-/* Streaming PCIe DMA state — configured via 0xF0 control message */
-static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
-static int32_t dma_dwords;     /* total dwords remaining for streaming read */
+/* Streaming PCIe state — configured via 0xF0 control message */
+static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer */
 
 
 #include "pcie_pio.h"
@@ -212,14 +211,15 @@ static void handle_usb_control(void) {
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
       uint8_t bank = REG_USB_SETUP_WIDX_H;
+      uint8_t rlen = (wLen > 64) ? 64 : (uint8_t)wLen;
       uint8_t vi;
-      for (vi = 0; vi < wLen; vi++) {
+      for (vi = 0; vi < rlen; vi++) {
         if (bank) DPX = bank;
         uint8_t val = XDATA_REG8(addr + vi);
         if (bank) DPX = 0x00;
         DESC_BUF[vi] = val;
       }
-      send_control_data(wLen);
+      send_control_data(rlen);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE5) {
       /* Vendor write XDATA via control.  wValue=addr, wIndex low=val.
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
@@ -257,7 +257,7 @@ static void handle_usb_control(void) {
       *   wValue = fmt_type | (byte_enable << 8)
       *   wIndex low[1:0] = mode (0=single TLP, 1=stream write, 2=stream read)
       *   wIndex low[7:2] = dwords per read chunk (0 → 128 for writes)
-      *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 BE] */
+      *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 LE] */
       /* Don't configure yet — wait for DATA_OUT phase.
        * SETUP params (wValue/wIndex) are readable from registers in DATA_OUT. */
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
@@ -300,7 +300,8 @@ static void handle_usb_control(void) {
   } else if (phase & USB_CTRL_PHASE_DATA_IN || phase & USB_CTRL_PHASE_STAT_IN) {
     // USB_CTRL_PHASE_DATA_IN on USB 2.0, USB_CTRL_PHASE_STAT_IN on USB 3.0
     if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
-    if (REG_USB_SETUP_BREQ == 0xF0) {
+    if (REG_USB_SETUP_BMREQ == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) &&
+        REG_USB_SETUP_BREQ == 0xF0) {
       /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
        *   [0-3]  address low (LE), [4-7] address high (LE), [8-11] value (LE)
        * Read SETUP params now and configure everything atomically. */
