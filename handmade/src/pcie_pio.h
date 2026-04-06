@@ -4,11 +4,9 @@
  * These stream dwords between an XDATA buffer and the PCIe TLP engine,
  * auto-incrementing the PCIe address by 4 after each dword.
  *
- * Address shadow variables (_dma_addr_0 .. _dma_addr_3) must be set up
- * before calling, and the PCIe ADDR registers must be primed with the
- * starting address.
+ * PCIe ADDR registers must be primed with the starting address before calling.
  *
- * Data byte order (LE): buf[0]=LSB → DATA_3, buf[3]=MSB → DATA_0.
+ * Data byte order (LE): buf[0]=LSB -> DATA_3, buf[3]=MSB -> DATA_0.
  */
 #ifndef PCIE_PIO_H
 #define PCIE_PIO_H
@@ -17,9 +15,9 @@
 
 /* Optimized PCIe read with pipelining: after reading completion data,
  * increment address + trigger NEXT TLP, then store data to buffer while
- * PCIe engine is working on the next read.  This overlaps PCIe roundtrip
- * with the XDATA buffer writes.
+ * PCIe engine is working on the next read.
  *
+ * Reads ADDR registers directly — no shadow variables needed.
  * dst in DPTR (dpl/dph), cnt in _pcie_read_chunk_PARM_2 (2 bytes). */
 static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
   (void)dst; (void)cnt;
@@ -38,7 +36,6 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
     movx  @dptr, a
 
   _pcie_rd_loop:
-    ; poll for completion
   _pcie_rd_poll:
     mov   dptr, #0xB296
     movx  a, @dptr
@@ -59,26 +56,28 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
     movx  a, @dptr
     mov   r0, a           ; DATA_0 (MSB)
 
-    ; increment PCIe address
-    mov   a, _dma_addr_0
-    add   a, #0x04
-    mov   _dma_addr_0, a
+    ; increment ADDR_3 (0xB21B) directly — read, add 4, write back
     mov   dptr, #0xB21B
+    movx  a, @dptr
+    add   a, #0x04
     movx  @dptr, a
     jnc   _pcie_rd_noc1
-    inc   _dma_addr_1
-    mov   dptr, #0xB21A
-    mov   a, _dma_addr_1
+    ; carry into ADDR_2 (0xB21A)
+    dec   dpl
+    movx  a, @dptr
+    add   a, #0x01
     movx  @dptr, a
-    jnz   _pcie_rd_noc1
-    inc   _dma_addr_2
-    mov   dptr, #0xB219
-    mov   a, _dma_addr_2
+    jnc   _pcie_rd_noc1
+    ; carry into ADDR_1 (0xB219)
+    dec   dpl
+    movx  a, @dptr
+    add   a, #0x01
     movx  @dptr, a
-    jnz   _pcie_rd_noc1
-    inc   _dma_addr_3
-    mov   dptr, #0xB218
-    mov   a, _dma_addr_3
+    jnc   _pcie_rd_noc1
+    ; carry into ADDR_0 (0xB218)
+    dec   dpl
+    movx  a, @dptr
+    add   a, #0x01
     movx  @dptr, a
   _pcie_rd_noc1:
 
@@ -94,7 +93,7 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
     subb  a, (_pcie_read_chunk_PARM_2 + 1)
     jnc   _pcie_rd_last
 
-    ; trigger NEXT TLP now (before storing data — overlap PCIe latency with store)
+    ; trigger NEXT TLP now (overlap PCIe latency with buffer store)
     mov   dptr, #0xB296
     mov   a, #0x07
     movx  @dptr, a
@@ -103,7 +102,7 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
     movx  @dptr, a
 
   _pcie_rd_last:
-    ; store 4 bytes to dst buffer (PCIe engine working on next TLP in parallel)
+    ; store 4 bytes to dst buffer
     mov   dpl, r6
     mov   dph, r7
     mov   a, r2
@@ -121,7 +120,6 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
     mov   r6, dpl
     mov   r7, dph
 
-    ; check if this was the last iteration
     clr   c
     mov   a, r4
     subb  a, (_pcie_read_chunk_PARM_2)
@@ -134,14 +132,13 @@ static void pcie_read_chunk(__xdata uint8_t *dst, uint16_t cnt) {
 }
 
 /* Optimized PCIe write: copy XDATA buffer to DATA regs, trigger TLP (fire-and-forget).
+ * Reads ADDR registers directly — no shadow variables needed.
  * src in DPTR, cnt in _pcie_write_chunk_PARM_2 (2 bytes). */
 static void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
   (void)src; (void)cnt;
   __asm
-    ; r6:r7 = src pointer
     mov   r6, dpl
     mov   r7, dph
-    ; r4:r5 = loop counter
     mov   r4, #0x00
     mov   r5, #0x00
 
@@ -168,19 +165,19 @@ static void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
     movx  a, @dptr
     ; a = src[3] -> DATA_0 (MSB)
     inc   dptr
-    mov   r6, dpl         ; save advanced src ptr
+    mov   r6, dpl
     mov   r7, dph
 
-    ; write DATA_0 (B220), DATA_1 (B221), DATA_2 (B222), DATA_3 (B223)
+    ; write DATA regs B220-B223
     mov   dptr, #0xB220
     movx  @dptr, a        ; DATA_0
-    inc   dpl             ; B221
+    inc   dpl
     mov   a, r1
     movx  @dptr, a        ; DATA_1
-    inc   dpl             ; B222
+    inc   dpl
     mov   a, r3
     movx  @dptr, a        ; DATA_2
-    inc   dpl             ; B223
+    inc   dpl
     mov   a, r2
     movx  @dptr, a        ; DATA_3
 
@@ -192,26 +189,25 @@ static void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
     mov   a, #0x0F
     movx  @dptr, a
 
-    ; increment PCIe address
-    mov   a, _dma_addr_0
-    add   a, #0x04
-    mov   _dma_addr_0, a
+    ; increment ADDR_3 (0xB21B) directly
     mov   dptr, #0xB21B
+    movx  a, @dptr
+    add   a, #0x04
     movx  @dptr, a
     jnc   _pcie_wr_noc1
-    inc   _dma_addr_1
-    mov   dptr, #0xB21A
-    mov   a, _dma_addr_1
+    dec   dpl
+    movx  a, @dptr
+    add   a, #0x01
     movx  @dptr, a
-    jnz   _pcie_wr_noc1
-    inc   _dma_addr_2
-    mov   dptr, #0xB219
-    mov   a, _dma_addr_2
+    jnc   _pcie_wr_noc1
+    dec   dpl
+    movx  a, @dptr
+    add   a, #0x01
     movx  @dptr, a
-    jnz   _pcie_wr_noc1
-    inc   _dma_addr_3
-    mov   dptr, #0xB218
-    mov   a, _dma_addr_3
+    jnc   _pcie_wr_noc1
+    dec   dpl
+    movx  a, @dptr
+    add   a, #0x01
     movx  @dptr, a
   _pcie_wr_noc1:
 
