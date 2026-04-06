@@ -74,7 +74,7 @@ def pcie_request(handle, fmt_type, address, value=None, size=4, verbose=False, r
     """Send a PCIe TLP via 0xF0 control message (wIndex=0 for single TLP mode).
 
     OUT phase (0x40): SETUP wValue = fmt_type | (byte_enable << 8), wIndex = 0.
-      DATA payload (12 bytes): addr_lo[4] LE + addr_hi[4] LE + value[4] BE.
+      DATA payload (12 bytes): addr_lo[4] LE + addr_hi[4] LE + value[4] LE.
 
     IN phase (0xC0): Firmware polls completion, returns 8 bytes:
       [0-3] completion data, [4-5] completion header,
@@ -86,8 +86,8 @@ def pcie_request(handle, fmt_type, address, value=None, size=4, verbose=False, r
     be = ((1 << size) - 1) << offset
     shifted = ((value << (8 * offset)) & 0xFFFFFFFF) if value is not None else 0
 
-    # OUT: addr_lo[4] LE + addr_hi[4] LE + value[4] BE
-    payload = struct.pack('<II', masked, address >> 32) + struct.pack('>I', shifted)
+    # OUT: addr_lo[4] LE + addr_hi[4] LE + value[4] LE
+    payload = struct.pack('<III', masked, address >> 32, shifted)
     buf_out = (ctypes.c_ubyte * 12)(*payload)
     ret = libusb.libusb_control_transfer(handle, 0x40, 0xF0, fmt_type | (be << 8), 0, buf_out, 12, 5000)
     if ret < 0:
@@ -146,7 +146,7 @@ def pcie_request(handle, fmt_type, address, value=None, size=4, verbose=False, r
                            f"expected {expected_bc}, got {cpl_byte_count}")
 
     # Extract completion data
-    raw = struct.unpack('>I', bytes(buf_in[0:4]))[0]
+    raw = struct.unpack('<I', bytes(buf_in[0:4]))[0]
     result = (raw >> (8 * offset)) & ((1 << (8 * size)) - 1)
     if verbose:
         print(f"  PCIe {'cfg' if is_cfg else 'mem'} read 0x{address:08X} = 0x{result:0{size*2}X}")

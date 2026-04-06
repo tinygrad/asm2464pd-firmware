@@ -19,11 +19,11 @@ MWR64 = 0x60
 MRD64 = 0x20
 
 def dma_setup(handle, addr, mode, ndwords=0):
-  """0xF0: wValue = fmt_type|(be<<8), wIndex = mode. DATA_OUT = addr[8] + ndwords[4 BE]."""
+  """0xF0: wValue = fmt_type|(be<<8), wIndex = mode. DATA_OUT = addr[4 LE] + addr_hi[4 LE] + value[4 LE]."""
   fmt = {0: 0, 1: MWR64, 2: MRD64}[mode]
   wval = fmt | (0x0F << 8)
   widx = mode & 0x03
-  payload = struct.pack('<II', addr & 0xFFFFFFFF, addr >> 32) + struct.pack('>I', ndwords)
+  payload = struct.pack('<III', addr & 0xFFFFFFFF, addr >> 32, ndwords)
   buf = (ctypes.c_ubyte * 12)(*payload)
   ret = libusb.libusb_control_transfer(handle, 0x40, 0xF0, wval, widx, buf, 12, 5000)
   assert ret >= 0, f"F0 setup failed: {ret}"

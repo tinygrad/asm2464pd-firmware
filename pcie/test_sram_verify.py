@@ -113,12 +113,24 @@ def main():
   elapsed = time.monotonic() - t0
   print(f"  SDMA done: {elapsed:.3f}s ({total_bytes/elapsed/1024:.1f} KB/s)")
 
-  # 4. Read VRAM back via PCIe BAR (0xF0 TLP reads)
-  print(f"\nReading {total_bytes//1024}KB back from VRAM via PCIe BAR...")
+  # 4. Read VRAM back via 0xF0 streaming PCIe read (mode 2) + single bulk IN
+  vram_pcie_addr = pci_dev.bar_info(iface.vram_bar)[0] + dst_paddr
+  print(f"\nReading {total_bytes//1024}KB back from VRAM via 0xF0 mode 2 (addr 0x{vram_pcie_addr:X})...")
+  ndwords = total_bytes // 4
+  MRD64 = 0x20
+  payload = struct.pack('<III', vram_pcie_addr & 0xFFFFFFFF, vram_pcie_addr >> 32, ndwords)
+  f0_buf = (ctypes.c_ubyte * 12)(*payload)
+  wval = MRD64 | (0x0F << 8)
+  ret = libusb.libusb_control_transfer(handle, 0x40, 0xF0, wval, 2, f0_buf, 12, 5000)
+  assert ret == 12, f"F0 setup failed: {ret}"
+  read_buf = (ctypes.c_ubyte * total_bytes)()
+  transferred = ctypes.c_int()
   t0 = time.monotonic()
-  view = pci_dev.map_bar(bar=iface.vram_bar, off=dst_paddr, size=total_bytes)
-  got = bytes(view[0:total_bytes])
+  ret = libusb.libusb_bulk_transfer(handle, EP_IN, read_buf, total_bytes, ctypes.byref(transferred), 30000)
   elapsed = time.monotonic() - t0
+  assert ret == 0, f"bulk IN failed: {ret}"
+  assert transferred.value == total_bytes, f"short read: {transferred.value}/{total_bytes}"
+  got = bytes(read_buf)
   print(f"  Read done: {elapsed:.3f}s ({total_bytes/elapsed/1024:.1f} KB/s)")
 
   # 5. Verify every slot
@@ -166,9 +178,23 @@ def main():
   dma_out_paddr = dma_out_vram.paddrs[0][0]
   print(f"  VRAM src VA 0x{dma_out_va:012X}, paddr 0x{dma_out_paddr:08X}")
 
-  # Write pattern into VRAM via PCIe BAR
-  dma_out_view = pci_dev.map_bar(bar=iface.vram_bar, off=dma_out_paddr, size=dma_out_bytes)
-  dma_out_view[0:dma_out_bytes] = dma_out_pattern
+  # Write pattern into VRAM via 0xF0 streaming PCIe write (mode 1) + bulk OUT
+  dma_out_pcie_addr = pci_dev.bar_info(iface.vram_bar)[0] + dma_out_paddr
+  MWR64 = 0x60
+  ndwords_out = dma_out_bytes // 4
+  payload_out = struct.pack('<III', dma_out_pcie_addr & 0xFFFFFFFF, dma_out_pcie_addr >> 32, ndwords_out)
+  f0_buf_out = (ctypes.c_ubyte * 12)(*payload_out)
+  wval_out = MWR64 | (0x0F << 8)
+  ret = libusb.libusb_control_transfer(handle, 0x40, 0xF0, wval_out, 1, f0_buf_out, 12, 5000)
+  assert ret == 12, f"F0 write setup failed: {ret}"
+  out_buf = (ctypes.c_ubyte * dma_out_bytes)(*dma_out_pattern)
+  out_transferred = ctypes.c_int()
+  t0 = time.monotonic()
+  ret = libusb.libusb_bulk_transfer(handle, EP_OUT, out_buf, dma_out_bytes, ctypes.byref(out_transferred), 30000)
+  elapsed = time.monotonic() - t0
+  assert ret == 0, f"bulk OUT failed: {ret}"
+  assert out_transferred.value == dma_out_bytes, f"short write: {out_transferred.value}/{dma_out_bytes}"
+  print(f"  VRAM write done: {dma_out_bytes} bytes in {elapsed:.3f}s ({dma_out_bytes/elapsed/1024:.1f} KB/s)")
 
   # SDMA copy: VRAM → SRAM at PCIe 0x200000
   sram_pcie_addr = 0x200000

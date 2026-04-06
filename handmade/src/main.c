@@ -315,10 +315,10 @@ static void handle_usb_control(void) {
         }
       }
       if (ret_status == 0) {
-        DESC_BUF[0] = REG_PCIE_DATA_0;
-        DESC_BUF[1] = REG_PCIE_DATA_1;
-        DESC_BUF[2] = REG_PCIE_DATA_2;
-        DESC_BUF[3] = REG_PCIE_DATA_3;
+        DESC_BUF[0] = REG_PCIE_DATA_3;
+        DESC_BUF[1] = REG_PCIE_DATA_2;
+        DESC_BUF[2] = REG_PCIE_DATA_1;
+        DESC_BUF[3] = REG_PCIE_DATA_0;
         DESC_BUF[4] = REG_PCIE_CPL_HDR_HI;
         DESC_BUF[5] = REG_PCIE_CPL_HDR_LO;
         DESC_BUF[6] = REG_PCIE_COMPL_STATUS;
@@ -360,25 +360,25 @@ static void handle_usb_control(void) {
       REG_PCIE_ADDR_HIGH_3 = DESC_BUF[4];
 
       if (mode == 0) {
-        /* Single TLP: fire with data from DESC_BUF[8-11] */
+        /* Single TLP: fire with data from DESC_BUF[8-11] (LE: [8]=LSB, [11]=MSB) */
         if (fmt_type & PCIE_FMT_HAS_DATA) {
-          REG_PCIE_DATA_0 = DESC_BUF[8];
-          REG_PCIE_DATA_1 = DESC_BUF[9];
-          REG_PCIE_DATA_2 = DESC_BUF[10];
-          REG_PCIE_DATA_3 = DESC_BUF[11];
+          REG_PCIE_DATA_3 = DESC_BUF[8];
+          REG_PCIE_DATA_2 = DESC_BUF[9];
+          REG_PCIE_DATA_1 = DESC_BUF[10];
+          REG_PCIE_DATA_0 = DESC_BUF[11];
         }
         REG_PCIE_STATUS  = PCIE_STATUS_ERROR;
         REG_PCIE_STATUS  = PCIE_STATUS_COMPLETE;
         REG_PCIE_STATUS  = PCIE_STATUS_KICK;
         REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
       } else {
-        /* Streaming: set address shadows for auto-increment, read dword count from value field (BE) */
+        /* Streaming: set address shadows for auto-increment, read dword count from value field (LE) */
         dma_addr_0 = DESC_BUF[0];
         dma_addr_1 = DESC_BUF[1];
         dma_addr_2 = DESC_BUF[2];
         dma_addr_3 = DESC_BUF[3];
-        dma_dwords = ((uint32_t)DESC_BUF[8] << 24) | ((uint32_t)DESC_BUF[9] << 16) |
-                     ((uint32_t)DESC_BUF[10] << 8) | DESC_BUF[11];
+        dma_dwords = ((uint32_t)DESC_BUF[11] << 24) | ((uint32_t)DESC_BUF[10] << 16) |
+                     ((uint32_t)DESC_BUF[9] << 8) | DESC_BUF[8];
         if (dma_dwords > 0) {
           if (mode == 1) {
             // host to device, we arm the OUT endpoint
