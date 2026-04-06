@@ -6,10 +6,16 @@
 #include "types.h"
 #include "registers.h"
 
+void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
+void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
+static void uart_puthex(uint8_t val) {
+  static __code const char hex[] = "0123456789ABCDEF";
+  uart_putc(hex[val >> 4]);
+  uart_putc(hex[val & 0x0F]);
+}
+
 static uint8_t is_usb2;
 static uint8_t pcie_link_up;
-
-#define MAX_CHUNK_DWORDS 0x10
 
 /* Streaming PCIe DMA state — configured via 0xF0 control message */
 static uint8_t dma_mode;       /* 0=idle, 1=write, 2=read */
@@ -64,11 +70,16 @@ static inline void pcie_write_chunk(__xdata uint8_t *src, uint16_t cnt) {
 }
 
 static void do_usb_bulk_in(void) {
-  uint16_t max_chunk = is_usb2 ? 512 : 1024;
-  uint16_t chunk = (dma_dwords > max_chunk) ? max_chunk : (uint16_t)dma_dwords;
+  uint16_t max_chunk_dwords = is_usb2 ? (512/4) : (512/4);
+  uint16_t chunk = (dma_dwords > max_chunk_dwords) ? max_chunk_dwords : (uint16_t)dma_dwords;
+  uart_puts("[read chunk ");
+  uart_puthex(chunk>>8);
+  uart_puthex(chunk&0xFF);
+  uart_puts("]\n");
   pcie_read_chunk((__xdata uint8_t *)0x8000, chunk);
-  REG_USB_BULK_IN_LEN_H = (chunk*4)>>6;
-  REG_USB_BULK_IN_LEN_H = (chunk*4)&0xFF;
+  uint16_t nbytes = chunk * 4;
+  REG_USB_BULK_IN_LEN_H = nbytes >> 8;
+  REG_USB_BULK_IN_LEN_L = nbytes & 0xFF;
   dma_dwords -= chunk;
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
@@ -88,13 +99,6 @@ static void desc_copy(__code const uint8_t *src, uint8_t len) {
   for (i = 0; i < len; i++) DESC_BUF[i] = src[i];
 }
 
-void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
-void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
-static void uart_puthex(uint8_t val) {
-  static __code const char hex[] = "0123456789ABCDEF";
-  uart_putc(hex[val >> 4]);
-  uart_putc(hex[val & 0x0F]);
-}
 
 /*=== USB Control Transfer Helpers ===*/
 
@@ -386,21 +390,16 @@ static void handle_usb_control(void) {
           }
           if (mode == 2) {
             // device to host, we do the first IN
+            uart_puts("[R ");
+            uart_puthex((uint8_t)(dma_dwords >> 24));
+            uart_puthex((uint8_t)(dma_dwords >> 16));
+            uart_puthex((uint8_t)(dma_dwords >> 8));
+            uart_puthex((uint8_t)dma_dwords);
+            uart_puts("]\n");
             do_usb_bulk_in();
           }
         }
       }
-      send_zlp_ack();
-    }
-    if (REG_USB_SETUP_BREQ == 0xF1) {
-      // test packet
-      uart_puts("[F1 ");
-      uart_puthex(DESC_BUF[0]);
-      uart_puthex(DESC_BUF[1]);
-      uart_puthex(DESC_BUF[2]);
-      uart_puthex(DESC_BUF[3]);
-      uart_puts("]");
-      uart_puts("\n");
       send_zlp_ack();
     }
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;

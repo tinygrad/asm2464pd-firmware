@@ -14,7 +14,6 @@ GPU_BUS = 4
 VRAM_BASE = 0x800000000
 EP_OUT = 0x02
 EP_IN = 0x81
-MAX_CHUNK_DWORDS = 0x10
 
 MWR64 = 0x60
 MRD64 = 0x20
@@ -61,15 +60,12 @@ def main():
   print(f"  {t_write:.3f}s ({SIZE / t_write / 1024:.1f} KB/s)")
 
   print(f"Reading {SIZE // 1024} KB from VRAM...")
-  chunk_bytes = MAX_CHUNK_DWORDS * 4
   dma_setup(handle, vram_base, 2, total_dwords)
-  resp = (ctypes.c_ubyte * chunk_bytes)()
-  result = []
+  resp = (ctypes.c_ubyte * SIZE)()
   t0 = time.monotonic()
-  while len(result) < total_dwords:
-    ret = libusb.libusb_bulk_transfer(handle, EP_IN, resp, chunk_bytes, ctypes.byref(transferred), 5000)
-    assert ret == 0, f"read failed: {ret}"
-    result.extend(struct.unpack(f'<{transferred.value // 4}I', bytes(resp[:transferred.value])))
+  ret = libusb.libusb_bulk_transfer(handle, EP_IN, resp, SIZE, ctypes.byref(transferred), 30000)
+  assert ret == 0, f"read failed: {ret}"
+  result = list(struct.unpack(f'<{transferred.value // 4}I', bytes(resp[:transferred.value])))
   t_read = time.monotonic() - t0
 
   errors = 0

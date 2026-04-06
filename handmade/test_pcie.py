@@ -11,24 +11,24 @@ VID, PID = 0xADD1, 0x0001
 EP_OUT, EP_IN = 0x02, 0x81
 MWR64, MRD64 = 0x60, 0x20
 GPU_BUS = 4
-READ_CHUNK = 16  # dwords per bulk IN chunk
+
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'pcie'))
 from pcie_probe import setup_bridges, assign_bars, resize_bars, xdata_read
 
-def dma_setup(handle, addr, mode, count=0):
-  """0xF0: wValue = fmt_type|(be<<8), wIndex = mode|(count<<2). DATA_OUT = addr[8] + value[4]."""
+def dma_setup(handle, addr, mode, ndwords=0):
+  """0xF0: wValue = fmt_type|(be<<8), wIndex = mode. DATA_OUT = addr[8] + ndwords[4 BE]."""
   fmt = {0: 0, 1: MWR64, 2: MRD64}[mode]
   wval = fmt | (0x0F << 8)
-  widx = (mode & 0x03) | ((count & 0x3F) << 2)
-  payload = struct.pack('<II', addr & 0xFFFFFFFF, addr >> 32) + struct.pack('>I', 0)
+  widx = mode & 0x03
+  payload = struct.pack('<II', addr & 0xFFFFFFFF, addr >> 32) + struct.pack('>I', ndwords)
   buf = (ctypes.c_ubyte * 12)(*payload)
   ret = libusb.libusb_control_transfer(handle, 0x40, 0xF0, wval, widx, buf, 12, 5000)
   assert ret >= 0, f"F0 setup failed: {ret}"
 
 def stream_write(handle, addr, data):
   """Set up streaming write mode, then bulk OUT the data."""
-  dma_setup(handle, addr, 1)
+  dma_setup(handle, addr, 1, len(data) // 4)
   buf = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
   transferred = ctypes.c_int()
   ret = libusb.libusb_bulk_transfer(handle, EP_OUT, buf, len(data), ctypes.byref(transferred), 30000)
@@ -37,18 +37,15 @@ def stream_write(handle, addr, data):
   # USB hardware blocks bulk while control is active, so we need a gap.
   time.sleep(0.001)
 
-def stream_read(handle, addr, nbytes, chunk=READ_CHUNK):
+def stream_read(handle, addr, nbytes):
   """Set up streaming read mode, then bulk IN the data."""
-  dma_setup(handle, addr, 2, chunk)
-  chunk_bytes = chunk * 4
-  resp = (ctypes.c_ubyte * chunk_bytes)()
-  result = bytearray()
+  ndwords = nbytes // 4
+  dma_setup(handle, addr, 2, ndwords)
+  resp = (ctypes.c_ubyte * nbytes)()
   transferred = ctypes.c_int()
-  while len(result) < nbytes:
-    ret = libusb.libusb_bulk_transfer(handle, EP_IN, resp, chunk_bytes, ctypes.byref(transferred), 5000)
-    assert ret == 0, f"bulk read failed: {ret}"
-    result.extend(bytes(resp[:transferred.value]))
-  return bytes(result[:nbytes])
+  ret = libusb.libusb_bulk_transfer(handle, EP_IN, resp, nbytes, ctypes.byref(transferred), 5000)
+  assert ret == 0, f"bulk read failed: {ret}"
+  return bytes(resp[:transferred.value])
 
 def make_be_data(dwords):
   """Build big-endian dword array for PCIe writes."""
