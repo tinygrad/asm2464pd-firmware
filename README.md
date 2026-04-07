@@ -1,4 +1,4 @@
-# ASM2464PD Firmware Reimplementation
+# ASM2464PD Firmware
 
 Open-source C firmware for the ASM2464PD USB4/Thunderbolt to NVMe bridge controller.
 
