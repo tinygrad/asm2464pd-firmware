@@ -1699,13 +1699,15 @@
 #define   CPU_MODE_USB3           0x01  // USB 3.0 SuperSpeed capable (boot default)
 /*
  * CPU Reset (0xCC31)
- * Writing 0xFF restarts the CPU from CODE address 0 (re-executes crt0 + main).
- * CODE RAM is preserved — this does NOT reload from SPI flash.
- * USB does NOT re-enumerate — pair with CC28=0x01 for full reboot.
- * Combined sequence: CC28=0x01 (USB re-enum) then CC31=0xFF (CPU restart).
+ * Writing bit 0 restarts the CPU from CODE address 0 (re-executes crt0 + main)
+ * AND triggers USB re-enumeration. Device comes back in ~0.32s.
+ * CODE RAM and XDATA are preserved — does NOT reload from SPI flash.
+ * CC28 is NOT needed — CC31 bit 0 alone does the full reset + USB re-enum.
+ * Bits 1-7 have no effect (writes ignored, always read back 0).
+ * Self-clearing: reads back 0x00 after reset completes.
  */
-#define REG_CPU_RESET           XDATA_REG8(0xCC31)  /* Write 0x01 to restart CPU from addr 0 */
-#define   CPU_RESET_TRIGGER       0x01              /* Bit 0: Trigger CPU restart */
+#define REG_CPU_RESET           XDATA_REG8(0xCC31)  /* Write 0x01 to restart CPU + USB */
+#define   CPU_RESET_TRIGGER       0x01              /* Bit 0: Trigger CPU restart + USB re-enum (self-clearing) */
 #define REG_CPU_EXEC_STATUS     XDATA_REG8(0xCC32)  /* CPU execution status */
 #define   CPU_EXEC_STATUS_ACTIVE  0x01  // Bit 0: CPU execution active
 #define REG_CPU_EXEC_STATUS_2   XDATA_REG8(0xCC33)  /* CPU execution status 2 */
@@ -1746,18 +1748,29 @@
  * detect a disconnect/reconnect and re-enumerate the device.
  * The CPU keeps running — CODE RAM and firmware state are preserved.
  * After write, CC28 reads back as 0x01. On hardware pin reset, CC28 is 0x00.
- * Pair with CC31=0xFF for a full software reboot (USB re-enum + CPU restart).
+ * NOTE: CC31 bit 0 alone also triggers USB re-enum, so CC28 is redundant
+ * for reset purposes. CC28 is USB-only (no CPU restart).
  */
-#define REG_USB_POWER_CYCLE     XDATA_REG8(0xCC28)  /* Write 0x01 to power-cycle USB */
+#define REG_USB_POWER_CYCLE     XDATA_REG8(0xCC28)  /* Write 0x01 to power-cycle USB (no CPU restart) */
 #define   USB_POWER_CYCLE_TRIGGER 0x01              /* Bit 0: Trigger */
 /*
- * CPU Keepalive (0xCC2A)
- * Written in main loop to prevent watchdog reset.
- * Main loop writes 0x0C every iteration.
+ * Timer Config (0xCC2A / 0xCC2C / 0xCC2D)
+ * NOT a hardware watchdog. These are timer mode/config registers used by the
+ * stock firmware's software event system. No autonomous hardware countdown or
+ * auto-reset occurs — tested exhaustively with all modes (0-7), all timeout
+ * values, with/without petting, from both host (E5) and firmware.
+ *
+ * Stock firmware usage:
+ *   Init:  CC2A = (CC2A & 0xF8) | 0x04  (set mode 4 in bits[2:0])
+ *          CC2C = 0xC7, CC2D = 0xC7     (timer parameters)
+ *   Loop:  CC2A = 0x0C                  (0x04 | 0x08, bit 3 = strobe)
+ *
+ * Bits[2:0] = mode select, bit 3 = strobe/ack, bits[5:4] = r/w,
+ * bits[7:6] = masked off (writes ignored, read as 0).
  */
-#define REG_CPU_KEEPALIVE       XDATA_REG8(0xCC2A)  /* Write 0x0C in main loop */
-#define REG_CPU_KEEPALIVE_CC2C  XDATA_REG8(0xCC2C)  /* Keepalive param (init: 0xC7) */
-#define REG_CPU_KEEPALIVE_CC2D  XDATA_REG8(0xCC2D)  /* Keepalive param (init: 0xC7) */
+#define REG_TIMER_CFG_CC2A      XDATA_REG8(0xCC2A)  /* Timer mode config (not a watchdog) */
+#define REG_TIMER_CFG_CC2C      XDATA_REG8(0xCC2C)  /* Timer parameter (stock init: 0xC7) */
+#define REG_TIMER_CFG_CC2D      XDATA_REG8(0xCC2D)  /* Timer parameter (stock init: 0xC7) */
 /*
  * LTSSM State Register (0xCC3D)
  * Link Training and Status State Machine state control.

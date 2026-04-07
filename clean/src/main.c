@@ -654,9 +654,9 @@ static void hw_init(void) {
     /* CPU / keepalive / interrupt */
     REG_CPU_EXEC_STATUS_3 = 0x00;
     REG_USB_EP_CTRL_905F = 0x44;
-    REG_CPU_KEEPALIVE = 0x04;
-    REG_CPU_KEEPALIVE_CC2C = 0xC7;
-    REG_CPU_KEEPALIVE_CC2D = 0xC7;
+    REG_TIMER_CFG_CC2A = 0x04;
+    REG_TIMER_CFG_CC2C = 0xC7;
+    REG_TIMER_CFG_CC2D = 0xC7;
     REG_INT_ENABLE = INT_ENABLE_SYSTEM | USB_CTRL_9200_BIT6;
     REG_CPU_EXEC_STATUS = 0x00;
     REG_INT_DMA_CTRL = 0x04;
@@ -818,7 +818,7 @@ void main(void) {
     IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
     while (1) {
-        REG_CPU_KEEPALIVE = 0x0C;
+        REG_TIMER_CFG_CC2A = 0x0C;
         poll_bulk_events();
 
         if (need_bulk_init) { need_bulk_init = 0; do_bulk_init(); }

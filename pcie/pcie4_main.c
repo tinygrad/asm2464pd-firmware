@@ -2756,9 +2756,9 @@ static void pcie_tunnel_enable(void) {
     REG_PHY_DMA_CMD_CD30 = (REG_PHY_DMA_CMD_CD30 & 0xF8) | 0x05;  /* Mode 5 */
     REG_PHY_DMA_ADDR_LO = 0x00;   /* CD32 */
     REG_PHY_DMA_ADDR_HI = 0xC7;   /* CD33 */
-    REG_CPU_KEEPALIVE = (REG_CPU_KEEPALIVE & 0xF8) | 0x04;  /* CC2A mode 4 */
-    REG_CPU_KEEPALIVE_CC2C = 0xC7;
-    REG_CPU_KEEPALIVE_CC2D = 0xC7;
+    REG_TIMER_CFG_CC2A = (REG_TIMER_CFG_CC2A & 0xF8) | 0x04;  /* CC2A mode 4 */
+    REG_TIMER_CFG_CC2C = 0xC7;
+    REG_TIMER_CFG_CC2D = 0xC7;
 
     /* Stock firmware wrapper at BFE0-C00A runs before tunnel_enable:
      * 1. C6A8 |= 0x01 (CB05)
@@ -3584,8 +3584,8 @@ static void hw_init(void) {
     REG_BUF_DESC_CFG1_HI = 0x00; REG_BUF_DESC_CFG1_LO = 0xE0;
     REG_BUF_DESC_CFG2_HI = 0x00; REG_BUF_DESC_CFG2_LO = 0xE3;
     REG_CPU_EXEC_STATUS_3 = 0x00; REG_USB_EP_CTRL_905F = 0x44;
-    REG_CPU_KEEPALIVE = 0x04;
-    REG_CPU_KEEPALIVE_CC2C = 0xC7; REG_CPU_KEEPALIVE_CC2D = 0xC7;
+    REG_TIMER_CFG_CC2A = 0x04;
+    REG_TIMER_CFG_CC2C = 0xC7; REG_TIMER_CFG_CC2D = 0xC7;
     REG_INT_ENABLE = 0x50; REG_CPU_EXEC_STATUS = 0x00;
     REG_INT_DMA_CTRL = 0x04;
     REG_POWER_CTRL_92C8 = 0x24; REG_POWER_CTRL_92C8 = 0x24;
@@ -3765,7 +3765,7 @@ void main(void) {
 
     uart_puts("[ML]\n");
     while (1) {
-        REG_CPU_KEEPALIVE = 0x0C;
+        REG_TIMER_CFG_CC2A = 0x0C;
         poll_bulk_events();
 
         {
