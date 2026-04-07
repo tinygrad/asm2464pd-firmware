@@ -1697,8 +1697,15 @@
 #define REG_CPU_MODE            XDATA_REG8(0xCC30)
 #define   CPU_MODE_USB2           0x00  // Force USB 2.0 High Speed (fallback)
 #define   CPU_MODE_USB3           0x01  // USB 3.0 SuperSpeed capable (boot default)
-#define REG_CPU_EXEC_CTRL       XDATA_REG8(0xCC31)  /* CPU execution control */
-#define   CPU_EXEC_ENABLE         0x01  // Bit 0: Execution enable
+/*
+ * CPU Reset (0xCC31)
+ * Writing 0xFF restarts the CPU from CODE address 0 (re-executes crt0 + main).
+ * CODE RAM is preserved — this does NOT reload from SPI flash.
+ * USB does NOT re-enumerate — pair with CC28=0x01 for full reboot.
+ * Combined sequence: CC28=0x01 (USB re-enum) then CC31=0xFF (CPU restart).
+ */
+#define REG_CPU_RESET           XDATA_REG8(0xCC31)  /* Write 0x01 to restart CPU from addr 0 */
+#define   CPU_RESET_TRIGGER       0x01              /* Bit 0: Trigger CPU restart */
 #define REG_CPU_EXEC_STATUS     XDATA_REG8(0xCC32)  /* CPU execution status */
 #define   CPU_EXEC_STATUS_ACTIVE  0x01  // Bit 0: CPU execution active
 #define REG_CPU_EXEC_STATUS_2   XDATA_REG8(0xCC33)  /* CPU execution status 2 */
@@ -1733,6 +1740,16 @@
 #define REG_TIMER_CTRL_CC3B     XDATA_REG8(0xCC3B)
 #define   TIMER_CTRL_ENABLE       0x01              /* Bit 0: Timer active */
 #define   TIMER_CTRL_LINK_POWER   0x02              /* Bit 1: SS link power control (cleared in 91D1 handlers) */
+/*
+ * USB Power Cycle (0xCC28)
+ * Writing 0x01 power-cycles the USB controller, causing the host to
+ * detect a disconnect/reconnect and re-enumerate the device.
+ * The CPU keeps running — CODE RAM and firmware state are preserved.
+ * After write, CC28 reads back as 0x01. On hardware pin reset, CC28 is 0x00.
+ * Pair with CC31=0xFF for a full software reboot (USB re-enum + CPU restart).
+ */
+#define REG_USB_POWER_CYCLE     XDATA_REG8(0xCC28)  /* Write 0x01 to power-cycle USB */
+#define   USB_POWER_CYCLE_TRIGGER 0x01              /* Bit 0: Trigger */
 /*
  * CPU Keepalive (0xCC2A)
  * Written in main loop to prevent watchdog reset.

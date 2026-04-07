@@ -298,7 +298,7 @@ def main():
       import subprocess
       subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), '..', 'ftdi_debug.py'), '-rn'],
                      capture_output=True)
-      print("Done! Device should reboot with new firmware.")
+      print("Done! Device rebooted with new firmware.")
       return
   else:
     print(f"Usage: {sys.argv[0]} <firmware.bin>")
