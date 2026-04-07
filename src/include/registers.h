@@ -1707,6 +1707,7 @@
  * Self-clearing: reads back 0x00 after reset completes.
  */
 #define REG_CPU_RESET           XDATA_REG8(0xCC31)  /* Write 0x01 to restart CPU + USB */
+#define REG_CPU_EXEC_CTRL       REG_CPU_RESET       /* Legacy alias for pcie.c */
 #define   CPU_RESET_TRIGGER       0x01              /* Bit 0: Trigger CPU restart + USB re-enum (self-clearing) */
 #define REG_CPU_EXEC_STATUS     XDATA_REG8(0xCC32)  /* CPU execution status */
 #define   CPU_EXEC_STATUS_ACTIVE  0x01  // Bit 0: CPU execution active
