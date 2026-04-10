@@ -18,6 +18,8 @@ static uint8_t is_usb2;
 
 /* Streaming PCIe state — configured via 0xF0 control message */
 static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer */
+static uint8_t dma_is_xdata;  /* 1 if streaming to xdata (F5), 0 if PCIe (F0) */
+static uint16_t xdata_dma_addr; /* target xdata address, advanced during F5 streaming */
 
 
 #include "pcie_pio.h"
@@ -195,6 +197,7 @@ static void handle_usb_control(void) {
         REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       }
       dma_dwords = 0;
+      dma_is_xdata = 0;
       send_zlp_ack();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
       // enable USB bulk mode (bypass MSC)
@@ -203,6 +206,7 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
+      dma_is_xdata = 0;
       send_zlp_ack();
       uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
@@ -260,6 +264,9 @@ static void handle_usb_control(void) {
       *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 LE] */
       /* Don't configure yet — wait for DATA_OUT phase.
        * SETUP params (wValue/wIndex) are readable from registers in DATA_OUT. */
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF5) {
+      /* 0xF5 OUT: Bulk XDATA write. wValue=addr, DATA_OUT=bytes.
+       * Don't process yet — wait for DATA_OUT phase. */
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 IN: read TLP completion (mode=0 only). Returns 8 bytes. */
       uint8_t ret_status = 0xFF;
@@ -312,6 +319,7 @@ static void handle_usb_control(void) {
 
       /* Reset any in-flight streaming transfer so stale ISRs are no-ops. */
       dma_dwords = 0;
+      dma_is_xdata = 0;
 
       /* Configure PCIe TLP engine */
       REG_PCIE_FMT_TYPE   = fmt_type;
@@ -353,6 +361,16 @@ static void handle_usb_control(void) {
         }
       }
       send_zlp_ack();
+    } else if (REG_USB_SETUP_BMREQ == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) &&
+               REG_USB_SETUP_BREQ == 0xF5) {
+      xdata_dma_addr = ((uint16_t)DESC_BUF[1] << 8) | DESC_BUF[0];
+      dma_dwords = ((uint32_t)DESC_BUF[11] << 24) | ((uint32_t)DESC_BUF[10] << 16) |
+                   ((uint32_t)DESC_BUF[9] << 8) | DESC_BUF[8];
+      dma_is_xdata = 1;
+      if (dma_dwords > 0) {
+        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      }
+      send_zlp_ack();
     }
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
   } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
@@ -377,7 +395,15 @@ void handle_usb_bulk_data(void) {
     REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_OUT_COMPLETE;
     uint16_t dword_count = (((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L) >> 2;
     if (dma_dwords >= dword_count) {
-      pcie_write_chunk((__xdata uint8_t *)0x7000, dword_count);
+      if (dma_is_xdata) {
+        __xdata uint8_t *src = (__xdata uint8_t *)0x7000;
+        uint16_t nbytes = dword_count * 4;
+        uint16_t i;
+        for (i = 0; i < nbytes; i++) XDATA_REG8(xdata_dma_addr + i) = src[i];
+        xdata_dma_addr += nbytes;
+      } else {
+        pcie_write_chunk((__xdata uint8_t *)0x7000, dword_count);
+      }
       dma_dwords -= dword_count;
       if (dma_dwords > 0) REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT; // re-arm OUT
     }
