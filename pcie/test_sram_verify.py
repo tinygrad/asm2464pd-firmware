@@ -65,6 +65,24 @@ def main():
   handle = usb.usb.handle
   mm = iface.dev_impl.mm
 
+  # 1b. Quick F5 XDATA write test
+  print("\nF5 XDATA write test...")
+  test_addr = 0xA000
+  # Clear via E5 (single-byte writes)
+  for i in range(64): libusb.libusb_control_transfer(handle, 0x40, 0xE5, test_addr + i, 0xa0, None, 0, 1000)
+  assert usb.read(test_addr, 4) == b'\xa0\xa0\xa0\xa0', "clear failed"
+
+  pattern = bytes([0xDE, 0xAD, 0xBE, 0xEF] * 0x10)
+  dwords = len(pattern) // 4
+  ret = libusb.libusb_control_transfer(handle, 0x40, 0xF5, test_addr, dwords, None, 0, 5000)
+  assert ret == 0, f"F5 setup failed: {ret}"
+  f5_data = (ctypes.c_ubyte * len(pattern))(*pattern)
+  transferred = ctypes.c_int()
+  ret = libusb.libusb_bulk_transfer(handle, EP_OUT, f5_data, len(pattern), ctypes.byref(transferred), 1000)
+  assert ret == 0, f"F5 bulk OUT failed: {ret}"
+  got = usb.read(test_addr, len(pattern))
+  assert got == pattern, f"F5 readback mismatch: got {got.hex()}, expected {pattern.hex()}"
+
   # 2. Fill all SRAM via 0xF2 + single bulk OUT
   total_bytes = NUM_SLOTS * SLOT_SIZE
   total_sectors = total_bytes // SECTOR_SIZE

@@ -265,8 +265,14 @@ static void handle_usb_control(void) {
       /* Don't configure yet — wait for DATA_OUT phase.
        * SETUP params (wValue/wIndex) are readable from registers in DATA_OUT. */
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF5) {
-      /* 0xF5 OUT: Bulk XDATA write. wValue=addr, DATA_OUT=bytes.
-       * Don't process yet — wait for DATA_OUT phase. */
+      /* 0xF5 OUT: Bulk XDATA write.  wValue=addr, wIndex=dword_count */
+      xdata_dma_addr = ((uint16_t)wValH << 8) | wValL;
+      dma_dwords = ((uint16_t)REG_USB_SETUP_WIDX_H << 8) | REG_USB_SETUP_WIDX_L;
+      dma_is_xdata = 1;
+      if (dma_dwords > 0) {
+        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      }
+      send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 IN: read TLP completion (mode=0 only). Returns 8 bytes. */
       uint8_t ret_status = 0xFF;
@@ -359,16 +365,6 @@ static void handle_usb_control(void) {
             do_usb_bulk_in();
           }
         }
-      }
-      send_zlp_ack();
-    } else if (REG_USB_SETUP_BMREQ == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) &&
-               REG_USB_SETUP_BREQ == 0xF5) {
-      xdata_dma_addr = ((uint16_t)DESC_BUF[1] << 8) | DESC_BUF[0];
-      dma_dwords = ((uint32_t)DESC_BUF[11] << 24) | ((uint32_t)DESC_BUF[10] << 16) |
-                   ((uint32_t)DESC_BUF[9] << 8) | DESC_BUF[8];
-      dma_is_xdata = 1;
-      if (dma_dwords > 0) {
-        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
       }
       send_zlp_ack();
     }
