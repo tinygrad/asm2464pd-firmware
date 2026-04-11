@@ -6,6 +6,15 @@
 #include "types.h"
 #include "registers.h"
 
+__sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
+__sfr __at(0xA8) IE;
+__sfr __at(0x88) TCON;
+
+#define IE_EA   0x80
+#define IE_EX1  0x04
+#define IE_ET0  0x02
+#define IE_EX0  0x01
+
 void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {
@@ -19,8 +28,8 @@ static uint8_t is_usb2;
 /* Streaming PCIe state — configured via 0xF0 control message */
 static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer */
 
-
 #include "pcie_pio.h"
+#include "pcie_tuning.h"
 
 static void do_usb_bulk_in(void) {
   uint16_t max_dwords = is_usb2 ? (512/4) : (1024/4);
@@ -32,14 +41,6 @@ static void do_usb_bulk_in(void) {
   dma_dwords -= chunk;
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
-
-__sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
-__sfr __at(0xA8) IE;
-__sfr __at(0x88) TCON;
-#define IE_EA   0x80
-#define IE_EX1  0x04
-#define IE_ET0  0x02
-#define IE_EX0  0x01
 
 #define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
 
@@ -500,9 +501,8 @@ void main(void) {
   REG_PCIE_TLP_LENGTH = 0x20;
 
   // PCIe bringup
-  REG_TUNNEL_LINK_STATUS = 0xE;                // this is link width.
-                                               //   0xE = x01 (needed for RDNA3)
-                                               //   0xC = x02 (needed for NVMe)
+  pcie_apply_x2_rxphy_tuning();
+  REG_TUNNEL_LINK_STATUS = PCIE_LINK_WIDTH_x2;
   REG_TUNNEL_CTRL_B403 = 0x01;                 // fix PCIe link stability
   REG_PCIE_PERST_CTRL  = 0x01;                 // assert PERST#
   REG_TUNNEL_LINK_STATE = 0x00;                // clear tunnel link state
