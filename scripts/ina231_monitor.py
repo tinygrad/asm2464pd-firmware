@@ -304,7 +304,7 @@ def cleanup_gpio(xdata):
 
 
 def print_sample_header():
-    print("time          bus[V]   current[mA]  power[W]", flush=True)
+    print("time          bus[V]    current[A]  power[W]", flush=True)
     print("------------  -------  -----------  --------", flush=True)
 
 
@@ -376,7 +376,7 @@ def main():
                 print(
                     f"{fmt_timestamp(wall_now)}  "
                     f"{sample['bus_volts']:7.4f}  "
-                    f"{sample['current_amps'] * 1e3:+11.1f}  "
+                    f"{sample['current_amps']:11.3f}  "
                     f"{sample['power_watts']:+8.3f}",
                     flush=True,
                 )
