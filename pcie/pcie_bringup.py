@@ -8,6 +8,7 @@ driving the ASM2464PD's XDATA registers over USB from the host side.
 The handmade/src/main.c firmware running on the device exposes:
   0xE4 (vendor read):  bmRequestType=0xC0, bRequest=0xE4, wValue=addr, wLength=size
   0xE5 (vendor write): bmRequestType=0x40, bRequest=0xE5, wValue=addr, wIndex=val
+  0xF3 (PCIe power):   bmRequestType=0x40, bRequest=0xF3, wValue=0/1 (off/on)
 
 Usage:
     python3 pcie_bringup.py              # Full PCIe bringup
@@ -308,6 +309,17 @@ class ASM2464PD:
         if self.verbose:
             print(f"  B1R 0x{addr:04X} = {data.hex()}")
         return data
+
+    def set_pcie_power(self, enabled):
+        """Toggle PCIe rails and PERST via 0xF3 vendor control transfer."""
+        if self.verbose:
+            print(f"  PCIe power {'on' if enabled else 'off'}")
+        if self.dry_run:
+            return
+        ret = libusb.libusb_control_transfer(self.dev.handle, 0x40, 0xF3, 1 if enabled else 0, 0, None, 0, 1000)
+        if ret < 0:
+            state = 'on' if enabled else 'off'
+            raise IOError(f"F3 PCIe power {state} failed: {ret}")
 
     def bank1_or_bits(self, addr, mask):
         """Read-modify-write in bank 1: val |= mask."""

@@ -23,6 +23,18 @@ static void uart_puthex(uint8_t val) {
   uart_putc(hex[val & 0x0F]);
 }
 
+#define TIMER0_MODE_HALF_MS     0x04U
+static void sleep(uint16_t milliseconds) {
+  REG_TIMER0_CSR = TIMER_CSR_CLEAR;
+  REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
+  REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | TIMER0_MODE_HALF_MS;
+  uint16_t threshold = 2*milliseconds;
+  REG_TIMER0_THRESHOLD_HI = threshold >> 8;
+  REG_TIMER0_THRESHOLD_LO = threshold & 0xFF;
+  REG_TIMER0_CSR = TIMER_CSR_ENABLE;
+  while (!(REG_TIMER0_CSR & TIMER_CSR_EXPIRED));
+}
+
 static uint8_t is_usb2;
 
 /* Streaming PCIe state — configured via 0xF0 control message */
@@ -30,6 +42,52 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
+
+static void pcie_power_off(void) {
+  /* Hold the downstream device in reset before removing its rails. */
+  REG_PCIE_PERST_CTRL = PCIE_PERST_ASSERT;
+  REG_TUNNEL_LINK_STATE = 0x00;
+  REG_PHY_TIMER_CTRL_E764 = 0x00;
+  REG_PCIE_LANE_CTRL_C659 &= (uint8_t)~0x01;
+  REG_HDDPC_CTRL &= (uint8_t)~0x20;
+}
+
+static void pcie_power_on(void) {
+  REG_TUNNEL_LINK_STATUS = PCIE_LINK_WIDTH_x2;
+  REG_TUNNEL_CTRL_B403 = 0x01;                 // fix PCIe link stability
+  REG_PCIE_PERST_CTRL  = PCIE_PERST_ASSERT;    // assert PERST#
+  REG_TUNNEL_LINK_STATE = 0x00;                // clear tunnel link state
+  DPX = 0x01; REG_PHY_TLP_ROUTING = PHY_TLP_ROUTING_ENABLE; DPX = 0x00;
+  REG_HDDPC_CTRL |= 0x20;                      // enable 3.3V
+  REG_PCIE_LANE_CTRL_C659 |= 0x01;             // enable 12V
+  REG_PHY_TIMER_CTRL_E764 = 0x1C;              // start link training
+  REG_PCIE_TUNNEL_CFG = PCIE_TLP_CTRL_TUNNEL;  // fix late issue in RDNA3
+  REG_PCIE_PERST_CTRL = 0x00;                  // deassert PERST#
+
+  // wait for stable link
+  uint8_t stable_samples = 0;
+  while (stable_samples < 3) {
+    uint8_t ltssm_state = REG_PCIE_LTSSM_STATE;
+    DPX = 0x01;
+    uint8_t link_info = REG_PHY_PCIE_LINK_INFO;
+    DPX = 0x00;
+    uart_puts("[PCIe ");
+    uart_puthex(ltssm_state);
+    uart_puts((REG_SYS_CTRL_E765 & SYS_CTRL_E765_PCIE_LINK_UP) ? "  UP " : " down");
+    uart_puts(" Gen");
+    uart_puthex(link_info & 0x0F);
+    uart_puts(" x");
+    uart_puthex((link_info >> 4) & 0x0F);
+    if (ltssm_state == 0x78) uart_puts(" CONNECTED");
+    uart_puts("]\n");
+    if (REG_PCIE_LTSSM_STATE == 0x78) {
+      stable_samples++;
+    } else {
+      stable_samples = 0;
+    }
+    sleep(100);
+  }
+}
 
 static void do_usb_bulk_in(void) {
   uint16_t max_dwords = is_usb2 ? (512/4) : (1024/4);
@@ -47,18 +105,6 @@ static void do_usb_bulk_in(void) {
 static void desc_copy(__code const uint8_t *src, uint8_t len) {
   uint8_t i;
   for (i = 0; i < len; i++) DESC_BUF[i] = src[i];
-}
-
-#define TIMER0_MODE_HALF_MS     0x04U
-static void sleep(uint16_t milliseconds) {
-  REG_TIMER0_CSR = TIMER_CSR_CLEAR;
-  REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
-  REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | TIMER0_MODE_HALF_MS;
-  uint16_t threshold = 2*milliseconds;
-  REG_TIMER0_THRESHOLD_HI = threshold >> 8;
-  REG_TIMER0_THRESHOLD_LO = threshold & 0xFF;
-  REG_TIMER0_CSR = TIMER_CSR_ENABLE;
-  while (!(REG_TIMER0_CSR & TIMER_CSR_EXPIRED));
 }
 
 /*=== USB Control Transfer Helpers ===*/
@@ -263,6 +309,15 @@ static void handle_usb_control(void) {
       REG_NVME_SECTOR_COUNT_LO = (uint8_t)(sectors & 0xFF);
       REG_NVME_CTRL_STATUS = NVME_CTRL_DMA_START | (bulk_in ? 0 : NVME_CTRL_WRITE_DIR);
       REG_NVME_CMD_PARAM   = slot_sel;
+      send_zlp_ack();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF3) {
+      /* 0xF3: PCIe power control.
+       *   wValue low bit 0 = 0 power off, 1 power on. */
+      if (wValL & 0x01) {
+        pcie_power_on();
+      } else {
+        pcie_power_off();
+      }
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
@@ -496,45 +551,17 @@ void main(void) {
   // enable USB_PERIPH_LINK_EVENT to fall back to USB2
   REG_BUF_CFG_9303 = 0x33;
 
-  // PCIe TLP engine values that don't change
+  // PCIe TLP engine values that don't change + tuning
   REG_PCIE_TLP_CTRL   = 0x01;
   REG_PCIE_TLP_LENGTH = 0x20;
-
-  // PCIe bringup
   pcie_apply_x2_rxphy_tuning();
-  REG_TUNNEL_LINK_STATUS = PCIE_LINK_WIDTH_x2;
-  REG_TUNNEL_CTRL_B403 = 0x01;                 // fix PCIe link stability
-  REG_PCIE_PERST_CTRL  = 0x01;                 // assert PERST#
-  REG_TUNNEL_LINK_STATE = 0x00;                // clear tunnel link state
-  DPX = 0x01; REG_PHY_TLP_ROUTING = PHY_TLP_ROUTING_ENABLE; DPX = 0x00;
-  REG_HDDPC_CTRL |= 0x20;                      // enable 3.3V
-  REG_PCIE_LANE_CTRL_C659 |= 0x01;             // enable 12V
-  REG_PHY_TIMER_CTRL_E764 = 0x1C;              // start link training
-  REG_PCIE_TUNNEL_CFG = PCIE_TLP_CTRL_TUNNEL;  // fix late issue in RDNA3
-  REG_PCIE_PERST_CTRL = 0x00;                  // deassert PERST#
+  pcie_power_off();
 
   // enable interrupts and chill
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
-  int i = 0;
-  while (i < 5) {
-    DPX = 0x01;
-    uint8_t link_info = REG_PHY_PCIE_LINK_INFO;
-    DPX = 0x00;
-    uart_puts("[PCIe ");
-    uint8_t ltssm_state = REG_PCIE_LTSSM_STATE;
-    uart_puthex(ltssm_state);
-    uart_puts((REG_SYS_CTRL_E765 & SYS_CTRL_E765_PCIE_LINK_UP) ? " UP" : " down");
-    uart_puts(" Gen");
-    uart_puthex(link_info & 0x0F);
-    uart_puts(" x");
-    uart_puthex((link_info >> 4) & 0x0F);
-    if (ltssm_state == 0x78) uart_puts(" CONNECTED");
-    uart_puts("]\n");
-    sleep(500);
-    // need 2.5 seconds in state 0x78
-    if (ltssm_state == 0x78) { i++; } else { i = 0; }
-  }
+  // PCIe power on for backwards compatibility, can be removed
+  pcie_power_on();
 
   while (1) {
     // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
