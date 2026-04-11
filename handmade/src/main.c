@@ -6,6 +6,15 @@
 #include "types.h"
 #include "registers.h"
 
+__sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
+__sfr __at(0xA8) IE;
+__sfr __at(0x88) TCON;
+
+#define IE_EA   0x80
+#define IE_EX1  0x04
+#define IE_ET0  0x02
+#define IE_EX0  0x01
+
 void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {

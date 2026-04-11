@@ -3,15 +3,6 @@
 
 #include "types.h"
 
-__sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
-__sfr __at(0xA8) IE;
-__sfr __at(0x88) TCON;
-
-#define IE_EA   0x80
-#define IE_EX1  0x04
-#define IE_ET0  0x02
-#define IE_EX0  0x01
-
 /*
  * ASM2464PD USB4/Thunderbolt NVMe Controller - Hardware Register Map
  *
