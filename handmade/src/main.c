@@ -20,6 +20,7 @@ static uint8_t is_usb2;
 static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer */
 
 #include "pcie_pio.h"
+#include "pcie_tuning.h"
 
 static void do_usb_bulk_in(void) {
   uint16_t max_dwords = is_usb2 ? (512/4) : (1024/4);
@@ -32,14 +33,6 @@ static void do_usb_bulk_in(void) {
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
 
-__sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
-__sfr __at(0xA8) IE;
-__sfr __at(0x88) TCON;
-#define IE_EA   0x80
-#define IE_EX1  0x04
-#define IE_ET0  0x02
-#define IE_EX0  0x01
-
 #define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
 
 static void desc_copy(__code const uint8_t *src, uint8_t len) {
@@ -48,9 +41,6 @@ static void desc_copy(__code const uint8_t *src, uint8_t len) {
 }
 
 #define TIMER0_MODE_HALF_MS     0x04U
-#define TIMER0_MODE_FAST_A      0x01U
-#define TIMER0_MODE_FAST_B      0x02U
-
 static void sleep(uint16_t milliseconds) {
   REG_TIMER0_CSR = TIMER_CSR_CLEAR;
   REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
@@ -60,63 +50,6 @@ static void sleep(uint16_t milliseconds) {
   REG_TIMER0_THRESHOLD_LO = threshold & 0xFF;
   REG_TIMER0_CSR = TIMER_CSR_ENABLE;
   while (!(REG_TIMER0_CSR & TIMER_CSR_EXPIRED));
-}
-
-static void timer_wait_raw(uint16_t threshold, uint8_t mode) {
-  REG_TIMER0_CSR = TIMER_CSR_CLEAR;
-  REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
-  REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | (mode & 0x07);
-  REG_TIMER0_THRESHOLD_HI = threshold >> 8;
-  REG_TIMER0_THRESHOLD_LO = threshold & 0xFF;
-  REG_TIMER0_CSR = TIMER_CSR_ENABLE;
-  while (!(REG_TIMER0_CSR & TIMER_CSR_EXPIRED)) { }
-  REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
-}
-
-static void pcie_lane_config_mask(uint8_t mask) {
-  uint8_t tmp;
-  uint8_t current;
-  uint8_t counter;
-  uint8_t iter;
-  uint8_t b402_saved;
-
-  b402_saved = REG_PCIE_CTRL_B402 & 0x02;
-  REG_PCIE_CTRL_B402 &= 0xFD;
-  REG_PCIE_CTRL_B402 &= 0xFD;
-
-  if (mask == 0x0F) {
-    static __code const uint8_t lane_steps[] = {0x01, 0x03, 0x07, 0x0F};
-    for (iter = 0; iter < 4; iter++) {
-      tmp = REG_PCIE_LINK_STATE;
-      REG_PCIE_LINK_STATE = lane_steps[iter] | (tmp & 0xF0);
-      timer_wait_raw(0x00C7, TIMER0_MODE_FAST_B);
-    }
-  } else {
-    current = REG_PCIE_LINK_STATE & 0x0F;
-    counter = 0x01;
-    for (iter = 0; iter < 4; iter++) {
-      uint8_t new_state;
-
-      if (current == mask) break;
-      new_state = current & (mask | (counter ^ 0x0F));
-      current = new_state;
-      tmp = REG_PCIE_LINK_STATE;
-      REG_PCIE_LINK_STATE = new_state | (tmp & 0xF0);
-      timer_wait_raw(0x00C7, TIMER0_MODE_FAST_B);
-      counter = counter + counter;
-    }
-
-    REG_PCIE_TUNNEL_CTRL = (REG_PCIE_TUNNEL_CTRL & 0xFE) | 0x01;
-    REG_PCIE_TUNNEL_CTRL &= 0xFE;
-  }
-
-  if (b402_saved) REG_PCIE_CTRL_B402 |= 0x02;
-
-  tmp = REG_PCIE_LANE_CONFIG;
-  REG_PCIE_LANE_CONFIG = (tmp & 0xF0) | (mask & 0x0E);
-  tmp = REG_PCIE_LINK_PARAM_B404;
-  tmp = ((tmp & 0x0F) ^ 0x0F) << 4;
-  REG_PCIE_LANE_CONFIG = (REG_PCIE_LANE_CONFIG & 0x0F) | (tmp & 0xF0);
 }
 
 /*=== USB Control Transfer Helpers ===*/
@@ -527,8 +460,6 @@ void int1_isr(void) __interrupt(1) {
   uart_puts("[int1]\n");
 }
 
-#include "pcie_tuning.h"
-
 void main(void) {
   // without this, UART has parity
   REG_UART_LCR &= ~LCR_PARITY_MASK;
@@ -577,7 +508,6 @@ void main(void) {
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
   int i = 0;
-  uint8_t tried_x2 = 0;
   while (i < 5) {
     DPX = 0x01;
     uint8_t link_info = REG_PHY_PCIE_LINK_INFO;
