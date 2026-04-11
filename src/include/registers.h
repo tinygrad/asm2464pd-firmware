@@ -2201,16 +2201,16 @@
 //=============================================================================
 // Command Engine (0xE400-0xE4FF)
 //=============================================================================
-#define REG_CMD_CTRL_E400       XDATA_REG8(0xE400)  /* Command control (bit 7 = enable, bit 6 = busy) */
+#define REG_CMD_CTRL_E400       XDATA_REG8(0xE400)  /* Engine mode/control. Firmware toggles bit 7 during setup; bit 6 selects init mode used by PD/PHY paths. */
 #define   CMD_CTRL_E400_BIT6      0x40  // Bit 6: Command busy flag
 #define   CMD_CTRL_E400_BIT7      0x80  // Bit 7: Command enable
-#define REG_CMD_STATUS_E402     XDATA_REG8(0xE402)  /* Command status (bit 3 = poll status) */
-#define REG_CMD_CTRL_E403       XDATA_REG8(0xE403)
-#define REG_CMD_CFG_E404        XDATA_REG8(0xE404)
-#define REG_CMD_CFG_E405        XDATA_REG8(0xE405)
+#define REG_CMD_STATUS_E402     XDATA_REG8(0xE402)  /* Engine status/issue bits. cmd_check_busy() treats bits 1,2,3 as busy/in-flight; PD hard-reset setup sets bit 5 here before triggering. */
+#define REG_CMD_CTRL_E403       XDATA_REG8(0xE403)  /* Per-command phase/state byte. cmd_wait_completion() writes G_CMD_STATUS here just before asserting E41C bit 0. */
+#define REG_CMD_CFG_E404        XDATA_REG8(0xE404)  /* Command class/select byte. Observed values: 0x40 in PD/PHY mailbox issue path after Drive_HardRst. */
+#define REG_CMD_CFG_E405        XDATA_REG8(0xE405)  /* Command subtype/flags. Low 3 bits are opcode-like; PD hard-reset path uses value 0x05 here. */
 #define REG_CMD_CTRL_E409       XDATA_REG8(0xE409)  /* Command control (bit 0,7 = flags) */
 #define REG_CMD_CFG_E40A        XDATA_REG8(0xE40A)  /* Command config - write 0x0F */
-#define REG_CMD_CONFIG          XDATA_REG8(0xE40B)  /* Command config (bit 0 = flag) */
+#define REG_CMD_CONFIG          XDATA_REG8(0xE40B)  /* Engine handshake/config bits. Helper 0x9536 clears bits 1:3 before DMA from CC8A/B, helper 0x9584 restores them after CC89 reaches done state. */
 #define REG_CMD_CFG_E40D        XDATA_REG8(0xE40D)  /* Command config - write 0x28 */
 #define REG_CMD_CFG_E40E        XDATA_REG8(0xE40E)  /* Command config - write 0x8A */
 /*
@@ -2236,17 +2236,29 @@
 #define   PHY_INT_CDR_RECOVERY    0x20  // Bit 5: CDR recovery needed (→ 0xE5DF)
 #define   PHY_INT_LINK_TRAINING   0x40  // Bit 6: Link training event (→ 0xE1BE)
 #define   PHY_INT_MAJOR_ERROR     0x80  // Bit 7: Major PHY error
-#define REG_CMD_CFG_E411        XDATA_REG8(0xE411)  /* Command config - write 0xA1 */
-#define REG_CMD_CFG_E412        XDATA_REG8(0xE412)  /* Command config - write 0x79 */
+#define REG_CMD_CFG_E411        XDATA_REG8(0xE411)  /* PD/PHY command parameter A. Common init value: 0xA1. */
+#define REG_CMD_CFG_E412        XDATA_REG8(0xE412)  /* PD/PHY command parameter B. Common init value: 0x79. */
 #define REG_CMD_CFG_E413        XDATA_REG8(0xE413)  /* Command config (bits 0,1,4,5,6 = flags) */
-#define REG_CMD_BUSY_STATUS     XDATA_REG8(0xE41C)
-#define   CMD_BUSY_STATUS_BUSY    0x01  // Bit 0: Command engine busy
-#define REG_CMD_TRIGGER         XDATA_REG8(0xE420)
-#define REG_CMD_MODE_E421       XDATA_REG8(0xE421)
-#define REG_CMD_PARAM           XDATA_REG8(0xE422)
-#define REG_CMD_STATUS          XDATA_REG8(0xE423)
-#define REG_CMD_ISSUE           XDATA_REG8(0xE424)
-#define REG_CMD_TAG             XDATA_REG8(0xE425)
+#define REG_CMD_BUSY_STATUS     XDATA_REG8(0xE41C)  /* Software trigger/busy latch. cmd_start_trigger() sets bit 0; hardware clears it on command acceptance/completion. */
+#define   CMD_BUSY_STATUS_BUSY    0x01  // Bit 0: Command engine busy / start trigger pending
+/*
+ * Command mailbox window (0xE420-0xE43F).
+ *
+ * Firmware commonly clears all 32 bytes with the loop at 0xE740 before issuing
+ * a new command. The block is used as a packed request/response mailbox for the
+ * internal command engine: opcode/status/issue/tag plus LBA/count/length fields.
+ *
+ * The setup helper at 0x9536 first runs a small DMA transaction via CC88/CC89
+ * with CC8A/B = 0xC700. That DMA appears to move command-engine scratch/status
+ * data to or from an internal buffer at 0xC700 before the mailbox below is used;
+ * it is not the hard-reset opcode itself.
+ */
+#define REG_CMD_TRIGGER         XDATA_REG8(0xE420)  /* Mailbox trigger/control byte. Often cleared before setup; other paths write 0x40/0x80 here to start mode-specific issue flows. */
+#define REG_CMD_MODE_E421       XDATA_REG8(0xE421)  /* Mailbox mode/sub-op byte. Helper 0xE43D ORs this with derived slot bits before cmd_wait_completion(). */
+#define REG_CMD_PARAM           XDATA_REG8(0xE422)  /* Mailbox parameter/opcode byte. Example NVMe/SCSI path writes 0x32 here. */
+#define REG_CMD_STATUS          XDATA_REG8(0xE423)  /* Mailbox status/phase byte. Example command setup writes 0x90 here before issue. */
+#define REG_CMD_ISSUE           XDATA_REG8(0xE424)  /* Mailbox issue byte / command-specific payload low byte. */
+#define REG_CMD_TAG             XDATA_REG8(0xE425)  /* Mailbox tag/flags. Example path writes 0x04 then sets bit 4. */
 #define REG_CMD_LBA_0           XDATA_REG8(0xE426)
 #define REG_CMD_LBA_1           XDATA_REG8(0xE427)
 #define REG_CMD_LBA_2           XDATA_REG8(0xE428)
