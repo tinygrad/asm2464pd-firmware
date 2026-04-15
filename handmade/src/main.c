@@ -42,6 +42,7 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
+#include "usb_tuning.h"
 
 static void pcie_power_off(void) {
   /* Hold the downstream device in reset before removing its rails. */
@@ -529,6 +530,9 @@ void main(void) {
   REG_UART_LCR &= ~LCR_PARITY_MASK;
 
   uart_puts("\n[BOOT]\n");
+
+  // usb tuning
+  usb_apply_ss_phy_tuning();
 
   // clear this to get USB3 interrupts
   REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;

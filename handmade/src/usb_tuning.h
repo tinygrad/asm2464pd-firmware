@@ -1,0 +1,88 @@
+/*
+ * USB SS PHY tuning values from stock firmware.
+ */
+
+#include "types.h"
+#include "registers.h"
+
+static void usb_serdes_tune_lane(uint16_t base) {
+  /* CDR / EQ initial config */
+  XDATA_REG8(base + 0x28) = 0x5B;
+  XDATA_REG8(base + 0x45) = 0x72;
+  XDATA_REG8(base + 0x21) = 0xFF;
+  XDATA_REG8(base + 0x0C) = 0x01;
+  XDATA_REG8(base + 0x1C) = 0x01;
+  XDATA_REG8(base + 0x2C) = 0x03;
+  XDATA_REG8(base + 0x3C) = 0x00;
+  XDATA_REG8(base + 0x0C) = 0x01;
+  XDATA_REG8(base + 0x1C) = 0x03;
+  XDATA_REG8(base + 0x2C) = 0x03;
+  XDATA_REG8(base + 0x3C) = 0x00;
+  XDATA_REG8(base + 0x43) = 0x1C;
+  XDATA_REG8(base + 0x49) = 0x41;
+  XDATA_REG8(base + 0x25) = 0xE6;
+  XDATA_REG8(base + 0x26) = 0x77;
+  XDATA_REG8(base + 0x4A) = 0x00;
+  XDATA_REG8(base + 0x4A) = 0x00;
+  XDATA_REG8(base + 0x4A) = 0x00;
+  XDATA_REG8(base + 0x4A) = 0x00;
+  XDATA_REG8(base + 0x07) = 0x6F;
+  XDATA_REG8(base + 0x14) = 0x70;
+  XDATA_REG8(base + 0x22) = 0x70;
+  XDATA_REG8(base + 0x45) = 0x7B;
+  XDATA_REG8(base + 0x13) = 0x85;
+  XDATA_REG8(base + 0x4E) = 0x02;
+  XDATA_REG8(base + 0x4E) = 0x16;
+
+  /* TX/RX equalization */
+  XDATA_REG8(base + 0x10) = 0x80;
+  XDATA_REG8(base + 0x20) = 0x84;
+  XDATA_REG8(base + 0x02) = 0xAA;
+  XDATA_REG8(base + 0x12) = 0xA9;
+  XDATA_REG8(base + 0x22) = 0x6A;
+  XDATA_REG8(base + 0x10) = 0x83;
+  XDATA_REG8(base + 0x20) = 0x83;
+  XDATA_REG8(base + 0x11) = 0xE8;
+  XDATA_REG8(base + 0x21) = 0xE8;
+  XDATA_REG8(base + 0x5B) = 0x1B;
+  XDATA_REG8(base + 0x04) = 0x45;
+  XDATA_REG8(base + 0x14) = 0x77;
+  XDATA_REG8(base + 0x05) = 0x6F;
+  XDATA_REG8(base + 0x15) = 0x6C;
+  XDATA_REG8(base + 0x25) = 0xEF;
+  XDATA_REG8(base + 0x05) = 0x6F;
+  XDATA_REG8(base + 0x06) = 0x77;
+  XDATA_REG8(base + 0x16) = 0x7F;
+  XDATA_REG8(base + 0x27) = 0x71;
+  XDATA_REG8(base + 0x0B) = 0x4A;
+  XDATA_REG8(base + 0x04) = 0x45;
+  XDATA_REG8(base + 0x24) = 0x00;
+  XDATA_REG8(base + 0x09) = 0x93;
+  XDATA_REG8(base + 0x19) = 0x83;
+  XDATA_REG8(base + 0x29) = 0x83;
+  XDATA_REG8(base + 0x02) = 0xAA;
+  XDATA_REG8(base + 0x12) = 0x29;
+  XDATA_REG8(base + 0x46) = 0x1D;
+  XDATA_REG8(base + 0x4C) = 0x0E;
+  XDATA_REG8(base + 0x4D) = 0x00;
+
+  /* Final trim */
+  XDATA_REG8(base + 0x23) = 0x85;
+  XDATA_REG8(base + 0x17) = 0x4F;
+  XDATA_REG8(base + 0x1A) = 0x4E;
+  XDATA_REG8(base + 0x27) = 0x51;
+  XDATA_REG8(base + 0x2B) = 0x40;
+  XDATA_REG8(base + 0x2A) = 0x4D;
+  XDATA_REG8(base + 0x17) = 0x50;
+  XDATA_REG8(base + 0x13) = 0x85;
+  XDATA_REG8(base + 0x03) = 0x85;
+  XDATA_REG8(base + 0x26) = 0x7B;
+  XDATA_REG8(base + 0x24) = 0x07;
+  XDATA_REG8(base + 0x23) = 0x86;
+  XDATA_REG8(base + 0x1B) = 0x40;
+}
+
+static void usb_apply_ss_phy_tuning(void) {
+  usb_serdes_tune_lane(0xC280);  /* lane 0 */
+  usb_serdes_tune_lane(0xC300);  /* lane 1 */
+}
