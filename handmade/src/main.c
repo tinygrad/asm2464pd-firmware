@@ -42,6 +42,7 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
+#include "usb_tuning.h"
 
 static void pcie_power_off(void) {
   /* Hold the downstream device in reset before removing its rails. */
@@ -463,7 +464,11 @@ void int0_isr(void) __interrupt(0) {
     periph_status = REG_USB_PERIPH_STATUS;
 
     if (periph_status & USB_PERIPH_BUS_RESET) {
-      uart_puts("[UNHANDLED RESET]\n");
+      uint8_t link_event = REG_USB_PHY_CTRL_91D1;
+      REG_USB_PHY_CTRL_91D1 = link_event;
+      uart_puts("[RST ");
+      uart_puthex(link_event);
+      uart_puts("]\n");
     } else if (periph_status & USB_PERIPH_CONTROL) {
       handle_usb_control();
     } else if (periph_status & USB_PERIPH_ALT_LINK) {
@@ -530,6 +535,18 @@ void main(void) {
 
   uart_puts("\n[BOOT]\n");
 
+  // usb tuning
+  usb_apply_ss_phy_tuning();
+
+  // PCIe TLP engine values that don't change + tuning
+  REG_PCIE_TLP_CTRL   = 0x01;
+  REG_PCIE_TLP_LENGTH = 0x20;
+  pcie_apply_x2_rxphy_tuning();
+  pcie_power_off();
+
+  // PCIe power on for backwards compatibility, can be removed
+  pcie_power_on();
+
   // clear this to get USB3 interrupts
   REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
 
@@ -551,17 +568,8 @@ void main(void) {
   // enable USB_PERIPH_LINK_EVENT to fall back to USB2
   REG_BUF_CFG_9303 = 0x33;
 
-  // PCIe TLP engine values that don't change + tuning
-  REG_PCIE_TLP_CTRL   = 0x01;
-  REG_PCIE_TLP_LENGTH = 0x20;
-  pcie_apply_x2_rxphy_tuning();
-  pcie_power_off();
-
   // enable interrupts and chill
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
-
-  // PCIe power on for backwards compatibility, can be removed
-  pcie_power_on();
 
   while (1) {
     // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
