@@ -264,6 +264,11 @@ static void handle_usb_control(void) {
       dma_dwords = 0;
       send_zlp_ack();
       uart_puts("[*** SET CONFIG ***]\n");
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
+      REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
+      REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
+      dma_dwords = 0;
+      send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
       /* Vendor read XDATA via control.  wValue=addr, wLength=size.
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
