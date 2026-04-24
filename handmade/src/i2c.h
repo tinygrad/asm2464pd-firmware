@@ -6,11 +6,7 @@
 
 /*=== HW I2C master ===*/
 
-/* Trigger the peripheral and wait for DONE. CSR is W1C on the status bits
- * (1-6): writing 0xFE clears any lingering flags from the prior transaction
- * in one shot without setting GO. Writing 0x01 then fires. Without the
- * pre-clear, status bits like RD_DONE (bit 3) leak into the next fire and
- * the peripheral silently drops every other transaction. */
+/* Trigger the peripheral and wait for DONE. */
 static uint8_t i2c_fire_wait(void) {
   uint8_t csr = 0;
   uint16_t timeout = 0xFFFF;
@@ -24,25 +20,25 @@ static uint8_t i2c_fire_wait(void) {
 }
 
 static void i2c_init(void) {
-  REG_GPIO_CTRL(9)  = I2C_GPIO_ALT_SCL;     /* 0x13 */
-  REG_GPIO_CTRL(10) = I2C_GPIO_ALT_SDA_OD;  /* 0x34 — open-drain SDA */
+  REG_GPIO_CTRL(9)  = I2C_GPIO_ALT_SCL;
+  REG_GPIO_CTRL(10) = I2C_GPIO_ALT_SDA;
   REG_I2C_MODE = 0xC4;
   REG_I2C_CLK_LO = 0x18;
   REG_I2C_CLK_HI = 0x4A;
 }
 
-/* Write a 16-bit big-endian register. The peripheral sends 3 data bytes
- * from 0xE800 after DATA0; the third lands on the slave's reg+1 as a
- * partial write and is discarded on STOP. */
+/* Write a 16-bit big-endian register: on the wire, addr+W, reg, MSB, LSB, STOP.
+ * The peripheral pulls 2 bytes from XRAM after DATA0 whenever WLEN is non-zero
+ * (WLEN's specific value isn't honored — 1..0xFF all emit the same 3-byte data
+ * phase), so the XRAM slots MUST be freshly CPU-written before every fire. */
 static uint8_t i2c_write_reg16(uint8_t addr7, uint8_t reg, uint16_t val) {
   uint8_t csr;
   (&REG_I2C_XRAM)[0] = (val >> 8) & 0xFF;
   (&REG_I2C_XRAM)[1] = val & 0xFF;
-  (&REG_I2C_XRAM)[2] = 0x00;
   REG_I2C_ADDR        = (addr7 << 1) | 0;
   REG_I2C_DATA0       = reg;
-  REG_I2C_WLEN        = 0x03;
-  REG_I2C_RLEN        = 0x00;
+  REG_I2C_WLEN        = 1;         /* any non-zero triggers the data phase */
+  REG_I2C_RLEN        = 0;
   REG_I2C_DMA_SRC_HI  = 0;
   REG_I2C_DMA_SRC_LO  = 0;
   REG_I2C_DMA_DEST_HI = 0;
@@ -52,8 +48,10 @@ static uint8_t i2c_write_reg16(uint8_t addr7, uint8_t reg, uint16_t val) {
   return csr;
 }
 
-/* Park the slave's register pointer at `reg`. Writes three zero bytes that
- * the slave's read-only registers will ignore — don't use on writable regs. */
+/* Park the slave's register pointer at `reg`. Because the peripheral always
+ * appends a 2-byte data phase, this effectively does a write of 0x0000 to
+ * `reg` as a side effect — safe for read-only slave registers, corrupts
+ * writable ones. */
 static uint8_t i2c_point(uint8_t addr7, uint8_t reg) {
   return i2c_write_reg16(addr7, reg, 0x0000);
 }
@@ -95,7 +93,7 @@ static uint8_t i2c_read(uint8_t addr7, uint8_t rlen, uint8_t *out) {
 #define INA231_REG_SHUNT   0x01
 #define INA231_REG_BUS     0x02
 #define INA231_CFG_STOCK   0x4127
-#define INA231_SHUNT_UOHM  2408   /* measured, not the nominal 2×1 mOhm */
+#define INA231_SHUNT_UOHM  2408   /* measured on chestnut rev F, not the nominal 2×1 mOhm */
 
 static void ina231_init(void) {
   i2c_write_reg16(INA231_ADDR, INA231_REG_CFG, INA231_CFG_STOCK);

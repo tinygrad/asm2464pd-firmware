@@ -1604,7 +1604,7 @@
 #define REG_I2C_XRAM            XDATA_REG8(0xE800)
 /* Pin alt-fn values for routing GPIO9/GPIO10 to the peripheral */
 #define I2C_GPIO_ALT_SCL        0x13
-#define I2C_GPIO_ALT_SDA_OD     0x14
+#define I2C_GPIO_ALT_SDA        0x14
 
 //=============================================================================
 // Alternate Flash Controller (0xC880-0xC886)

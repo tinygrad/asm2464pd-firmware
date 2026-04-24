@@ -604,5 +604,7 @@ void main(void) {
   i2c_init();
   ina231_init();
 
-  while (1) {}
+  while (1) {
+    // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
+  }
 }
