@@ -62,9 +62,13 @@ $(CRT0_OBJ): $(CRT0_SRC) | $(OBJ_DIR)
 	-mv $(SRC_DIR)/crt0.lst $(OBJ_DIR)/ 2>/dev/null || true
 	-mv $(SRC_DIR)/crt0.sym $(OBJ_DIR)/ 2>/dev/null || true
 
-# Compile main source
+# Compile main source. Header deps generated as a side effect via `sdcc -MM`
+# (one extra preprocessor pass; SDCC has no -MMD/-MD).
 $(MAIN_OBJ): $(MAIN_SRC) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) -MM $< 2>/dev/null | sed 's|^[^:]*:|$@:|' > $(OBJ_DIR)/main.d
+
+-include $(OBJ_DIR)/main.d
 
 # Link object files to Intel HEX
 $(HEX): $(OBJS) | $(BUILD_DIR)
