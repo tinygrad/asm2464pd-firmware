@@ -1571,15 +1571,32 @@
 #define   INT_PCIE_NVME_STATUS    0x40  // Bit 6: NVMe queue interrupt
 
 //=============================================================================
-// I2C Controller (0xC870-0xC87F)
+// I2C Master. Drives GPIO9 (SCL) / GPIO10 (SDA)
 //=============================================================================
-#define REG_I2C_ADDR            XDATA_REG8(0xC870)
-#define REG_I2C_MODE            XDATA_REG8(0xC871)
-#define REG_I2C_LEN             XDATA_REG8(0xC873)
-#define REG_I2C_CSR             XDATA_REG8(0xC875)
-#define REG_I2C_SRC             XDATA_REG32(0xC878)
-#define REG_I2C_DST             XDATA_REG32(0xC87C)
-#define REG_I2C_CSR_ALT         XDATA_REG8(0xC87F)
+#define REG_I2C_ADDR            XDATA_REG8(0xC870)  /* (slave << 1) | dir; bit0: 0=W, 1=R */
+#define REG_I2C_DATA0           XDATA_REG8(0xC871)  /* first TX byte after addr */
+#define REG_I2C_WLEN            XDATA_REG8(0xC873)  /* TX data-phase gate: 0=none, nonzero=emit XRAM[0..1] */
+#define REG_I2C_RLEN            XDATA_REG8(0xC874)  /* RX byte count (strict) */
+#define REG_I2C_CSR             XDATA_REG8(0xC875)  /* write 0xFF=clear, 0x01=GO; read bit6=DONE */
+#define   I2C_CSR_DONE            0x40
+#define   I2C_CSR_WR_ADDR_ACK     0x42
+#define   I2C_CSR_WR_DONE         0x44
+#define   I2C_CSR_RD_DONE         0x48
+#define   I2C_CSR_RD_NACK         0x58
+#define   I2C_CSR_WR_NACK         0x60
+#define REG_I2C_CLK_LO          XDATA_REG8(0xC876)
+#define REG_I2C_CLK_HI          XDATA_REG8(0xC877)  /* bits 3-6 are a mode field, leave at boot 0x4A; bit 7 RO */
+#define REG_I2C_DMA_SRC_HI      XDATA_REG8(0xC878)  /* TX XRAM byte-offset */
+#define REG_I2C_DMA_SRC_LO      XDATA_REG8(0xC879)
+#define REG_I2C_DMA_ARM         XDATA_REG8(0xC87A)  /* unused; bit 3 hangs the bus, never write */
+#define REG_I2C_MODE            XDATA_REG8(0xC87B)  /* boot 0xC4 */
+#define REG_I2C_DMA_DEST_HI     XDATA_REG8(0xC87C)  /* writable, no observable effect — RX always lands at XRAM[0..] */
+#define REG_I2C_DMA_DEST_LO     XDATA_REG8(0xC87D)
+#define REG_I2C_DMA_ENABLE      XDATA_REG8(0xC805)  /* bit 4 = RX DMA enable */
+/* 512 B XRAM at 0xE800-0xE9FF (mirrored at 0xEA00/0xEC00/0xEE00). */
+#define REG_I2C_XRAM            XDATA_REG8(0xE800)
+#define I2C_GPIO_ALT_SCL        0x13
+#define I2C_GPIO_ALT_SDA        0x14
 
 //=============================================================================
 // Alternate Flash Controller (0xC880-0xC886)
