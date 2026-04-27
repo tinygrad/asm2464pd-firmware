@@ -128,12 +128,13 @@ static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint16_t 
       DESC_BUF[2] = USB_LANG_ID & 0xFF;
       DESC_BUF[3] = (USB_LANG_ID >> 8) & 0xFF;
       desc_len = 4;
+    } else if (desc_idx == USB_STR_IDX_SERIAL) {
+      desc_len = usb_build_serial_desc(DESC_BUF);
     } else {
       __code const char *s;
       switch (desc_idx) {
         case USB_STR_IDX_MFG:     s = USB_STR_MFG;     break;
         case USB_STR_IDX_PRODUCT: s = USB_STR_PRODUCT; break;
-        case USB_STR_IDX_SERIAL:  s = USB_STR_SERIAL;  break;
         default:                  s = "";              break;
       }
       desc_len = usb_build_string_desc(s, DESC_BUF);
@@ -472,6 +473,9 @@ void main(void) {
   REG_UART_LCR &= ~LCR_PARITY_MASK;
 
   uart_puts("\n[BOOT]\n");
+
+  // flash controller — needed for the USB serial OTP read on enumeration
+  flash_init();
 
   usb_phy_tune();
 

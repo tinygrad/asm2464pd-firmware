@@ -2,6 +2,7 @@
 #define __USB_DESCRIPTORS_H__
 
 #include "types.h"
+#include "flash.h"
 
 /*=== USB device identification ===*/
 #define USB_VID                 0xADD1
@@ -9,10 +10,9 @@
 #define USB_BCD_DEVICE          0x0001
 #define USB_LANG_ID             0x0409   /* US English */
 
-/* String descriptors. UTF-16LE is built on demand from these ASCII strings. */
+/* String descriptors */
 #define USB_STR_MFG             "tiny"
 #define USB_STR_PRODUCT         "custom v0.1"
-#define USB_STR_SERIAL          "001"
 
 #define USB_STR_IDX_LANG        0
 #define USB_STR_IDX_MFG         1
@@ -101,6 +101,31 @@ static uint8_t usb_build_string_desc(__code const char *s, __xdata uint8_t *buf)
   buf[0] = 2 + 2*i;
   buf[1] = 0x03;
   return 2 + 2*i;
+}
+
+/* Build a STRING descriptor from the OTP-stored 4-byte serial, lowercase
+ * ASCII hex (8 chars). Falls back to "ffffffff" when the OTP is blank,
+ * corrupt, or carries an unknown version. */
+static uint8_t usb_build_serial_desc(__xdata uint8_t *buf) {
+  static __code const char hex[] = "0123456789abcdef";
+  __xdata otp_t otp;
+  __xdata uint8_t serial[4];
+  uint8_t i, b;
+  if (flash_read_otp(&otp)) {
+    for (i = 0; i < 4; i++) serial[i] = otp.serial[i];
+  } else {
+    for (i = 0; i < 4; i++) serial[i] = 0xFF;
+  }
+  buf[0] = 2 + 2 * (4 * 2);
+  buf[1] = 0x03;
+  for (i = 0; i < 4; i++) {
+    b = serial[i];
+    buf[2 + 4*i + 0] = hex[b >> 4];
+    buf[2 + 4*i + 1] = 0;
+    buf[2 + 4*i + 2] = hex[b & 0x0F];
+    buf[2 + 4*i + 3] = 0;
+  }
+  return buf[0];
 }
 
 #endif
