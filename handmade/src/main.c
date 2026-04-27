@@ -45,13 +45,13 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 #include "usb_tuning.h"
 #include "i2c.h"
 
-/* Hardware status packet returned by vendor request 0xC0. */
+/* Hardware status packet */
 typedef struct {
   uint16_t voltage_mv;   /* INA231 bus voltage */
   int16_t  current_ma;   /* INA231 shunt current (signed) */
 } hw_status_t;
 
-static void hw_status_read(hw_status_t *s) {
+static void hw_status_read(__xdata hw_status_t *s) {
   uint16_t shunt_raw = 0, bus_raw = 0;
   (void)ina231_read_u16(INA231_REG_SHUNT, &shunt_raw);
   (void)ina231_read_u16(INA231_REG_BUS, &bus_raw);
@@ -287,12 +287,7 @@ static void handle_usb_control(void) {
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xC0) {
       /* 0xC0 IN: hw_status_t (voltage_mv, current_ma). */
-      hw_status_t s;
-      hw_status_read(&s);
-      DESC_BUF[0] = (uint8_t)(s.voltage_mv & 0xFF);
-      DESC_BUF[1] = (uint8_t)(s.voltage_mv >> 8);
-      DESC_BUF[2] = (uint8_t)((uint16_t)s.current_ma & 0xFF);
-      DESC_BUF[3] = (uint8_t)((uint16_t)s.current_ma >> 8);
+      hw_status_read((__xdata hw_status_t *)DESC_BUF);
       send_control_data(sizeof(hw_status_t));
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
       /* Vendor read XDATA via control.  wValue=addr, wLength=size.
