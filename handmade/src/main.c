@@ -15,7 +15,8 @@ __sfr __at(0x88) TCON;
 #define IE_ET0  0x02
 #define IE_EX0  0x01
 
-void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
+// blocking version: void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
+void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {
   static __code const char hex[] = "0123456789ABCDEF";
