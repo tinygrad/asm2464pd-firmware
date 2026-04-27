@@ -287,7 +287,7 @@ static void handle_usb_control(void) {
       dma_dwords = 0;
       send_zlp_ack();
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xC0) {
-      /* 0xC0 IN: hw_status_t (voltage_mv, current_ma). */
+      /* 0xC0 IN: hw_status_t */
       hw_status_read((__xdata hw_status_t *)DESC_BUF);
       send_control_data(sizeof(hw_status_t));
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
