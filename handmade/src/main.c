@@ -103,51 +103,6 @@ static void do_usb_bulk_in(void) {
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
 
-/*=== USB Request Handlers ===*/
-
-/* GET_DESCRIPTOR responder. Strings are built into DESC_BUF on the fly so
- * we can swap in runtime data (e.g. the OTP-derived serial number); the
- * usb_descs_t table abstraction in usb.h only carries static __code
- * pointers, so we keep our own dispatcher here. */
-static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint16_t wlen) {
-  __code const uint8_t *src;
-  uint8_t desc_len;
-
-  if (desc_type == USB_DESC_TYPE_DEVICE) {
-    if (is_usb2) { src = usb_dev_desc;    desc_len = sizeof(usb_dev_desc); }
-    else         { src = usb_dev_desc_ss; desc_len = sizeof(usb_dev_desc_ss); }
-  } else if (desc_type == USB_DESC_TYPE_CONFIG) {
-    if (is_usb2) { src = usb_cfg_desc;    desc_len = sizeof(usb_cfg_desc); }
-    else         { src = usb_cfg_desc_ss; desc_len = sizeof(usb_cfg_desc_ss); }
-  } else if (desc_type == USB_DESC_TYPE_BOS) {
-    src = usb_bos_desc; desc_len = sizeof(usb_bos_desc);
-  } else if (desc_type == USB_DESC_TYPE_STRING) {
-    if (desc_idx == USB_STR_IDX_LANG) {
-      DESC_BUF[0] = 4; DESC_BUF[1] = 0x03;
-      DESC_BUF[2] = USB_LANG_ID & 0xFF;
-      DESC_BUF[3] = (USB_LANG_ID >> 8) & 0xFF;
-      desc_len = 4;
-    } else if (desc_idx == USB_STR_IDX_SERIAL) {
-      desc_len = usb_build_serial_desc(DESC_BUF);
-    } else {
-      __code const char *s;
-      switch (desc_idx) {
-        case USB_STR_IDX_MFG:     s = USB_STR_MFG;     break;
-        case USB_STR_IDX_PRODUCT: s = USB_STR_PRODUCT; break;
-        default:                  s = "";              break;
-      }
-      desc_len = usb_build_string_desc(s, DESC_BUF);
-    }
-    usb_send_data(wlen < desc_len ? wlen : desc_len);
-    return;
-  } else {
-    return;
-  }
-
-  usb_desc_copy(src, desc_len);
-  usb_send_data(wlen < desc_len ? wlen : desc_len);
-}
-
 /*=== USB Control Handler ===*/
 
 static void handle_usb_control(void) {
@@ -175,7 +130,7 @@ static void handle_usb_control(void) {
       usb_handle_set_address(wValL);
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-      handle_get_descriptor(wValH, wValL, wLen);
+      usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
     } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
       /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
        * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
