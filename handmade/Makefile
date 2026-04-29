@@ -42,9 +42,9 @@ PROXY_TARGET = $(BUILD_DIR)/proxy
 PROXY_HEX = $(PROXY_TARGET).ihx
 PROXY_BIN = $(PROXY_TARGET).bin
 
-.PHONY: all clean flash wrapped proxy flash-proxy uflash
+.PHONY: all clean flash wrapped proxy flash-proxy uflash bootstub bootstub-flash
 
-all: $(BIN)
+all: $(BIN) bootstub
 	@echo "Built: $(BIN)"
 	@ls -la $(BIN)
 
@@ -129,3 +129,61 @@ flash: $(BUILD_DIR)/firmware_wrapped.bin
 	@python3 ../flash.py $<
 	@echo "Resetting device..."
 	@python3 ../ftdi_debug.py -rt 2
+
+# ===== Bootstub build =====
+# Same compiler as the full firmware so usb.h, registers.h, etc. are
+# guaranteed identical. Built with --model-large because SHA-256 plus the
+# flash/USB code overflows IRAM in --model-small. Code limited to 16 KB
+# at the bottom of CODE space; userfw lives at 0x4000+.
+
+BOOTSTUB_CFLAGS = -mmcs51 --model-large --opt-code-size --std-c99 \
+                  --no-xinit-opt -I$(SRC_DIR) -I../src/include
+BOOTSTUB_LDFLAGS = --code-loc 0x0000 --code-size 0x4000 \
+                   --xram-loc 0x0000 --xram-size 0x6000 --iram-size 0x100
+
+BOOTSTUB_CRT0_OBJ = $(OBJ_DIR)/crt0_bootstub.rel
+BOOTSTUB_OBJS = $(BOOTSTUB_CRT0_OBJ) \
+                $(OBJ_DIR)/bootstub.rel \
+                $(OBJ_DIR)/sha256.rel \
+                $(OBJ_DIR)/flash.rel
+BOOTSTUB_TARGET  = $(BUILD_DIR)/bootstub
+BOOTSTUB_HEX     = $(BOOTSTUB_TARGET).ihx
+BOOTSTUB_BIN     = $(BOOTSTUB_TARGET).bin
+BOOTSTUB_WRAPPED = $(BUILD_DIR)/bootstub_wrapped.bin
+
+$(BOOTSTUB_CRT0_OBJ): $(SRC_DIR)/crt0_bootstub.s | $(OBJ_DIR)
+	$(AS) -l -o -s $<
+	mv $(SRC_DIR)/crt0_bootstub.rel $@
+	-mv $(SRC_DIR)/crt0_bootstub.lst $(OBJ_DIR)/ 2>/dev/null || true
+	-mv $(SRC_DIR)/crt0_bootstub.sym $(OBJ_DIR)/ 2>/dev/null || true
+
+$(OBJ_DIR)/bootstub.rel: $(SRC_DIR)/bootstub.c $(SRC_DIR)/usb.h $(SRC_DIR)/flash.h $(SRC_DIR)/sha256.h | $(OBJ_DIR)
+	$(CC) $(BOOTSTUB_CFLAGS) -c $< -o $@
+$(OBJ_DIR)/sha256.rel: $(SRC_DIR)/sha256.c $(SRC_DIR)/sha256.h | $(OBJ_DIR)
+	$(CC) $(BOOTSTUB_CFLAGS) -c $< -o $@
+$(OBJ_DIR)/flash.rel: $(SRC_DIR)/flash.c $(SRC_DIR)/flash.h | $(OBJ_DIR)
+	$(CC) $(BOOTSTUB_CFLAGS) -c $< -o $@
+
+$(BOOTSTUB_HEX): $(BOOTSTUB_OBJS) | $(BUILD_DIR)
+	$(CC) $(BOOTSTUB_CFLAGS) $(BOOTSTUB_LDFLAGS) $(BOOTSTUB_OBJS) -o $@
+
+$(BOOTSTUB_BIN): $(BOOTSTUB_HEX)
+	@objcopy -I ihex -O binary $< $@
+	@sz=$$(stat -c %s $@); echo "bootstub body: $$sz bytes (budget 16384)"; \
+	 if [ $$sz -gt 16384 ]; then echo "FAIL: bootstub > 16 KB"; exit 1; fi
+
+$(BOOTSTUB_WRAPPED): $(BOOTSTUB_BIN)
+	@python3 -c "import zlib; \
+body = open('$<', 'rb').read(); \
+header = len(body).to_bytes(4, 'little'); \
+trailer = bytes([0xA5]) + bytes([sum(body) & 0xFF]) + zlib.crc32(body).to_bytes(4, 'little'); \
+open('$@', 'wb').write(header + body + trailer)"
+
+bootstub: $(BOOTSTUB_WRAPPED)
+
+# One-time install via the FTDI bootloader strap. After this, future userfw
+# updates can go through tools/dfu.py without the FTDI.
+bootstub-flash: $(BOOTSTUB_WRAPPED)
+	@python3 ../ftdi_debug.py -bn
+	@python3 ../flash.py $<
+	@python3 ../ftdi_debug.py -rn

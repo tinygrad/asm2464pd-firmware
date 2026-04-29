@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'pcie'))
 from tinygrad.runtime.autogen import libusb
 from pcie_probe import xdata_read, xdata_write
 
-VID, PID = 0xADD1, 0x0001
+VID_PIDS = [(0xADD1, 0x0001), (0xADD1, 0xB007)]   # userfw / bootstub-DFU
 EP_OUT = 0x02
 
 def flash_init(h):
@@ -246,8 +246,11 @@ def flash_test(h):
 def main():
   ctx = ctypes.POINTER(libusb.libusb_context)()
   libusb.libusb_init(ctypes.byref(ctx))
-  h = libusb.libusb_open_device_with_vid_pid(ctx, VID, PID)
-  assert h, "Device not found"
+  h = None
+  for vid, pid in VID_PIDS:
+    h = libusb.libusb_open_device_with_vid_pid(ctx, vid, pid)
+    if h: break
+  assert h, f"Device not found ({'/'.join(f'{v:04X}:{p:04X}' for v,p in VID_PIDS)})"
   libusb.libusb_claim_interface(h, 0)
   flash_init(h)
 
