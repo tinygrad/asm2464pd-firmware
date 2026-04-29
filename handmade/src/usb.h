@@ -163,12 +163,6 @@ static void usb_phy_tune(void) {
     usb_serdes_tune_lane(0xC300);  /* lane 1 */
 }
 
-/* Bring the USB controller up. After this returns, the device is ready
- * to enumerate (caller still has to dispatch control transfers).
- *
- * `force_usb2`: skip the SS link attempt and pin HS. Pass 0 to let the
- * chip negotiate SS and fall back via the LINK_EVENT handler (handmade
- * fw); pass 1 from firmwares that don't carry USB3 descriptors. */
 static void usb_init_controller(uint8_t force_usb2) {
     REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
     REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
