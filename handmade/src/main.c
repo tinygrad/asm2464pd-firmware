@@ -43,7 +43,6 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
-#include "usb_descriptors.h"
 
 static void pcie_power_off(void) {
   /* Hold the downstream device in reset before removing its rails. */
