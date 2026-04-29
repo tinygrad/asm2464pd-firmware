@@ -5,6 +5,7 @@
 
 #include "types.h"
 #include "registers.h"
+#include "usb.h"
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
@@ -42,7 +43,6 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
-#include "usb_tuning.h"
 
 static void pcie_power_off(void) {
   /* Hold the downstream device in reset before removing its rails. */
@@ -103,23 +103,6 @@ static void do_usb_bulk_in(void) {
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
 
-#define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
-
-static void desc_copy(__code const uint8_t *src, uint8_t len) {
-  uint8_t i;
-  for (i = 0; i < len; i++) DESC_BUF[i] = src[i];
-}
-
-/*=== USB Control Transfer Helpers ===*/
-
-static void send_control_data(uint16_t len) {
-  REG_USB_EP0_LEN_H = (uint8_t)(len >> 8);
-  REG_USB_EP0_LEN_L = (uint8_t)(len & 0xFF);
-  REG_USB_DMA_TRIGGER = USB_DMA_SEND;
-  REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
-}
-static void send_zlp_ack(void) { send_control_data(0); }
-
 /*=== USB Request Handlers ===*/
 
 /* USB 2.0 Descriptors — no SS companion descriptors, 64-byte bulk EPs for Full Speed */
@@ -174,43 +157,23 @@ static __code const uint8_t str0_desc[] = { 0x04, 0x03, 0x09, 0x04 };
 static __code const uint8_t str1_desc[] = { 0x0A, 0x03, 't',0, 'i',0, 'n',0, 'y',0 };
 static __code const uint8_t str2_desc[] = { 0x18, 0x03, 'c',0, 'u',0, 's',0, 't',0, 'o',0, 'm',0, ' ',0, 'v',0, '0',0, '.',0, '1',0 };
 static __code const uint8_t str3_desc[] = { 0x08, 0x03, '0',0, '0',0, '1',0 };
-static __code const uint8_t str_empty[] = { 0x02, 0x03 };
 
-static void handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint16_t wlen) {
-  __code const uint8_t *src;
-  uint8_t desc_len;
+static __code const uint8_t * __code const string_table[] = {
+  str0_desc, str1_desc, str2_desc, str3_desc,
+};
 
-  if (desc_type == USB_DESC_TYPE_DEVICE) {
-    if (is_usb2) {
-      src = dev_desc;
-      desc_len = sizeof(dev_desc);
-    } else {
-      src = dev_desc_30;
-      desc_len = sizeof(dev_desc_30);
-    }
-  } else if (desc_type == USB_DESC_TYPE_CONFIG) {
-    if (is_usb2) {
-      src = cfg_desc;
-      desc_len = sizeof(cfg_desc);
-    } else {
-      src = cfg_desc_30;
-      desc_len = sizeof(cfg_desc_30);
-    }
-  } else if (desc_type == USB_DESC_TYPE_BOS) {
-    src = bos_desc;
-    desc_len = sizeof(bos_desc);
-  } else if (desc_type == USB_DESC_TYPE_STRING) {
-    if (desc_idx == 0)      { src = str0_desc; desc_len = sizeof(str0_desc); }
-    else if (desc_idx == 1) { src = str1_desc; desc_len = sizeof(str1_desc); }
-    else if (desc_idx == 2) { src = str2_desc; desc_len = sizeof(str2_desc); }
-    else if (desc_idx == 3) { src = str3_desc; desc_len = sizeof(str3_desc); }
-    else                    { src = str_empty; desc_len = sizeof(str_empty); }
+static __xdata usb_descs_t descs;
+
+static void init_descriptors(void) {
+  descs.bos      = bos_desc;       descs.bos_len   = sizeof(bos_desc);
+  descs.strings  = string_table;   descs.n_strings = sizeof(string_table) / sizeof(string_table[0]);
+  if (is_usb2) {
+    descs.dev = dev_desc;     descs.dev_len = sizeof(dev_desc);
+    descs.cfg = cfg_desc;     descs.cfg_len = sizeof(cfg_desc);
   } else {
-    return;
+    descs.dev = dev_desc_30;  descs.dev_len = sizeof(dev_desc_30);
+    descs.cfg = cfg_desc_30;  descs.cfg_len = sizeof(cfg_desc_30);
   }
-
-  desc_copy(src, desc_len);
-  send_control_data(wlen < desc_len ? wlen : desc_len);
 }
 
 /*=== USB Control Handler ===*/
@@ -237,14 +200,10 @@ static void handle_usb_control(void) {
     }
 
     if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
-      // the USB_INT_MASK_GLOBAL enabled bulk mode, this makes it not get -1
-      REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
-      // does set address
-      REG_USB_EP_CTRL_91D0 = 0x02;
-      send_zlp_ack();
+      usb_handle_set_address(wValL);
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-      handle_get_descriptor(wValH, wValL, wLen);
+      usb_handle_get_descriptor(&descs, wValH, wValL, wLen);
     } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
       /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
        * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
@@ -256,7 +215,7 @@ static void handle_usb_control(void) {
         REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       }
       dma_dwords = 0;
-      send_zlp_ack();
+      usb_send_zlp();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
       // enable USB bulk mode (bypass MSC)
       REG_USB_MSC_CFG = 0x00;
@@ -264,13 +223,13 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
-      send_zlp_ack();
+      usb_send_zlp();
       uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
-      send_zlp_ack();
+      usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
       /* Vendor read XDATA via control.  wValue=addr, wLength=size.
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
@@ -285,7 +244,7 @@ static void handle_usb_control(void) {
         if (bank) DPX = 0x00;
         DESC_BUF[vi] = val;
       }
-      send_control_data(rlen);
+      usb_send_data(rlen);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE5) {
       /* Vendor write XDATA via control.  wValue=addr, wIndex low=val.
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
@@ -295,7 +254,7 @@ static void handle_usb_control(void) {
       if (bank) DPX = bank;
       XDATA_REG8(addr) = val;
       if (bank) DPX = 0x00;
-      send_zlp_ack();
+      usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF2) {
       /* 0xF2: SRAM DMA — init DMA engine and arm for bulk transfer.
       *   wValue bit 15 = direction: 0=BULK OUT (host→SRAM), 1=BULK IN (SRAM→host)
@@ -317,7 +276,7 @@ static void handle_usb_control(void) {
       REG_NVME_SECTOR_COUNT_LO = (uint8_t)(sectors & 0xFF);
       REG_NVME_CTRL_STATUS = NVME_CTRL_DMA_START | (bulk_in ? 0 : NVME_CTRL_WRITE_DIR);
       REG_NVME_CMD_PARAM   = slot_sel;
-      send_zlp_ack();
+      usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF3) {
       /* 0xF3: PCIe power control.
        *   wValue low bit 0 = 0 power off, 1 power on. */
@@ -326,7 +285,7 @@ static void handle_usb_control(void) {
       } else {
         pcie_power_off();
       }
-      send_zlp_ack();
+      usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
       *   wValue = fmt_type | (byte_enable << 8)
@@ -365,9 +324,9 @@ static void handle_usb_control(void) {
         for (i = 0; i < 7; i++) DESC_BUF[i] = 0;
       }
       DESC_BUF[7] = ret_status;
-      send_control_data(8);
+      usb_send_data(8);
     } else {
-      if (wLen == 0) send_zlp_ack();
+      if (wLen == 0) usb_send_zlp();
     }
   } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
     REG_USB_DMA_TRIGGER = USB_DMA_RECV;
@@ -427,7 +386,7 @@ static void handle_usb_control(void) {
           }
         }
       }
-      send_zlp_ack();
+      usb_send_zlp();
     }
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
   } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
@@ -494,11 +453,9 @@ void int0_isr(void) __interrupt(0) {
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
         uart_puts("[USB2 fallback]\n");
-        // fallback to USB2
         is_usb2 = 1;
-        // without this, USB2 is flaky
+        init_descriptors();         // re-bind to HS descriptor variants
         REG_CPU_MODE = CPU_MODE_USB2;
-        // enable USB high speed mode
         REG_USB_PHY_CTRL_91C0 = 0x10;
       }
       REG_BUF_CFG_9300 = ep;
@@ -542,8 +499,8 @@ void main(void) {
 
   uart_puts("\n[BOOT]\n");
 
-  // usb tuning
-  usb_apply_ss_phy_tuning();
+  init_descriptors();
+  usb_phy_tune();
 
   // PCIe TLP engine values that don't change + tuning
   REG_PCIE_TLP_CTRL   = 0x01;
@@ -554,26 +511,8 @@ void main(void) {
   // PCIe power on for backwards compatibility, can be removed
   pcie_power_on();
 
-  // clear this to get USB3 interrupts
-  REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
-
-  // without this, it doesn't get an interrupt
-  REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
-
-  // without this, no USB interrupts
-  REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
-
-  // enable BULK interrupt
-  REG_USB_EP0_CFG = 0xF0;
-
-  // enables EP_COMPLETE interrupts
-  REG_USB_DATA_L = 0x00;
-
-  // enables CBW_RECEIVED interrupts
-  REG_USB_EP_MGMT = 0x00;
-
-  // enable USB_PERIPH_LINK_EVENT to fall back to USB2
-  REG_BUF_CFG_9303 = 0x33;
+  // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
+  usb_init_controller(0);
 
   // enable interrupts and chill
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
