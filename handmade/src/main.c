@@ -162,19 +162,16 @@ static __code const uint8_t * __code const string_table[] = {
   str0_desc, str1_desc, str2_desc, str3_desc,
 };
 
-static __xdata usb_descs_t descs;
-
-static void init_descriptors(void) {
-  descs.bos      = bos_desc;       descs.bos_len   = sizeof(bos_desc);
-  descs.strings  = string_table;   descs.n_strings = sizeof(string_table) / sizeof(string_table[0]);
-  if (is_usb2) {
-    descs.dev = dev_desc;     descs.dev_len = sizeof(dev_desc);
-    descs.cfg = cfg_desc;     descs.cfg_len = sizeof(cfg_desc);
-  } else {
-    descs.dev = dev_desc_30;  descs.dev_len = sizeof(dev_desc_30);
-    descs.cfg = cfg_desc_30;  descs.cfg_len = sizeof(cfg_desc_30);
-  }
-}
+static __code const usb_descs_t descs_hs = {
+  dev_desc,    cfg_desc,    bos_desc, string_table,
+  sizeof(dev_desc),    sizeof(cfg_desc),    sizeof(bos_desc),
+  sizeof(string_table) / sizeof(string_table[0]),
+};
+static __code const usb_descs_t descs_ss = {
+  dev_desc_30, cfg_desc_30, bos_desc, string_table,
+  sizeof(dev_desc_30), sizeof(cfg_desc_30), sizeof(bos_desc),
+  sizeof(string_table) / sizeof(string_table[0]),
+};
 
 /*=== USB Control Handler ===*/
 
@@ -203,7 +200,7 @@ static void handle_usb_control(void) {
       usb_handle_set_address(wValL);
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-      usb_handle_get_descriptor(&descs, wValH, wValL, wLen);
+      usb_handle_get_descriptor(is_usb2 ? &descs_hs : &descs_ss, wValH, wValL, wLen);
     } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
       /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
        * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
@@ -453,9 +450,11 @@ void int0_isr(void) __interrupt(0) {
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
         uart_puts("[USB2 fallback]\n");
+        // fallback to USB2
         is_usb2 = 1;
-        init_descriptors();         // re-bind to HS descriptor variants
+        // without this, USB2 is flaky
         REG_CPU_MODE = CPU_MODE_USB2;
+        // enable USB high speed mode
         REG_USB_PHY_CTRL_91C0 = 0x10;
       }
       REG_BUF_CFG_9300 = ep;
@@ -499,7 +498,6 @@ void main(void) {
 
   uart_puts("\n[BOOT]\n");
 
-  init_descriptors();
   usb_phy_tune();
 
   // PCIe TLP engine values that don't change + tuning

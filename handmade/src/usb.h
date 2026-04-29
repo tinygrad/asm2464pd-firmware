@@ -86,7 +86,7 @@ typedef struct {
 
 /* GET_DESCRIPTOR responder — copies into the EP0 IN buffer and sends
  * min(wlen, desc_len). */
-static void usb_handle_get_descriptor(__xdata const usb_descs_t *d,
+static void usb_handle_get_descriptor(__code const usb_descs_t *d,
                                       uint8_t type, uint8_t idx, uint16_t wlen) {
     static __code const uint8_t empty_str[] = { 0x02, 0x03 };
     __code const uint8_t *src = empty_str;
