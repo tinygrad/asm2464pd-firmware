@@ -1,0 +1,112 @@
+#include "types.h"
+#include "registers.h"
+
+#define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
+
+/* SS PHY tuning values from the stock firmware. Required even when we
+ * end up at HS — without it the controller never pushes events to
+ * PERIPH_STATUS. */
+static void rmw(uint16_t addr, uint8_t and_mask, uint8_t or_val) {
+    XDATA_REG8(addr) = (XDATA_REG8(addr) & and_mask) | or_val;
+}
+
+static void usb_serdes_tune_lane(uint16_t base) {
+    rmw(base + 0x02, 0x1F, 0xA0); rmw(base + 0x03, 0xF3, 0x00);
+    rmw(base + 0x04, 0x8F, 0x40); rmw(base + 0x05, 0x0F, 0x60);
+    rmw(base + 0x06, 0xF0, 0x07); rmw(base + 0x07, 0x1F, 0x60);
+    rmw(base + 0x09, 0x0F, 0x90); rmw(base + 0x0B, 0xC0, 0x0A);
+    rmw(base + 0x0C, 0xFD, 0x00); rmw(base + 0x10, 0xE0, 0x03);
+    rmw(base + 0x11, 0xE0, 0x08); rmw(base + 0x12, 0x1F, 0x20);
+    rmw(base + 0x13, 0xF3, 0x04); rmw(base + 0x14, 0xFF, 0x06);
+    rmw(base + 0x15, 0xF0, 0x0C); rmw(base + 0x16, 0xF0, 0x0F);
+    rmw(base + 0x17, 0x1F, 0x40); rmw(base + 0x19, 0x0F, 0x80);
+    rmw(base + 0x1A, 0xF0, 0x0E); rmw(base + 0x1B, 0xC0, 0x00);
+    rmw(base + 0x1C, 0xFD, 0x02); rmw(base + 0x20, 0xE0, 0x03);
+    rmw(base + 0x21, 0xE0, 0x08); rmw(base + 0x22, 0xE0, 0x0A);
+    rmw(base + 0x23, 0xFC, 0x02); rmw(base + 0x24, 0xF0, 0x07);
+    rmw(base + 0x25, 0xF0, 0x0F); rmw(base + 0x26, 0xF0, 0x0B);
+    rmw(base + 0x27, 0x1F, 0x40); rmw(base + 0x29, 0x0F, 0x80);
+    rmw(base + 0x2A, 0xFF, 0x01); rmw(base + 0x2B, 0xC0, 0x00);
+    rmw(base + 0x2C, 0xFD, 0x02); rmw(base + 0x3C, 0xFD, 0x00);
+    rmw(base + 0x43, 0xC3, 0x1C); rmw(base + 0x45, 0xF0, 0x0B);
+    rmw(base + 0x46, 0xF0, 0x0D); rmw(base + 0x49, 0x80, 0x41);
+    rmw(base + 0x4A, 0xFE, 0x00); rmw(base + 0x4C, 0xF1, 0x0E);
+    rmw(base + 0x4E, 0xFF, 0x40); rmw(base + 0x5B, 0xE0, 0x1B);
+}
+
+static void usb_phy_tune(void) {
+    usb_serdes_tune_lane(0xC280);  /* lane 0 */
+    usb_serdes_tune_lane(0xC300);  /* lane 1 */
+}
+
+static void usb_init_controller(uint8_t force_usb2) {
+    REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
+    REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
+    REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
+    REG_USB_EP0_CFG = 0xF0;
+    REG_USB_DATA_L = 0x00;
+    REG_USB_EP_MGMT = 0x00;
+    REG_BUF_CFG_9303 = 0x33;
+    if (force_usb2) {
+        REG_CPU_MODE = CPU_MODE_USB2;
+        REG_USB_PHY_CTRL_91C0 = 0x10;
+    }
+}
+
+/* EP0 IN: send `len` bytes of DESC_BUF, or a zero-length ack. */
+static void usb_send_data(uint16_t len) {
+    REG_USB_EP0_LEN_H = (uint8_t)(len >> 8);
+    REG_USB_EP0_LEN_L = (uint8_t)(len & 0xFF);
+    REG_USB_DMA_TRIGGER = USB_DMA_SEND;
+    REG_USB_CTRL_PHASE  = USB_CTRL_PHASE_DATA_IN;
+}
+static void usb_send_zlp(void) { usb_send_data(0); }
+
+static void usb_desc_copy(__code const uint8_t *src, uint8_t len) {
+    for (uint8_t i = 0; i < len; i++) DESC_BUF[i] = src[i];
+}
+
+static void usb_handle_set_address(uint8_t wValL) {
+    REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
+    REG_USB_EP_CTRL_91D0  = 0x02;
+    usb_send_zlp();
+}
+
+/* Descriptor table the firmware hands to usb_handle_get_descriptor. The
+ * firmware can build one for HS and one for SS and pick at request time. */
+typedef struct {
+    __code const uint8_t *dev;
+    __code const uint8_t *cfg;
+    __code const uint8_t *bos;                            /* may be NULL */
+    /* strings[idx] = string descriptor for that index, or NULL/out-of-range
+     * → empty string descriptor reply. The strings[] array lives in CODE. */
+    __code const uint8_t * __code const *strings;
+    uint8_t dev_len, cfg_len, bos_len, n_strings;
+} usb_descs_t;
+
+/* GET_DESCRIPTOR responder — copies into the EP0 IN buffer and sends
+ * min(wlen, desc_len). */
+static void usb_handle_get_descriptor(__code const usb_descs_t *d,
+                                      uint8_t type, uint8_t idx, uint16_t wlen) {
+    static __code const uint8_t empty_str[] = { 0x02, 0x03 };
+    __code const uint8_t *src = empty_str;
+    uint8_t len = sizeof(empty_str);
+
+    if (type == USB_DESC_TYPE_DEVICE) {
+        src = d->dev; len = d->dev_len;
+    } else if (type == USB_DESC_TYPE_CONFIG) {
+        src = d->cfg; len = d->cfg_len;
+    } else if (type == USB_DESC_TYPE_BOS) {
+        if (!d->bos) return;
+        src = d->bos; len = d->bos_len;
+    } else if (type == USB_DESC_TYPE_STRING) {
+        if (idx < d->n_strings && d->strings[idx]) {
+            src = d->strings[idx];
+            len = src[0];                                 /* bLength */
+        }
+    } else {
+        return;
+    }
+    usb_desc_copy(src, len);
+    usb_send_data(wlen < len ? wlen : len);
+}
