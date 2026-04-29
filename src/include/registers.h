@@ -81,8 +81,11 @@
  * Read-only to the 8051 CPU (E5 writes are ignored).
  * Written by USB hardware when bulk OUT data arrives at EP 0x02.
  * The CE00 DMA engine reads from here to move data to SRAM.
+ * Also doubles as the SPI flash controller's data buffer for read/write
+ * (see flash.h).
  */
 #define REG_FLASH_BUF_BYTE(off) XDATA_REG8(FLASH_BUFFER_BASE + (off))
+#define FLASH_BUF               ((__xdata uint8_t *)FLASH_BUFFER_BASE)
 
 // Flash buffer control registers (0x7041, 0x78AF-0x78B2)
 #define REG_FLASH_BUF_CTRL_7041 XDATA_REG8(0x7041)  /* Flash buffer control */

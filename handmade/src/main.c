@@ -103,76 +103,6 @@ static void do_usb_bulk_in(void) {
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
 
-/*=== USB Request Handlers ===*/
-
-/* USB 2.0 Descriptors — no SS companion descriptors, 64-byte bulk EPs for Full Speed */
-static __code const uint8_t dev_desc[] = {
-  0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40,
-  0xD1, 0xAD, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x01,
-};
-static __code const uint8_t dev_desc_30[] = {
-  0x12, 0x01, 0x20, 0x03, 0x00, 0x00, 0x00, 0x09,
-  0xD1, 0xAD, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x01,
-};
-static __code const uint8_t cfg_desc[] = {
-  /* Config: wTotalLength=46, 1 interface */
-  0x09, 0x02, 0x2E, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
-  /* Interface 0: 4 bulk EPs, vendor class */
-  0x09, 0x04, 0x00, 0x00, 0x04, 0xFF, 0xFF, 0xFF, 0x00,
-  0x07, 0x05, 0x81, 0x02, 0x00, 0x02, 0x00,  /* EP1 IN  bulk 512 */
-  0x07, 0x05, 0x02, 0x02, 0x00, 0x02, 0x00,  /* EP2 OUT bulk 512 */
-  0x07, 0x05, 0x83, 0x02, 0x00, 0x02, 0x00,  /* EP3 IN  bulk 512 */
-  0x07, 0x05, 0x04, 0x02, 0x00, 0x02, 0x00,  /* EP4 OUT bulk 512 */
-};
-static __code const uint8_t cfg_desc_30[] = {
-  /* Config: wTotalLength=121, 1 interface */
-  0x09, 0x02, 0x79, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
-  /* Alt 0: BBB — 2 bulk EPs + SS companions */
-  0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,
-  0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,  /* EP1 IN  bulk 1024 */
-  0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,         /* SS Companion: bMaxBurst=15 */
-  0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,  /* EP2 OUT bulk 1024 */
-  0x06, 0x30, 0x0F, 0x00, 0x00, 0x00,         /* SS Companion: bMaxBurst=15 */
-  /* Alt 1: UAS — 4 bulk EPs + SS companions + pipe usage, vendor class */
-  0x09, 0x04, 0x00, 0x01, 0x04, 0xFF, 0xFF, 0xFF, 0x00,
-  0x07, 0x05, 0x81, 0x02, 0x00, 0x04, 0x00,  /* EP1 IN  bulk 1024 — Status */
-  0x06, 0x30, 0x0F, 0x05, 0x00, 0x00,         /* SS Companion: bMaxBurst=15, MaxStreams=32 */
-  0x04, 0x24, 0x03, 0x00,                     /* Pipe Usage: Status */
-  0x07, 0x05, 0x02, 0x02, 0x00, 0x04, 0x00,  /* EP2 OUT bulk 1024 — Command */
-  0x06, 0x30, 0x0F, 0x05, 0x00, 0x00,         /* SS Companion: bMaxBurst=15, MaxStreams=32 */
-  0x04, 0x24, 0x04, 0x00,                     /* Pipe Usage: Command */
-  0x07, 0x05, 0x83, 0x02, 0x00, 0x04, 0x00,  /* EP3 IN  bulk 1024 — Data-In */
-  0x06, 0x30, 0x0F, 0x05, 0x00, 0x00,         /* SS Companion: bMaxBurst=15, MaxStreams=32 */
-  0x04, 0x24, 0x02, 0x00,                     /* Pipe Usage: Data-In */
-  0x07, 0x05, 0x04, 0x02, 0x00, 0x04, 0x00,  /* EP4 OUT bulk 1024 — Data-Out */
-  0x06, 0x30, 0x00, 0x00, 0x00, 0x00,         /* SS Companion: bMaxBurst=0 */
-  0x04, 0x24, 0x01, 0x00,                     /* Pipe Usage: Data-Out */
-};
-static __code const uint8_t bos_desc[] = {
-  0x05, 0x0F, 0x16, 0x00, 0x02,
-  0x07, 0x10, 0x02, 0x02, 0x00, 0x00, 0x00,
-  0x0A, 0x10, 0x03, 0x00, 0x0E, 0x00, 0x03, 0x00, 0x00, 0x00,
-};
-static __code const uint8_t str0_desc[] = { 0x04, 0x03, 0x09, 0x04 };
-static __code const uint8_t str1_desc[] = { 0x0A, 0x03, 't',0, 'i',0, 'n',0, 'y',0 };
-static __code const uint8_t str2_desc[] = { 0x18, 0x03, 'c',0, 'u',0, 's',0, 't',0, 'o',0, 'm',0, ' ',0, 'v',0, '0',0, '.',0, '1',0 };
-static __code const uint8_t str3_desc[] = { 0x08, 0x03, '0',0, '0',0, '1',0 };
-
-static __code const uint8_t * __code const string_table[] = {
-  str0_desc, str1_desc, str2_desc, str3_desc,
-};
-
-static __code const usb_descs_t descs_hs = {
-  dev_desc,    cfg_desc,    bos_desc, string_table,
-  sizeof(dev_desc),    sizeof(cfg_desc),    sizeof(bos_desc),
-  sizeof(string_table) / sizeof(string_table[0]),
-};
-static __code const usb_descs_t descs_ss = {
-  dev_desc_30, cfg_desc_30, bos_desc, string_table,
-  sizeof(dev_desc_30), sizeof(cfg_desc_30), sizeof(bos_desc),
-  sizeof(string_table) / sizeof(string_table[0]),
-};
-
 /*=== USB Control Handler ===*/
 
 static void handle_usb_control(void) {
@@ -200,7 +130,7 @@ static void handle_usb_control(void) {
       usb_handle_set_address(wValL);
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-      usb_handle_get_descriptor(is_usb2 ? &descs_hs : &descs_ss, wValH, wValL, wLen);
+      usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
     } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
       /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
        * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
@@ -497,6 +427,9 @@ void main(void) {
   REG_UART_LCR &= ~LCR_PARITY_MASK;
 
   uart_puts("\n[BOOT]\n");
+
+  // flash controller — needed for the USB serial OTP read on enumeration
+  flash_init();
 
   usb_phy_tune();
 

@@ -1,11 +1,135 @@
 #include "types.h"
 #include "registers.h"
+#include "flash.h"
 
 #define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
 
-/* SS PHY tuning values from the stock firmware. Required even when we
- * end up at HS — without it the controller never pushes events to
- * PERIPH_STATUS. */
+/*=== USB device identification ===*/
+#define USB_VID                 0xADD1
+#define USB_PID                 0x0001
+#define USB_BCD_DEVICE          0x0001
+#define USB_LANG_ID             0x0409   /* US English */
+
+/* String descriptors */
+#define USB_STR_MFG             "tiny"
+#define USB_STR_PRODUCT         "custom v0.1"
+
+#define USB_STR_IDX_LANG        0
+#define USB_STR_IDX_MFG         1
+#define USB_STR_IDX_PRODUCT     2
+#define USB_STR_IDX_SERIAL      3
+
+/*=== Helpers ===*/
+#define U16_LE(v)               ((v) & 0xFF), (((v) >> 8) & 0xFF)
+
+/*=== Device descriptors ===*/
+
+static __code const uint8_t usb_dev_desc[] = {
+  0x12, 0x01,                 /* bLength=18, bDescriptorType=DEVICE */
+  U16_LE(0x0200),             /* bcdUSB = 2.00 */
+  0x00, 0x00, 0x00,           /* bDeviceClass / SubClass / Protocol */
+  0x40,                       /* bMaxPacketSize0 = 64 */
+  U16_LE(USB_VID), U16_LE(USB_PID), U16_LE(USB_BCD_DEVICE),
+  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL,
+  0x01,                       /* bNumConfigurations */
+};
+
+static __code const uint8_t usb_dev_desc_ss[] = {
+  0x12, 0x01,                 /* bLength=18, bDescriptorType=DEVICE */
+  U16_LE(0x0320),             /* bcdUSB = 3.20 */
+  0x00, 0x00, 0x00,           /* bDeviceClass / SubClass / Protocol */
+  0x09,                       /* bMaxPacketSize0 = 2^9 = 512 (SuperSpeed) */
+  U16_LE(USB_VID), U16_LE(USB_PID), U16_LE(USB_BCD_DEVICE),
+  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL,
+  0x01,                       /* bNumConfigurations */
+};
+
+/*=== Configuration descriptors ===*/
+
+/* USB 2.0: 1 interface, 4 bulk EPs @ 64 B (FS) / 512 B (HS). Total=46. */
+static __code const uint8_t usb_cfg_desc[] = {
+  0x09, 0x02, U16_LE(46), 0x01, 0x01, 0x00, 0xC0, 0x00,
+  /* Interface 0: vendor class, 4 bulk EPs */
+  0x09, 0x04, 0x00, 0x00, 0x04, 0xFF, 0xFF, 0xFF, 0x00,
+  0x07, 0x05, 0x81, 0x02, U16_LE(512), 0x00,  /* EP1 IN  bulk */
+  0x07, 0x05, 0x02, 0x02, U16_LE(512), 0x00,  /* EP2 OUT bulk */
+  0x07, 0x05, 0x83, 0x02, U16_LE(512), 0x00,  /* EP3 IN  bulk */
+  0x07, 0x05, 0x04, 0x02, U16_LE(512), 0x00,  /* EP4 OUT bulk */
+};
+
+/* USB 3.x: alt 0 = BBB (2 EPs), alt 1 = UAS (4 EPs). Total=121. */
+static __code const uint8_t usb_cfg_desc_ss[] = {
+  0x09, 0x02, U16_LE(121), 0x01, 0x01, 0x00, 0xC0, 0x00,
+  /* Alt 0: BBB */
+  0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x00,
+  0x07, 0x05, 0x81, 0x02, U16_LE(1024), 0x00,
+  0x06, 0x30, 0x0F, 0x00, U16_LE(0x0000),    /* SS Companion: bMaxBurst=15 */
+  0x07, 0x05, 0x02, 0x02, U16_LE(1024), 0x00,
+  0x06, 0x30, 0x0F, 0x00, U16_LE(0x0000),
+  /* Alt 1: UAS — 4 bulk EPs + SS companions + pipe usage */
+  0x09, 0x04, 0x00, 0x01, 0x04, 0xFF, 0xFF, 0xFF, 0x00,
+  0x07, 0x05, 0x81, 0x02, U16_LE(1024), 0x00,           /* EP1 IN  Status */
+  0x06, 0x30, 0x0F, 0x05, U16_LE(0x0000),
+  0x04, 0x24, 0x03, 0x00,
+  0x07, 0x05, 0x02, 0x02, U16_LE(1024), 0x00,           /* EP2 OUT Command */
+  0x06, 0x30, 0x0F, 0x05, U16_LE(0x0000),
+  0x04, 0x24, 0x04, 0x00,
+  0x07, 0x05, 0x83, 0x02, U16_LE(1024), 0x00,           /* EP3 IN  Data-In */
+  0x06, 0x30, 0x0F, 0x05, U16_LE(0x0000),
+  0x04, 0x24, 0x02, 0x00,
+  0x07, 0x05, 0x04, 0x02, U16_LE(1024), 0x00,           /* EP4 OUT Data-Out */
+  0x06, 0x30, 0x00, 0x00, U16_LE(0x0000),
+  0x04, 0x24, 0x01, 0x00,
+};
+
+/*=== BOS descriptor ===*/
+
+static __code const uint8_t usb_bos_desc[] = {
+  0x05, 0x0F, U16_LE(22), 0x02,                                /* BOS, 2 caps */
+  0x07, 0x10, 0x02, 0x02, 0x00, 0x00, 0x00,                    /* USB 2.0 Extension */
+  0x0A, 0x10, 0x03, 0x00, 0x0E, 0x00, 0x03, 0x00, 0x00, 0x00,  /* SS Capability */
+};
+
+/* Encode `s` as a UTF-16LE STRING descriptor in `buf`. Returns total length. */
+static uint8_t usb_build_string_desc(__code const char *s, __xdata uint8_t *buf) {
+  uint8_t i = 0;
+  while (s[i]) {
+    buf[2 + 2*i] = s[i];
+    buf[2 + 2*i + 1] = 0;
+    i++;
+  }
+  buf[0] = 2 + 2*i;
+  buf[1] = 0x03;
+  return 2 + 2*i;
+}
+
+/* Build a STRING descriptor from the OTP-stored 4-byte serial, lowercase
+ * ASCII hex (8 chars). Falls back to "ffffffff" when the OTP is blank,
+ * corrupt, or carries an unknown version. */
+static uint8_t usb_build_serial_desc(__xdata uint8_t *buf) {
+  static __code const char hex[] = "0123456789abcdef";
+  __xdata otp_t otp;
+  __xdata uint8_t serial[4];
+  uint8_t i, b;
+  if (flash_read_otp(&otp)) {
+    for (i = 0; i < 4; i++) serial[i] = otp.serial[i];
+  } else {
+    for (i = 0; i < 4; i++) serial[i] = 0xFF;
+  }
+  buf[0] = 2 + 2 * (4 * 2);
+  buf[1] = 0x03;
+  for (i = 0; i < 4; i++) {
+    b = serial[i];
+    buf[2 + 4*i + 0] = hex[b >> 4];
+    buf[2 + 4*i + 1] = 0;
+    buf[2 + 4*i + 2] = hex[b & 0x0F];
+    buf[2 + 4*i + 3] = 0;
+  }
+  return buf[0];
+}
+
+/* SS PHY tuning. Required even when we end up at HS — without it the
+ * controller never pushes events to PERIPH_STATUS. */
 static void rmw(uint16_t addr, uint8_t and_mask, uint8_t or_val) {
     XDATA_REG8(addr) = (XDATA_REG8(addr) & and_mask) | or_val;
 }
@@ -72,41 +196,43 @@ static void usb_handle_set_address(uint8_t wValL) {
     usb_send_zlp();
 }
 
-/* Descriptor table the firmware hands to usb_handle_get_descriptor. The
- * firmware can build one for HS and one for SS and pick at request time. */
-typedef struct {
-    __code const uint8_t *dev;
-    __code const uint8_t *cfg;
-    __code const uint8_t *bos;                            /* may be NULL */
-    /* strings[idx] = string descriptor for that index, or NULL/out-of-range
-     * → empty string descriptor reply. The strings[] array lives in CODE. */
-    __code const uint8_t * __code const *strings;
-    uint8_t dev_len, cfg_len, bos_len, n_strings;
-} usb_descs_t;
+static void usb_handle_get_descriptor(uint8_t is_usb2, uint8_t desc_type,
+                                      uint8_t desc_idx, uint16_t wlen) {
+  __code const uint8_t *src;
+  uint8_t desc_len;
 
-/* GET_DESCRIPTOR responder — copies into the EP0 IN buffer and sends
- * min(wlen, desc_len). */
-static void usb_handle_get_descriptor(__code const usb_descs_t *d,
-                                      uint8_t type, uint8_t idx, uint16_t wlen) {
-    static __code const uint8_t empty_str[] = { 0x02, 0x03 };
-    __code const uint8_t *src = empty_str;
-    uint8_t len = sizeof(empty_str);
-
-    if (type == USB_DESC_TYPE_DEVICE) {
-        src = d->dev; len = d->dev_len;
-    } else if (type == USB_DESC_TYPE_CONFIG) {
-        src = d->cfg; len = d->cfg_len;
-    } else if (type == USB_DESC_TYPE_BOS) {
-        if (!d->bos) return;
-        src = d->bos; len = d->bos_len;
-    } else if (type == USB_DESC_TYPE_STRING) {
-        if (idx < d->n_strings && d->strings[idx]) {
-            src = d->strings[idx];
-            len = src[0];                                 /* bLength */
-        }
+  if (desc_type == USB_DESC_TYPE_DEVICE) {
+    if (is_usb2) { src = usb_dev_desc;    desc_len = sizeof(usb_dev_desc); }
+    else         { src = usb_dev_desc_ss; desc_len = sizeof(usb_dev_desc_ss); }
+  } else if (desc_type == USB_DESC_TYPE_CONFIG) {
+    if (is_usb2) { src = usb_cfg_desc;    desc_len = sizeof(usb_cfg_desc); }
+    else         { src = usb_cfg_desc_ss; desc_len = sizeof(usb_cfg_desc_ss); }
+  } else if (desc_type == USB_DESC_TYPE_BOS) {
+    src = usb_bos_desc; desc_len = sizeof(usb_bos_desc);
+  } else if (desc_type == USB_DESC_TYPE_STRING) {
+    /* Built directly into DESC_BUF; bypass desc_copy. */
+    if (desc_idx == USB_STR_IDX_LANG) {
+      DESC_BUF[0] = 4; DESC_BUF[1] = 0x03;
+      DESC_BUF[2] = USB_LANG_ID & 0xFF;
+      DESC_BUF[3] = (USB_LANG_ID >> 8) & 0xFF;
+      desc_len = 4;
+    } else if (desc_idx == USB_STR_IDX_SERIAL) {
+      desc_len = usb_build_serial_desc(DESC_BUF);
     } else {
-        return;
+      __code const char *s;
+      switch (desc_idx) {
+        case USB_STR_IDX_MFG:     s = USB_STR_MFG;     break;
+        case USB_STR_IDX_PRODUCT: s = USB_STR_PRODUCT; break;
+        default:                  s = "";              break;
+      }
+      desc_len = usb_build_string_desc(s, DESC_BUF);
     }
-    usb_desc_copy(src, len);
-    usb_send_data(wlen < len ? wlen : len);
+    usb_send_data(wlen < desc_len ? wlen : desc_len);
+    return;
+  } else {
+    return;
+  }
+
+  usb_desc_copy(src, desc_len);
+  usb_send_data(wlen < desc_len ? wlen : desc_len);
 }
