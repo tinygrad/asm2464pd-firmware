@@ -79,26 +79,26 @@ static void handle_setup(void) {
     if (bmReq == 0x00 && bReq == 0x05) {
         REG_USB_INT_MASK_9090 = 0x80 | (wValL & 0x7F);
         REG_USB_EP_CTRL_91D0 = 0x02;
-        send_zlp();
+        usb_send_zlp();
     } else if (bmReq == 0x80 && bReq == 0x06) {
         handle_get_descriptor(wValH, wValL, wLen);
     } else if (bmReq == 0x00 && bReq == 0x09) {
         REG_USB_MSC_CFG = 0x00;
-        send_zlp();
+        usb_send_zlp();
     } else if (bmReq == 0xC0 && bReq == 0xE4) {
         uint16_t addr = ((uint16_t)wValH << 8) | wValL;
         uint16_t rlen = wLen > 64 ? 64 : wLen;
         for (uint16_t i = 0; i < rlen; i++) DESC_BUF[i] = XR8(addr + i);
-        send_data(rlen);
+        usb_send_data(rlen);
     } else if (bmReq == 0x40 && bReq == 0xE5) {
         uint16_t addr = ((uint16_t)wValH << 8) | wValL;
         XR8(addr) = REG_USB_SETUP_WIDX_L;
-        send_zlp();
+        usb_send_zlp();
     } else if (bmReq == 0x40 && bReq == 0xEC) {
-        send_zlp();
+        usb_send_zlp();
         enter_dfu();        /* never returns */
     } else {
-        if (wLen == 0) send_zlp();
+        if (wLen == 0) usb_send_zlp();
     }
 }
 

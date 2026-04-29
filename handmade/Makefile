@@ -144,8 +144,7 @@ BOOTSTUB_LDFLAGS = --code-loc 0x0000 --code-size 0x4000 \
 BOOTSTUB_CRT0_OBJ = $(OBJ_DIR)/crt0_bootstub.rel
 BOOTSTUB_OBJS = $(BOOTSTUB_CRT0_OBJ) \
                 $(OBJ_DIR)/bootstub.rel \
-                $(OBJ_DIR)/sha256.rel \
-                $(OBJ_DIR)/flash.rel
+                $(OBJ_DIR)/sha256.rel
 BOOTSTUB_TARGET  = $(BUILD_DIR)/bootstub
 BOOTSTUB_HEX     = $(BOOTSTUB_TARGET).ihx
 BOOTSTUB_BIN     = $(BOOTSTUB_TARGET).bin
@@ -160,8 +159,6 @@ $(BOOTSTUB_CRT0_OBJ): $(SRC_DIR)/crt0_bootstub.s | $(OBJ_DIR)
 $(OBJ_DIR)/bootstub.rel: $(SRC_DIR)/bootstub.c $(SRC_DIR)/usb.h $(SRC_DIR)/flash.h $(SRC_DIR)/sha256.h | $(OBJ_DIR)
 	$(CC) $(BOOTSTUB_CFLAGS) -c $< -o $@
 $(OBJ_DIR)/sha256.rel: $(SRC_DIR)/sha256.c $(SRC_DIR)/sha256.h | $(OBJ_DIR)
-	$(CC) $(BOOTSTUB_CFLAGS) -c $< -o $@
-$(OBJ_DIR)/flash.rel: $(SRC_DIR)/flash.c $(SRC_DIR)/flash.h | $(OBJ_DIR)
 	$(CC) $(BOOTSTUB_CFLAGS) -c $< -o $@
 
 $(BOOTSTUB_HEX): $(BOOTSTUB_OBJS) | $(BUILD_DIR)
