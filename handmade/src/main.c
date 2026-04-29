@@ -65,9 +65,10 @@ static void pcie_power_on(void) {
   REG_PCIE_TUNNEL_CFG = PCIE_TLP_CTRL_TUNNEL;  // fix late issue in RDNA3
   REG_PCIE_PERST_CTRL = 0x00;                  // deassert PERST#
 
-  // wait for stable link
+  // wait for stable link, bounded so we don't block forever when nothing is attached
   uint8_t stable_samples = 0;
-  while (stable_samples < 3) {
+  uint8_t attempts;
+  for (attempts = 0; attempts < 20 && stable_samples < 3; attempts++) {
     uint8_t ltssm_state = REG_PCIE_LTSSM_STATE;
     DPX = 0x01;
     uint8_t link_info = REG_PHY_PCIE_LINK_INFO;
@@ -81,13 +82,14 @@ static void pcie_power_on(void) {
     uart_puthex((link_info >> 4) & 0x0F);
     if (ltssm_state == 0x78) uart_puts(" CONNECTED");
     uart_puts("]\n");
-    if (REG_PCIE_LTSSM_STATE == 0x78) {
+    if (ltssm_state == 0x78) {
       stable_samples++;
     } else {
       stable_samples = 0;
     }
     sleep(100);
   }
+  if (stable_samples < 3) uart_puts("[PCIe timeout]\n");
 }
 
 static void do_usb_bulk_in(void) {
