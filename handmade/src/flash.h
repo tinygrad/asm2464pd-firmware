@@ -62,4 +62,17 @@ static uint8_t flash_read_otp(__xdata otp_t *out) {
   return out->checksum == csum;
 }
 
+/* Stream `len` bytes from flash `addr` into `dst`. Chunked at the 4 KB
+ * FLASH_BUF size. */
+static void flash_read(uint32_t addr, __xdata uint8_t *dst, uint16_t len) {
+  while (len) {
+    uint16_t chunk = (len > FLASH_BUFFER_SIZE) ? FLASH_BUFFER_SIZE : len;
+    flash_cmd(0x03, addr, 0x07, chunk);
+    for (uint16_t i = 0; i < chunk; i++) dst[i] = FLASH_BUF[i];
+    dst  += chunk;
+    addr += chunk;
+    len  -= chunk;
+  }
+}
+
 #endif
