@@ -4,7 +4,7 @@
 # from the bootstub at 0x0003-0x002B), code from 0x4030 onwards.
 #
 # The output `userfw.bin` is the raw image bytes; `tools/pack_userfw.py`
-# wraps it with our header (magic, sizes, SHA-256) for flashing to SPI
+# wraps it with our header (magic, sizes, CRC-32) for flashing to SPI
 # 0x4000+.
 
 CC = sdcc

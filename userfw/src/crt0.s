@@ -1,7 +1,7 @@
 ; ASM2464PD userfw - startup code, relocated to CODE 0x4000.
 ;
 ; The bootstub at 0x0000-0x3FFF jumps here after copying our body from
-; flash and validating SHA-256. CPU interrupt vectors at 0x0003+ in the
+; flash and validating its CRC. CPU interrupt vectors at 0x0003+ in the
 ; bootstub LJMP forward to 0x4003+, which is this table.
 
     .module userfw_crt0

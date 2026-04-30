@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 """Pack userfw .bin files into the bootstub-consumable wire image.
 
-Wire format (matches bootstub/src/regs.h):
-  +0x00  magic    'A','S','P','2'  (4 bytes)
-  +0x04  version  u32 LE             (4 bytes)
-  +0x08  common_len  u32 LE          (4 bytes)
-  +0x0C  bank0_len   u32 LE          (4 bytes)
-  +0x10  bank1_len   u32 LE          (4 bytes)
-  +0x14  reserved 12 bytes (zeros)
-  +0x20  sha256   over header[0:0x20] || body  (32 bytes)
+Wire format:
+  +0x00  magic       'A','S','P','2'  (4 bytes)
+  +0x04  version     u32 LE           (4 bytes)
+  +0x08  common_len  u32 LE           (4 bytes)
+  +0x0C  bank0_len   u32 LE           (4 bytes)
+  +0x10  bank1_len   u32 LE           (4 bytes)
+  +0x14  reserved    (12 bytes, zeros)
+  +0x20  crc32       u32 LE — over header[0:0x20] || body  (4 bytes)
+  +0x24  reserved    (28 bytes, zeros)
   +0x40  body — common_len + bank0_len + bank1_len bytes
 
 The bootstub copies common to CODE 0x4000-0x7FFF, bank0 to CODE
 0x8000-0xFFFF with PSBANK=0, bank1 to CODE 0x8000-0xFFFF with PSBANK=1.
 """
 import argparse
-import hashlib
 import struct
 import sys
+import zlib
 
 MAGIC      = b"ASP2"
 HDR_SIZE   = 0x40
+HASH_OFF   = 0x20
 COMMON_MAX = 0x4000   # 16 KB
 BANK_MAX   = 0x8000   # 32 KB
 
@@ -57,18 +59,16 @@ def main() -> int:
 
     body = common + bank0 + bank1
 
-    # First 0x20 of header — everything before the hash. The bootstub
-    # hashes header[0:0x20] || body and compares to header[0x20:0x40].
     pre = (MAGIC
            + struct.pack("<I", args.version)
            + struct.pack("<I", len(common))
            + struct.pack("<I", len(bank0))
            + struct.pack("<I", len(bank1))
            + b"\x00" * 12)
-    assert len(pre) == 0x20
+    assert len(pre) == HASH_OFF
 
-    digest = hashlib.sha256(pre + body).digest()
-    image  = pre + digest + body
+    crc   = zlib.crc32(pre + body) & 0xFFFFFFFF
+    image = pre + struct.pack("<I", crc) + b"\x00" * (HDR_SIZE - HASH_OFF - 4) + body
 
     with open(args.output, "wb") as f:
         f.write(image)
@@ -78,7 +78,7 @@ def main() -> int:
     print(f"  bank0:  {len(bank0):>6} bytes  (max {BANK_MAX})")
     print(f"  bank1:  {len(bank1):>6} bytes  (max {BANK_MAX})")
     print(f"  total:  {len(image):>6} bytes  (header {HDR_SIZE} + body {len(body)})")
-    print(f"  sha256: {digest.hex()}")
+    print(f"  crc32:  {crc:08x}")
     return 0
 
 

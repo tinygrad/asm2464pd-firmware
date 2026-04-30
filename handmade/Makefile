@@ -95,24 +95,19 @@ for line in open('$<'): \
 open('$@', 'wb').write(bytes(data).rstrip(b'\x00'))"; \
 	fi
 
-# Add ASM2464 firmware wrapper (body_len + body + magic + checksum + crc)
-$(BUILD_DIR)/firmware_wrapped.bin: $(BIN)
-	@echo "Wrapping firmware with ASM2464 header..."
-	@python3 -c "\
-import zlib; \
+# Add ASM2464 mask-ROM wrapper: body_len(4) + body + magic(0xA5) + sum(1) + crc32(4)
+$(BUILD_DIR)/%_wrapped.bin: $(BUILD_DIR)/%.bin
+	@python3 -c "import zlib; \
 body = open('$<', 'rb').read(); \
-body_len = len(body).to_bytes(4, 'little'); \
-checksum = bytes([sum(body) & 0xFF]); \
-crc = zlib.crc32(body).to_bytes(4, 'little'); \
-magic = bytes([0xA5]); \
-open('$@', 'wb').write(body_len + body + magic + checksum + crc)"
-	@echo "Built: $@"
+header = len(body).to_bytes(4, 'little'); \
+trailer = bytes([0xA5]) + bytes([sum(body) & 0xFF]) + zlib.crc32(body).to_bytes(4, 'little'); \
+open('$@', 'wb').write(header + body + trailer)"
 	@ls -la $@
 
 wrapped: $(BUILD_DIR)/firmware_wrapped.bin
 
 uflash: $(BUILD_DIR)/firmware_wrapped.bin
-	@python3 e4_flash.py $<
+	@python3 ../scripts/e4_flash.py $<
 
 nflash: $(BUILD_DIR)/firmware_wrapped.bin
 	@echo "Resetting to bootloader..."
@@ -132,9 +127,8 @@ flash: $(BUILD_DIR)/firmware_wrapped.bin
 
 # ===== Bootstub build =====
 # Same compiler as the full firmware so usb.h, registers.h, etc. are
-# guaranteed identical. Built with --model-large because SHA-256 plus the
-# flash/USB code overflows IRAM in --model-small. Code limited to 16 KB
-# at the bottom of CODE space; userfw lives at 0x4000+.
+# guaranteed identical. Code limited to 16 KB at the bottom of CODE
+# space; userfw lives at 0x4000+.
 
 BOOTSTUB_CFLAGS = -mmcs51 --model-large --opt-code-size --std-c99 \
                   --no-xinit-opt -I$(SRC_DIR) -I../src/include
@@ -143,8 +137,7 @@ BOOTSTUB_LDFLAGS = --code-loc 0x0000 --code-size 0x4000 \
 
 BOOTSTUB_CRT0_OBJ = $(OBJ_DIR)/crt0_bootstub.rel
 BOOTSTUB_OBJS = $(BOOTSTUB_CRT0_OBJ) \
-                $(OBJ_DIR)/bootstub.rel \
-                $(OBJ_DIR)/sha256.rel
+                $(OBJ_DIR)/bootstub.rel
 BOOTSTUB_TARGET  = $(BUILD_DIR)/bootstub
 BOOTSTUB_HEX     = $(BOOTSTUB_TARGET).ihx
 BOOTSTUB_BIN     = $(BOOTSTUB_TARGET).bin
@@ -156,9 +149,7 @@ $(BOOTSTUB_CRT0_OBJ): $(SRC_DIR)/crt0_bootstub.s | $(OBJ_DIR)
 	-mv $(SRC_DIR)/crt0_bootstub.lst $(OBJ_DIR)/ 2>/dev/null || true
 	-mv $(SRC_DIR)/crt0_bootstub.sym $(OBJ_DIR)/ 2>/dev/null || true
 
-$(OBJ_DIR)/bootstub.rel: $(SRC_DIR)/bootstub.c $(SRC_DIR)/usb.h $(SRC_DIR)/flash.h $(SRC_DIR)/sha256.h | $(OBJ_DIR)
-	$(CC) $(BOOTSTUB_CFLAGS) -c $< -o $@
-$(OBJ_DIR)/sha256.rel: $(SRC_DIR)/sha256.c $(SRC_DIR)/sha256.h | $(OBJ_DIR)
+$(OBJ_DIR)/bootstub.rel: $(SRC_DIR)/bootstub.c $(SRC_DIR)/usb.h $(SRC_DIR)/flash.h | $(OBJ_DIR)
 	$(CC) $(BOOTSTUB_CFLAGS) -c $< -o $@
 
 $(BOOTSTUB_HEX): $(BOOTSTUB_OBJS) | $(BUILD_DIR)
@@ -169,17 +160,10 @@ $(BOOTSTUB_BIN): $(BOOTSTUB_HEX)
 	@sz=$$(stat -c %s $@); echo "bootstub body: $$sz bytes (budget 16384)"; \
 	 if [ $$sz -gt 16384 ]; then echo "FAIL: bootstub > 16 KB"; exit 1; fi
 
-$(BOOTSTUB_WRAPPED): $(BOOTSTUB_BIN)
-	@python3 -c "import zlib; \
-body = open('$<', 'rb').read(); \
-header = len(body).to_bytes(4, 'little'); \
-trailer = bytes([0xA5]) + bytes([sum(body) & 0xFF]) + zlib.crc32(body).to_bytes(4, 'little'); \
-open('$@', 'wb').write(header + body + trailer)"
-
 bootstub: $(BOOTSTUB_WRAPPED)
 
 # One-time install via the FTDI bootloader strap. After this, future userfw
-# updates can go through tools/dfu.py without the FTDI.
+# updates can go through handmade/flash.py without the FTDI.
 bootstub-flash: $(BOOTSTUB_WRAPPED)
 	@python3 ../ftdi_debug.py -bn
 	@python3 ../flash.py $<

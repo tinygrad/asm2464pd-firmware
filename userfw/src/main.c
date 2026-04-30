@@ -13,57 +13,48 @@
 #include "registers.h"
 #include "usb.h"
 
-#define XR8(addr)  (*(__xdata volatile uint8_t *)(addr))
-
 __sfr __at(0xA8) IE;
 
 #define COOKIE_ADDR    0x5FF8
 #define COOKIE_MAGIC   0xDF0BC0DEUL
+#define COOKIE         (*(__xdata volatile uint32_t *)COOKIE_ADDR)
 
 static void uart_putc(uint8_t c) { while (REG_UART_TFBF == 0); REG_UART_THR = c; }
 static void uart_puts(__code const char *s) { while (*s) uart_putc(*s++); }
 
-/* USB descriptors — vendor class, no endpoints (control transfers only). */
-static __code const uint8_t dev_desc[] = {
-    0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40,
-    0xD1, 0xAD, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x01,
-};
+/* Vendor class, no endpoints — control transfers only. */
 static __code const uint8_t cfg_desc[] = {
     0x09, 0x02, 0x12, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
     0x09, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00,
 };
-static __code const uint8_t bos_desc[] = {
-    0x05, 0x0F, 0x0C, 0x00, 0x01,
-    0x07, 0x10, 0x02, 0x02, 0x00, 0x00, 0x00,
-};
-static __code const uint8_t str0[]   = { 0x04, 0x03, 0x09, 0x04 };
-static __code const uint8_t str1[]   = { 0x0A, 0x03, 't',0,'i',0,'n',0,'y',0 };
-static __code const uint8_t str2[]   = { 0x10, 0x03, 'u',0,'s',0,'e',0,'r',0,' ',0,'f',0,'w',0 };
-static __code const uint8_t str3[]   = { 0x08, 0x03, '0',0,'0',0,'1',0 };
-static __code const uint8_t str_em[] = { 0x02, 0x03 };
 
 static void handle_get_descriptor(uint8_t type, uint8_t idx, uint16_t wlen) {
     __code const uint8_t *src; uint8_t len;
-    if      (type == USB_DESC_TYPE_DEVICE) { src = dev_desc; len = sizeof(dev_desc); }
-    else if (type == USB_DESC_TYPE_CONFIG) { src = cfg_desc; len = sizeof(cfg_desc); }
-    else if (type == USB_DESC_TYPE_BOS)    { src = bos_desc; len = sizeof(bos_desc); }
+    if      (type == USB_DESC_TYPE_DEVICE) { src = usb_dev_desc; len = sizeof(usb_dev_desc); }
+    else if (type == USB_DESC_TYPE_CONFIG) { src = cfg_desc;     len = sizeof(cfg_desc); }
+    else if (type == USB_DESC_TYPE_BOS)    { src = usb_bos_desc; len = sizeof(usb_bos_desc); }
     else if (type == USB_DESC_TYPE_STRING) {
-        if      (idx == 0) { src = str0; len = sizeof(str0); }
-        else if (idx == 1) { src = str1; len = sizeof(str1); }
-        else if (idx == 2) { src = str2; len = sizeof(str2); }
-        else if (idx == 3) { src = str3; len = sizeof(str3); }
-        else               { src = str_em; len = sizeof(str_em); }
-    } else { return; }
+        if (idx == USB_STR_IDX_LANG) {
+            DESC_BUF[0] = 4; DESC_BUF[1] = 0x03;
+            DESC_BUF[2] = USB_LANG_ID & 0xFF;
+            DESC_BUF[3] = (USB_LANG_ID >> 8) & 0xFF;
+            len = 4;
+        } else {
+            __code const char *s = (idx == USB_STR_IDX_MFG)     ? USB_STR_MFG :
+                                   (idx == USB_STR_IDX_PRODUCT) ? "userfw"    :
+                                   (idx == USB_STR_IDX_SERIAL)  ? "001"       : "";
+            len = usb_build_string_desc(s, DESC_BUF);
+        }
+        usb_send_data(wlen < len ? wlen : len);
+        return;
+    } else return;
     usb_desc_copy(src, len);
     usb_send_data(wlen < len ? wlen : len);
 }
 
 static void enter_dfu(void) {
     uart_puts("[DFU!]\n");
-    XR8(COOKIE_ADDR + 0) = (uint8_t)(COOKIE_MAGIC      );
-    XR8(COOKIE_ADDR + 1) = (uint8_t)(COOKIE_MAGIC >>  8);
-    XR8(COOKIE_ADDR + 2) = (uint8_t)(COOKIE_MAGIC >> 16);
-    XR8(COOKIE_ADDR + 3) = (uint8_t)(COOKIE_MAGIC >> 24);
+    COOKIE = COOKIE_MAGIC;
     REG_CPU_RESET = 0x01;
     /* CC31 self-clears once the CPU reboots; this loop is just a guard. */
     while (1);
@@ -76,25 +67,22 @@ static void handle_setup(void) {
     uint8_t wValH = REG_USB_SETUP_WVAL_H;
     uint16_t wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
 
-    if (bmReq == 0x00 && bReq == 0x05) {
-        REG_USB_INT_MASK_9090 = 0x80 | (wValL & 0x7F);
-        REG_USB_EP_CTRL_91D0 = 0x02;
-        usb_send_zlp();
-    } else if (bmReq == 0x80 && bReq == 0x06) {
+    if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
+        usb_handle_set_address(wValL);
+    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
         handle_get_descriptor(wValH, wValL, wLen);
-    } else if (bmReq == 0x00 && bReq == 0x09) {
+    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
         REG_USB_MSC_CFG = 0x00;
         usb_send_zlp();
-    } else if (bmReq == 0xC0 && bReq == 0xE4) {
+    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
         uint16_t addr = ((uint16_t)wValH << 8) | wValL;
         uint16_t rlen = wLen > 64 ? 64 : wLen;
-        for (uint16_t i = 0; i < rlen; i++) DESC_BUF[i] = XR8(addr + i);
+        for (uint16_t i = 0; i < rlen; i++) DESC_BUF[i] = XDATA_REG8(addr + i);
         usb_send_data(rlen);
-    } else if (bmReq == 0x40 && bReq == 0xE5) {
-        uint16_t addr = ((uint16_t)wValH << 8) | wValL;
-        XR8(addr) = REG_USB_SETUP_WIDX_L;
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE5) {
+        XDATA_REG8(((uint16_t)wValH << 8) | wValL) = REG_USB_SETUP_WIDX_L;
         usb_send_zlp();
-    } else if (bmReq == 0x40 && bReq == 0xEC) {
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEC) {
         usb_send_zlp();
         enter_dfu();        /* never returns */
     } else {
