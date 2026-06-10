@@ -53,6 +53,7 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 #include "vdm.h"
 #include "sb.h"
 #include "usb4.h"
+#include "boot_phy.h"
 
 /* Hardware status packet */
 typedef struct {
@@ -492,6 +493,16 @@ void main(void) {
   // flash controller — needed for the USB serial OTP read on enumeration
   flash_init();
 
+  // boot_phy_bringup_early @0xCE79 — stock's FIRST main() action: Type-C SBU (d0d3), PHY config
+  // (cf28: CC30/CC33/CC39/E324...), bank1 SB-block enable (ed02: SB[0x05].7), CC10 settle, and the
+  // PCIe-tunnel boot pre-stage (d996). THIS powers the sideband (SB) transport that rides the
+  // Type-C SBU pins — without it the SB block reads back 0 and the host never trains E302.
+  boot_phy_bringup_early();
+  uart_puts("[BOOTPHY cc3f="); uart_puthex(XDATA_REG8V(0xCC3F));
+  uart_puts(" cc30=");          uart_puthex(XDATA_REG8V(0xCC30));
+  uart_puts(" e712=");          uart_puthex(XDATA_REG8V(0xE712));
+  uart_puts(" sb05=");          uart_puthex(SB_RD(0x05)); uart_puts("]\n");
+
   usb_phy_tune();
 
   // PCIe TLP engine values that don't change + tuning
@@ -508,7 +519,8 @@ void main(void) {
   // usb4_phy_arm() issues the CC10 subcmd-4 link-up arm and waits E318.4. Run at boot BEFORE the
   // super-loop so no sleep() (which shares the CC10-CC13 mailbox) races the arm's CC11.1 ack.
   usb_pipe_engine_init();
-  boot_phy_early_settle();   // Step C: optional early PHY settle (cc10 subcmd2/3 + E712 wait)
+  // boot_phy_early_settle() removed: the CC10 settle is now done by boot_phy_bringup_early() above
+  // (run at stock's early position, with the full Type-C SBU + PHY config + SB-block enable).
   usb4_phy_arm();
   uart_puts("[PHYarm e318="); uart_puthex(XDATA_REG8V(0xE318));
   uart_puts(" 91c0=");        uart_puthex(XDATA_REG8V(0x91C0));
