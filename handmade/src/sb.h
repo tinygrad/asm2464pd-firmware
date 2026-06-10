@@ -48,11 +48,18 @@ static void P1_REG8_wr(uint16_t off, uint8_t v) {
 #define SB_CLR(off, m)  SB_WR((off), SB_RD(off) & (uint8_t)~(m))
 #define SB_SET(off, m)  SB_WR((off), SB_RD(off) | (uint8_t)(m))
 
+/* ROM table CODE 0x21B4[0x10] — the C8FF==4 lane-rate SB[0x3e..0x4d] descriptor (b230 tail).
+ * read_memory byte-exact. */
+static __code const uint8_t sb_flip_rom_21b4[0x10] = {
+  0x00,0x06,0x0B,0x0E,0x13,0x00,0x05,0x0A, 0x0E,0x11,0x00,0x05,0x08,0x0D,0x00,0x04
+};
+
 /* ============================ sb_lane_flip_init (bank1 b230) ============================
  * Runs FIRST. Reads cable orientation C6DB.0 (flip), prints [flp=N], clears P1[0x0100] bits
  * 4/6/7, sets/clears P1[0x0100] bit0 by connect state, programs the orientation-dependent SB
  * lane map (SB[0x01]/SB[0x02]), arms/clears the E7FC lane-bond gate by connect state, then
- * SB[0xd1].4=1, SB[0x49]=0xA0, XDATA(0x06EC)=0. Verbatim per §2. */
+ * SB[0xd1].4=1, SB[0x49]=0xA0, XDATA(0x06EC)=0. Then the b307-b39e tail (SB-PHY-RX descriptor +
+ * C801.4/C809.3 UNMASK + CCD mailbox strobe). Verbatim per §2 + RE-AUDIT breakthrough A. */
 static void sb_lane_flip_init(void) {
   uint8_t flip = PR(0xC6DB) & 0x01;
   uart_puts("[flp=");
@@ -98,6 +105,36 @@ static void sb_lane_flip_init(void) {
   SB_WR(0xD1, (SB_RD(0xD1) & 0xEF) | 0x10);     /* b4=1 */
   SB_WR(0x49, 0xA0);
   PR(0x06EC) = 0;
+
+  /* ---- b307-b39e tail (RE-AUDIT #2/#5 + breakthrough A): the dropped SB-PHY-RX descriptor +
+   * the C801.4 / C809.3 SB-PHY-RX UNMASK + the CCD8/CCDA/CCDB=200/CCD9 mailbox strobe. handmade
+   * dropped this whole tail -> the SB-PHY RX interrupt SOURCE stayed MASKED -> the host could drive
+   * all the sideband it wanted and C80A.5 could never fire (matches c80aACC=00 every run). The old
+   * usb4_irq.h comment claiming SB 0x94..0x99 are "HW-latched" is WRONG: b230 writes them here. */
+  /* SB 0x94 PHY-RX descriptor (0d59 -> stock SB[0x94-0x96] = 02 71 00) */
+  SB_WR(0x94, 0x02); SB_WR(0x95, 0x71); SB_WR(0x96, 0x00);
+  /* SB 0x98/0x99 PHY-RX descriptor (0c7a A=0x3e B=0x80 -> stock SB[0x98]=3E SB[0x99]=80) */
+  SB_WR(0x98, 0x3E); SB_WR(0x99, 0x80);
+  PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02;          /* 97ef: CCD9 mailbox strobe (4 then 2) */
+  PR(0xCCD8) = PR(0xCCD8) & 0xEF;                /* CCD8 &= ~0x10 */
+  PR(0xC801) = (PR(0xC801) & 0xEF) | 0x10;       /* *** C801.4 SET (SB-PHY RX unmask) *** */
+  PR(0xCCD8) = (PR(0xCCD8) & 0xF8) | 0x04;       /* CCD8 bits2:0 = 4 */
+  PR(0xCCDA) = 0x00;
+  PR(0xCCDB) = 200;                              /* 0xC8 */
+  SB_CLR(0xCF, 0x01);                            /* 98b7(0xCF): SB[0xCF] &= ~1 */
+  SB_WR(0x53, 0xFF);                             /* SB[0x53]=0xFF */
+  SB_WR(0x5D, 0xFF);                             /* SB[0x5D]=0xFF */
+  SB_CLR(0x27, 0x01);                            /* 98b7(0x27): SB[0x27] &= ~1 */
+  SB_WR(0x2D, (SB_RD(0x2D) & 0xFD) | 0x02);      /* 9958(0x2D)+97fc: SB[0x2D] b1 set */
+  SB_CLR(0x2C, 0x01);                            /* 9945(0x2C): SB[0x2C] &= ~1 */
+  PR(0xC809) = (PR(0xC809) & 0xF7) | 0x08;       /* *** C809.3 SET (SB-PHY RX/INT unmask) *** */
+  SB_CLR(0x67, 0x40);                            /* SB[0x67] &= ~0x40 */
+  PR(0x072B) = 0x07; PR(0x072C) = 0x07;          /* lane-state latches */
+  /* if C8FF==4 (lane-rate gate): ROM-copy CODE 0x21b4[0x10] -> SB[0x3e..0x4d] */
+  if (PR(0xC8FF) == 0x04) {
+    uint8_t k;
+    for (k = 0; k < 0x10; k++) SB_WR((uint8_t)(0x3E + k), sb_flip_rom_21b4[k]);
+  }
 }
 
 /* ============================ ROM descriptor loader (bank1 b7a4) ============================
@@ -122,14 +159,42 @@ static __code const uint8_t sb_lane_desc_21d4[0x10] = {
 static void sb_rom_descriptor_load(void) {
   uint8_t i;
   for (i = 0; i < 0x64; i++) PR(0x0800 + i) = sb_drom_213d[i];
-  for (i = 0; i < 0x10; i++) PR(0x0700 + i) = sb_lane_desc_21d4[i];
   /* latch PID/bcd from PD RAM into the DROM product fields */
   PR(0x0804) = PR(0x0A57);
   PR(0x0805) = PR(0x0A58);
   /* if not USB4-cap (0x09F9.7 clear): clear DROM[0x1B].1 */
   if (!(PR(0x09F9) & 0x80)) PR(0x081B) = PR(0x081B) & ~0x02;
-  /* if 0x09F5 set: DROM[0x1A].5 = 1 */
+  for (i = 0; i < 0x10; i++) PR(0x0700 + i) = sb_lane_desc_21d4[i];
+  /* if 0x09F5 set: DROM[0x1A].5 = 1 (the richer stock guard is gated on 0x07BA/0x07CC/0x07B9/0x07CF
+   * connect substate -- reproduce the leading set; the conditional clear-back is a no-op on the
+   * happy connect path). */
   if (PR(0x09F5)) PR(0x081A) = (PR(0x081A) & 0xDF) | 0x20;
+  /* if 0x09F6 == 0: DROM[0x1A] &= 0xED */
+  if (PR(0x09F6) == 0) PR(0x081A) = PR(0x081A) & 0xED;
+
+  /* ---- b83b-b8d8 tail (RE-AUDIT breakthrough A + #5): connect-state init + the SB[0xC9]
+   * walking-1 connect-detect ARM + SB[0x28]/[0x2A]/[0x2C]/[0x66] + 0x6EE/0x6EF latch + CCD9 strobe
+   * + SB[0xD4]/[0x8F]. a066 only services a channel when SB[0xC9] bit(4+idx) is SET; handmade
+   * never armed it, so the C80A.5 SB-router service was never gated open. */
+  PR(0x0750) = 1; PR(0x0775) = 0; PR(0x0765) = 0; PR(0x0766) = 0; PR(0x0767) = 0;
+  PR(0x06ED) = 0; PR(0x0758) = 0; PR(0x075D) = 0x0F; PR(0x075E) = 0x0F; PR(0x0776) = 1;
+  PR(0x072A) = 0; PR(0x072D) = 0;
+  SB_WR(0x2C, 0x04);                              /* 96f5(4): SB[0x2C]=4 */
+  SB_WR(0x28, 0x08);                              /* SB[0x28]=8 */
+  SB_WR(0x2A, 0x08);                              /* SB[0x2A]=8 */
+  /* SB[0xC9] walking-1 connect-detect arm: 1,2,4,8,0x10,0x20,0x40,0x80 (9945/9756/994e + direct) */
+  SB_WR(0xC9, 0x01); SB_WR(0xC9, 0x02);          /* 9945 */
+  SB_WR(0xC9, 0x04); SB_WR(0xC9, 0x08);          /* 9756 */
+  SB_WR(0xC9, 0x10); SB_WR(0xC9, 0x20);          /* 994e */
+  SB_WR(0xC9, 0x40); SB_WR(0xC9, 0x80);          /* direct */
+  SB_WR(0x66, 0x08); SB_WR(0x66, 0x40);          /* SB[0x66]=8 then 0x40 */
+  PR(0x06EE) = SB_RD(0x24) & 0x01;               /* 0x6EE = SB[0x24].0 */
+  PR(0x06EF) = SB_RD(0x80) & 0x01;               /* 0x6EF = SB[0x80].0 */
+  PR(0x0719) = 0;
+  PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02;          /* 97ef: CCD9 strobe */
+  PR(0x074E) = 0; PR(0x074F) = 0;                /* 9874: zero per-lane CL0 latches */
+  SB_CLR(0xD4, 0x20);                            /* SB[0xD4] &= ~0x20 */
+  SB_WR(0x8F, (SB_RD(0x8F) & 0xEF) | 0x10);      /* SB[0x8F] = (&0xEF)|0x10 */
 }
 
 /* ============================ sb_block_init (bank1 bb37) ============================

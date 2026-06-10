@@ -28,6 +28,10 @@
 
 /* usb4_connect_u4 @0xA3F5 — bank0 head (part A) + the sb_assert() bank1 tail (part B, sb.h). */
 static void usb4_connect_u4(void) {
+  /* RE-AUDIT #3/D(c): 0x0AF1.0 is a DYNAMIC connect-time gate (NOT the static boot 0). Both this
+   * inner a3f5 body AND c9a8/bank0_8a89 require it set before the connect runs. Stock seeds it 0 at
+   * boot (92C5) and sets it on the connect path; set it here on connect entry. */
+  PR(0x0AF1) = PR(0x0AF1) | 0x01;
   /* a3f5: gated on 0x0AF1.0 — link/route control RMW (direct bank0 XDATA, high confidence). */
   if (PR(0x0AF1) & 0x01) {
     PR(0xE716) = (PR(0xE716) & 0xFC) | 0x03;     /* a3fc */
@@ -39,10 +43,13 @@ static void usb4_connect_u4(void) {
    * were tried and REGRESSED E302 training on HW (mode 3 -> mode 0). The simpler baseline tail
    * trains E302 to mode 3, so the extra PHY pre-stage is kept OUT. */
   if (PR(0x07BA) != 0) {
-    PR(0x09FA) = PR(0x09F9) & 0x03;              /* a42a */
+    /* a42a: latch route mode from 0x09F9&3. RE-AUDIT #3/D(b): do NOT clobber 0x09FA.2 (the c9a8
+     * connect-gate bit set on the route entry); preserve it across the route latch. (Stock's a42a
+     * writes the low 2 bits via a masked store; bit2 is owned by the a522/link-event path.) */
+    PR(0x09FA) = (PR(0x09FA) & 0x04) | (PR(0x09F9) & 0x03);
     if (PR(0x09F4) == 0x03) {                    /* a434: DP-alt sub-case */
-      if (PR(0x07BE) == 0) { PR(0x09FA) = 2; PR(0x09FB) = 1; }
-      else                 { PR(0x09FA) = 1; PR(0x09FB) = 2; }
+      if (PR(0x07BE) == 0) { PR(0x09FA) = (PR(0x09FA) & 0x04) | 2; PR(0x09FB) = 1; }
+      else                 { PR(0x09FA) = (PR(0x09FA) & 0x04) | 1; PR(0x09FB) = 2; }
     }
     if (PR(0x09FA) & 0x02) {                     /* a45a: 0x09FA.1 lane-1 route mode */
       PR(0xE716) = PR(0xE716) & 0xFC;

@@ -267,6 +267,13 @@ static void pd_handle_enter_usb(void) {
       PR(0x07BB) = 1;                             /* connect-pending */
       uart_puts("[Enter_USB 4]");
       PR(0x07BA) = 1;                             /* a11f: Connect_U4 gate (WAS MISSING) */
+      /* RE-AUDIT #3/D(a): on the live AMD/TB4 mode==2 route the c9a8 connect dispatcher's gate
+       * (0x09FA.2 && 0x0AF1.0 && (0x07E8||0x07EB)) is CLEAR -> bank0_8a89 can never be driven from
+       * a host link-event. Stock's setter is the C80A.4 a522 link-width path (0x09FA|=4), which the
+       * Intel host never reaches with handmade. Mirror it here so the link-event entry is armed.
+       * 0x07E8/0x0AF1.0 are set on the USB4 route entry (pd.h) + connect (usb4.h). */
+      PR(0x09FA) = PR(0x09FA) | 0x04;             /* 0x09FA.2 -> c9a8 gate bit (a522 mirror) */
+      PR(0x07E8) = 1;                             /* D(d): USB4 route entry -> c9a8 gate term */
     }
   } else {
     /* Reject (mode not USB4 / wrong state). */

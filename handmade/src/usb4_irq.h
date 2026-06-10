@@ -78,9 +78,11 @@ static void C397(uint16_t a) { RMW(a, 0xF1, 0x0E); PR(a + 1) = 0; }
  * transcribed straight-line below to stay byte-faithful to the stock instruction order. */
 
 /* 8e31 (full PHY-RX descriptor config, 0x8e31..0x9259 in bank1). Configures the dual PHY lanes
- * (c2xx = lane A, c3xx = lane B) + page-0x93 + page-0x28 (SB) lane regs. The SB[0x94..0x99]
- * PHY-RX descriptor bytes are HW-LATCHED from this config (nothing writes them directly), so this
- * block is required for the SB page to match stock. Transcribed VERBATIM from the bank1 disasm. */
+ * (c2xx = lane A, c3xx = lane B) + page-0x93 + page-0x28 (SB) lane regs.
+ * CORRECTION (RE-AUDIT breakthrough A): SB[0x94..0x99] are NOT "HW-latched / nothing writes them".
+ * The b230 sb_lane_flip_init b307-b39e tail writes them EXPLICITLY (0d59 SB[0x94]=02/0x95=71/0x96=00,
+ * 0c7a SB[0x98]=3E/0x99=80) -- handmade had dropped that whole tail, which is now restored in
+ * sb.h::sb_lane_flip_init. This 8e31 block configures the underlying PHY lanes; both are needed. */
 static void usb4_phy_rx_descriptor_8e31(void) {
   /* 8e31 head: E741/E742/CC43/C21F */
   PR(0xE741) = (PR(0xE741) & 0xF8) | 0x03;

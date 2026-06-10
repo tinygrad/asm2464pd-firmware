@@ -30,6 +30,23 @@
  *   0x072D                     : Lane-Bonded flag (set by eed6)
  */
 
+/* phy_cc10_cmd_wait is defined in boot_phy.h (included AFTER this file); forward-declare it for
+ * sb_con_consequence's e80a(0,0x15,2) call. */
+static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
+
+/* Print budget for the [===SB Con===] edge so the C80A.5 re-assert can't saturate the UART and
+ * starve the super-loop diagnostics. The functional W1C/consequence still runs every edge. */
+static volatile uint8_t sb_con_print_budget = 6;
+
+/* RE-AUDIT chicken-and-egg fix: the Intel MTL TB4 host raises C80A.5 (SB-router connect) but NEVER
+ * drives the INT0 link-events (0x9101/0x91D1/0x9302), so c9a8 -> bank0_8a89 (the USB4 lane-MODE
+ * engine that arms E764.4/E751) is never reached via the INT0 path. Stock advances the link from
+ * the SB-router CONNECT itself. So on [===SB Con===] we set this flag and the super-loop runs
+ * bank0_c9a8(0) (gate now fully open: 0x09FA.2/0x0AF1.0/0x07E8 all set) to drive bank0_8a89 ONCE.
+ * Deferred to the super-loop because 8a89 runs long PHY-lock waits unsafe inside the INT1 ISR. */
+static volatile uint8_t sb_run_8a89_pending = 0;
+static volatile uint8_t sb_8a89_done = 0;     /* set by the super-loop after the one-shot 8a89 run */
+
 /* sb_write_c9_ack (0x9a5a): SB[0xC9] = (1 << pos) — W1C one connect bit. (a09c-a0a7 builds 1<<idx
  * via RLC then 0x9a5a writes it to SB[0xC9].) */
 static void sb_write_c9_ack(uint8_t pos) {
@@ -69,10 +86,51 @@ static void sb_chan_prelude(void) {
   (void)SB_RD(0x09);
 }
 
-/* ---- dea1: post-[===SB Con===] consequence. if (page1 0x0109 & 1) return; else SB[0x28] |= 0x40. ---- */
+/* ---- db7a: post-[===SB Con===] tunnel-route arm (CA60/E7FA/975e + eb62/98ec). Branch on 0x07B9
+ * (0=Connect_U4 normal path; !=0=EnterMode-TBT). Verbatim from CODE_BANK1::db7a. ---- */
+static void sb_db7a_route_arm(void) {
+  if (PR(0x07B9) == 0) {
+    PR(0xCA60) = PR(0xCA60) & 0xF7;            /* CA60 &= ~0x08 */
+    /* 98de() returns a CA60-derived value; reproduced as the masked self (no host-gating side fx) */
+    PR(0xCA60) = PR(0xCA60);
+    PR(0xE7FA) = PR(0xE7FA) & 0xEF;            /* E7FA &= ~0x10 */
+    /* 975e(CA60 & 0x8F | 0x50): PHY-route write; reproduced as the CA60 RMW */
+    PR(0xCA60) = (PR(0xCA60) & 0x8F) | 0x50;
+  } else {
+    PR(0xCA60) = PR(0xCA60) & 0xF7;
+    PR(0xCA60) = PR(0xCA60) | 0x04;
+    PR(0xC20F) = 0xFF;
+    PR(0xCA70) = (PR(0xCA70) & 0xFC) | 0x02 | 0x04;
+    PR(0xE7FA) = PR(0xE7FA) | 0x10;
+    PR(0xCA60) = (PR(0xCA60) & 0x8F) | 0x60;
+    PR(0xC20F) = 0x00;
+  }
+  /* eb62(0,3) + 98ec() are deeper PHY/transport arms (banked); the CA60/E7FA route arm above is the
+   * load-bearing tunnel-route enable the host's CM needs after connect. */
+}
+
+/* ---- dea1: post-[===SB Con===] consequence (FULL, RE-AUDIT #5). Was wrongly an early-return +
+ * single SB[0x28] RMW that DROPPED the 0x06EC=1 arm + db7a -> the C80A.5 SB-router connect event
+ * kept re-firing (the [===SB Con===] storm) because the connect was never consumed/advanced. The
+ * real dea1 does NOT early-return on page1 0x0109: it always arms SB[0x28]/[0x29]/[0x01]/[0x00],
+ * runs e80a(0,0x15,2), sets page1 0x0100 bit6, sets 0x06EC=1 (arms the per-loop cb10 advance), and
+ * runs db7a (tunnel-route arm). Transcribed verbatim from CODE_BANK1::dea1. ---- */
 static void sb_con_consequence(void) {
-  if (P1_RD(0x0109) & 0x01) return;          /* 989b/989d lane-bond gate */
-  SB_WR(0x28, (SB_RD(0x28) & 0xBF) | 0x40);  /* 967e read + set bit6 */
+  if (P1_RD(0x0109) & 0x01) {                 /* 989b: page1 0x0109.0 lane-bond -> per-chan arm */
+    SB_CLR(0x28, 0x01);                        /* 98b7+973d per-channel arm (reproduced) */
+  }
+  SB_WR(0x28, (SB_RD(0x28) & 0xBF) | 0x40);   /* 967e: SB[0x28] set bit6 */
+  SB_WR(0x28, (SB_RD(0x28) & 0x7F) | 0x80);   /* sb_rmw_set_bit7_clr_others */
+  SB_WR(0x2C, 0x04);                           /* 97e5(4): SB[0x2C]=4 */
+  SB_WR(0x01, (SB_RD(0x01) & 0xBF) | 0x40);   /* SB[0x01] set bit6 */
+  SB_WR(0x00, (SB_RD(0x00) & 0xEF) | 0x10);   /* SB[0x00] set bit4 */
+  SB_WR(0x00, SB_RD(0x00) & 0xFE);            /* SB[0x00] clr bit0 */
+  phy_cc10_cmd_wait(0, 0x15, 2);              /* e80a(0,0x15,2) */
+  P1_WR(0x0100, (P1_RD(0x0100) & 0xBF) | 0x40);  /* page1 0x0100 set bit6 */
+  PR(0x06EC) = 1;                              /* *** the dropped arm: gates the per-loop cb10 *** */
+  sb_db7a_route_arm();                         /* db7a: tunnel-route arm */
+  /* drive bank0_8a89 from the super-loop ONCE (the connect edge re-fires; we want one drive). */
+  if (!sb_8a89_done) sb_run_8a89_pending = 1;
 }
 
 /* ---- eed6: post-[Lane Bonded] consequence. 0x072D=1; eeee (SB[0xC9]=0xFF arm + page1 0x01xx). ---- */
@@ -184,7 +242,9 @@ static void sb_router_event_handler(void) {
   cs = SB_RD(0x2D);
   if (!(cs & 0x01)) {                          /* a0dd: connect (bit0 clear) */
     if (SB_RD(0x2C) & 0x01) {                  /* a0e4: gated on SB[0x2C].0 */
-      uart_puts("\r\n[===SB Con===]\r\n");     /* a0ed: string @0x2056 */
+      /* Print is rate-limited (the logic still runs every edge) so the UART isn't saturated when
+       * the host holds the link connected and the SB-router edge re-asserts. */
+      if (sb_con_print_budget) { uart_puts("\r\n[===SB Con===]\r\n"); sb_con_print_budget--; }
       SB_WR(0x2C, (uint8_t)(SB_RD(0x2C) + 1)); /* a0f0-a0f6: 9797/INC */
       SB_WR(0x66, SB_RD(0x66) & 0xFD);         /* a0fa-a102: clear SB[0x66].1 (connect bit) */
       sb_con_consequence();                    /* a105: dea1 */

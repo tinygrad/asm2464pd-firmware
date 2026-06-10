@@ -60,6 +60,8 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 #include "sb_router.h"
 #include "usb4_irq.h"
 #include "boot_phy.h"
+#include "usb4_connect.h"   /* bank0_8a89 (USB4 lane-MODE engine) + c9a8 link-event dispatcher;
+                             * MUST be last: needs boot_phy helpers, usb4_connect_u4, sb_tunnel_up_pending */
 
 /* Hardware status packet */
 typedef struct {
@@ -80,7 +82,9 @@ static void pcie_power_off(void) {
   /* Hold the downstream device in reset before removing its rails. */
   REG_PCIE_PERST_CTRL = PCIE_PERST_ASSERT;
   REG_TUNNEL_LINK_STATE = 0x00;
-  REG_PHY_TIMER_CTRL_E764 = 0x00;
+  /* RE-AUDIT (E): preserve E764 bit4 (USB4 LINK-MODE-ENABLE, owned by bank0_8a89) -- do not zero
+   * the whole reg. The original literal 0 also clobbered the CM-owned link-mode nibble. */
+  REG_PHY_TIMER_CTRL_E764 &= 0x10;
   REG_PCIE_LANE_CTRL_C659 &= (uint8_t)~0x01;
   REG_HDDPC_CTRL &= (uint8_t)~0x20;
   led_set_rgb(false, false, true);  // blue = PCIe powered down
@@ -98,7 +102,9 @@ static void pcie_power_on(void) {
   REG_CPU_CTRL_CA81 = 0x0E;
   REG_CPU_MODE_NEXT = 0x21;
   REG_PCIE_LANE_CTRL_C659 |= 0x01;             // enable 12V
-  REG_PHY_TIMER_CTRL_E764 = 0x1C;              // start link training
+  /* RE-AUDIT (E): E764=0x1C was a FABRICATION (stock NEVER writes E764 as a literal). E764 bit4 is
+   * the USB4 LINK-MODE-ENABLE nibble owned by bank0_8a89; the 0x1C literal clobbered it and the
+   * CM-owned link-mode state. Removed. (boot_phy d996/e57d does the legit E764 reset-pulse RMW.) */
   REG_PCIE_TUNNEL_CFG = PCIE_TLP_CTRL_TUNNEL;  // fix late issue in RDNA3
   REG_PCIE_PERST_CTRL = 0x00;                  // deassert PERST#
 
@@ -402,8 +408,19 @@ void int0_isr(void) __interrupt(0) {
     periph_status = REG_USB_PERIPH_STATUS;
 
     if (periph_status & USB_PERIPH_BUS_RESET) {
+      /* 0x9101.0 -> 0x91D1 USB-SS / USB4-router link-event demux (stock 0e5b). The stock per-bit
+       * sub-decode: .1 -> W1C 0x91D1=2 + e94d (= c9a8(0)) = the USB4 link-event entry that
+       * (re)runs the lane-MODE engine bank0_8a89; .3 -> 9c2b, .0 -> c66a, .2 -> e925 (USB-SS
+       * power/recovery, left as the generic W1C below). This is candidate #2/#4 of the re-audit:
+       * the host-driven re-entry that dynamically drives bank0_8a89 per link event. */
       uint8_t link_event = REG_USB_PHY_CTRL_91D1;
-      REG_USB_PHY_CTRL_91D1 = link_event;
+      if (link_event & USB_91D1_FLAG) {            /* 0x91D1.1 */
+        REG_USB_PHY_CTRL_91D1 = USB_91D1_FLAG;     /* W1C 0x91D1 = 2 */
+        bank0_c9a8(0);                             /* e94d -> c9a8(0) -> bank0_8a89(0) */
+        uart_puts("[91D1.1->c9a8]\n");
+      } else {
+        REG_USB_PHY_CTRL_91D1 = link_event;        /* generic W1C-ack of the remaining events */
+      }
       uart_puts("[RST ");
       uart_puthex(link_event);
       uart_puts("]\n");
@@ -422,6 +439,16 @@ void int0_isr(void) __interrupt(0) {
       uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts("]\n");
       REG_USB_EP_READY = ep;
     } else if (periph_status & USB_PERIPH_LINK_EVENT) {
+      /* 0x9101.4 -> 0x9302 USB4-router link-event demux (stock 0e5b). Sub-decode: .3 -> e941,
+       * .4 -> e947, .5 -> e92c, .0 -> e96f, .1 -> e970, .2 -> W1C 0x9302=4 + e952 (= c9a8(1)) =
+       * the second USB4 link-event entry that (re)runs bank0_8a89. We service .2 (the connect
+       * re-drive) and fall through to the existing 9300 SS-event handling. */
+      uint8_t s9302 = REG_BUF_CFG_9302;
+      if (s9302 & 0x04) {                          /* 0x9302.2 */
+        REG_BUF_CFG_9302 = 0x04;                    /* W1C 0x9302 = 4 */
+        bank0_c9a8(1);                             /* e952 -> c9a8(1) -> bank0_8a89(1) */
+        uart_puts("[9302.2->c9a8]\n");
+      }
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
         /* USB2-fallback presentation. In USB4 mode (0x09F9 & 0x83) we must NOT drop to USB2:
@@ -636,6 +663,22 @@ void main(void) {
         uart_puts(" 0af1=");             uart_puthex(XDATA_REG8V(0x0AF1));
         uart_puts(" c80aACC=");          uart_puthex(c80a_acc);
         uart_puts("]\n");
+        /* RE-AUDIT per-layer instrumentation: which layer engaged? c80aACC bit5 = C80A.5 fired;
+         * E764.4 = LINK-MODE armed; E751 = USB4 link arm; 8a89? = engine entered; C801.4/C809.3 =
+         * SB-PHY RX unmask landed; 0x07E8/0x9101/0x91D1/0x9302 = did the host DRIVE INT0 link events. */
+        uart_puts("[LYR c80a5=");        uart_puthex((c80a_acc >> 5) & 1);
+        uart_puts(" e764=");             uart_puthex(XDATA_REG8V(0xE764));
+        uart_puts(" e751=");             uart_puthex(XDATA_REG8V(0xE751));
+        uart_puts(" 09fa=");             uart_puthex(XDATA_REG8V(0x09FA));
+        uart_puts(" 0af1=");             uart_puthex(XDATA_REG8V(0x0AF1));
+        uart_puts(" 07e8=");             uart_puthex(XDATA_REG8V(0x07E8));
+        uart_puts(" 8a89?=");            uart_puthex(bank0_8a89_entered);
+        uart_puts(" c801=");             uart_puthex(XDATA_REG8V(0xC801));
+        uart_puts(" c809=");             uart_puthex(XDATA_REG8V(0xC809));
+        uart_puts(" 9101=");             uart_puthex(XDATA_REG8V(0x9101));
+        uart_puts(" 91d1=");             uart_puthex(XDATA_REG8V(0x91D1));
+        uart_puts(" 9302=");             uart_puthex(XDATA_REG8V(0x9302));
+        uart_puts("]\n");
         if (((best >> 4) & 3) >= 2) uart_puts("[*** USB4 TRAINED ***]\n");
         else                        uart_puts("[!!! E302 NOT TRAINED !!!]\n");
       }
@@ -662,6 +705,25 @@ void main(void) {
     uart_puts(" 6f1=");         uart_puthex(XDATA_REG8V(0x06F1));
     uart_puts(" 72d=");         uart_puthex(XDATA_REG8V(0x072D));
     uart_puts("]\n");
+    /* RE-AUDIT chicken-and-egg driver: the host raises C80A.5 (SB-router connect) but never the
+     * INT0 link-events, so bank0_8a89 (E764.4/E751 link-MODE engine) is never driven via INT0.
+     * Drive it ONCE from here when the SB-router connect fired (sb_run_8a89_pending), via c9a8 with
+     * its gate now fully open (0x09FA.2/0x0AF1.0/0x07E8). 8a89 runs long PHY waits -> super-loop. */
+    if (sb_run_8a89_pending && !sb_8a89_done) {
+      sb_run_8a89_pending = 0;
+      sb_8a89_done = 1;
+      uart_puts("[SBcon->8a89]\n");
+      /* Mask EX1 across the 8a89 run so the C80A.5 SB-router storm can't preempt the long PHY-lock
+       * waits (it re-runs sb_con_consequence reentrantly otherwise). Re-enabled right after. */
+      IE &= (uint8_t)~IE_EX1;
+      bank0_c9a8(0);
+      IE |= IE_EX1;
+      uart_puts("[8a89 ret e764=");  uart_puthex(XDATA_REG8V(0xE764));
+      uart_puts(" e751=");           uart_puthex(XDATA_REG8V(0xE751));
+      uart_puts(" e302=");           uart_puthex(XDATA_REG8V(0xE302));
+      uart_puts(" c80a=");           uart_puthex(XDATA_REG8V(0xC80A));
+      uart_puts(" ec06=");           uart_puthex(XDATA_REG8V(0xEC06)); uart_puts("]\n");
+    }
     /* Deferred tunnel-up: the SB-router ISR (e52d) sets sb_tunnel_up_pending on lane-bond-complete;
      * run the downstream PCIe bring-up here (it uses sleep()/long polls, unsafe inside the ISR). */
     if (sb_tunnel_up_pending) {
