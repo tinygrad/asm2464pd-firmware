@@ -189,17 +189,18 @@ static void sb_block_init(void) {
   SB_CLR(0x1D, 0x02);                             /* (DPX=1) */
 }
 
-/* ============================ intermediate path-state (a48c..a516, §3) ============================
- * The bank1 helper chain in usb4_connect_u4's tail that runs BEFORE b230, programming the
- * tunnel/PCIe path state when 0x09FA selects the tunnel route. Gated on 0x0AF1 bits and
- * (0x09FA & 0x81). Reproduced per §3 (Risk R3: 0x0AF1 producer un-traced — copy conditionals
- * verbatim). d436(width) ramps the downstream PCIe link width registers; ee82 sets the tunnel
- * link-up bit. */
+/* d436: program B434 lane-ramp x4 + B436. Stock ramps B434 up to `width` (0xF) across 4 lanes. */
 static void sb_pcie_width_ramp(uint8_t width) {
-  /* d436: program B434 lane-ramp x4 + B436. Stock ramps B434 up to `width` (0xF) across 4 lanes. */
   PR(0xB434) = width; PR(0xB435) = width; PR(0xB436) = width; PR(0xB437) = width;
 }
 
+/* ============================ intermediate path-state (a48c..a516) ============================
+ * The bank1 helper chain in usb4_connect_u4's tail that runs BEFORE b230. This is the BASELINE
+ * subset that TRAINS E302 to mode 3 on HW. The fuller stock tail (edbd/e5b0/dd42(route)/bcc4/
+ * e7ae PHY-lock wait/ccb3/c270/d556 + pre-gate dd42(0)/e7c1(1)/e0d9(0)) was transcribed and tried
+ * and it REGRESSED E302 to mode 0 (the e7ae C006/C00E wait + extra PHY writes disturb the training
+ * window) — so it is intentionally kept OUT. d436 ramps the downstream PCIe width; ee82 sets the
+ * tunnel link-up bit. */
 static void sb_connect_path_state(void) {
   /* bc8f: page1[0x0000] |= 0x02 */
   P1_SET(0x0000, 0x02);
@@ -231,12 +232,11 @@ static void sb_assert(void) {
   PR(0x07FF) = 0;               /* 0x07FF=0 (stock clears just before b230) */
   sb_lane_flip_init();          /* b230 — FIRST */
   sb_block_init();              /* bb37 — SECOND */
-  sb_asserted = 1;              /* M1' diagnostic gate (see super-loop) */
-  /* M1' diagnostic: the un-W1C'd C80A.5 SB-router source storms INT1 from here on and would
-   * starve the super-loop before it can read E302. Mask EX1 (INT1) NOW so the super-loop runs
-   * and the SBDIAG E302 poll executes. (PD contract + Enter_USB are already complete; the
-   * a066/M2 handler that W1Cs C80A.5 replaces this once E302 training is confirmed.) */
-  IE &= (uint8_t)~0x04;         /* clear IE_EX1 */
+  sb_asserted = 1;              /* SB-assert-done gate (see super-loop) */
+  /* M2: INT1 stays ENABLED here. The C80A.5 SB-router source is now W1C-acked by
+   * sb_router_event_handler (sb_router.h), so it no longer storms the CPU — the SB-connect
+   * handshake must run in the ISR to advance the link, so do NOT mask EX1. (M1 masked it as a
+   * diagnostic to read E302 in a busy loop; that is removed.) */
   /* Immediate (ISR-context, single-read) E302 marker so we capture the post-SB link mode even if
    * the super-loop's sleep() hangs on the shared CC10 timer mailbox (R-timer hazard). */
   uart_puts("[SBdone e302=");

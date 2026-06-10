@@ -1694,8 +1694,19 @@
 #define REG_TIMER0_THRESHOLD    XDATA_REG16(0xCC12)
 #define REG_TIMER0_THRESHOLD_HI XDATA_REG8(0xCC12)  /* Timer 0 threshold high byte */
 #define REG_TIMER0_THRESHOLD_LO XDATA_REG8(0xCC13)  /* Timer 0 threshold low byte */
+/*
+ * Timer 1 (0xCC16-0xCC19) — independent of the CC10-CC13 block.
+ *
+ * IMPORTANT: CC10-CC13 (Timer0 above) is NOT a plain timer — it is the PHY/PD command
+ * mailbox shared with the USB4/PD link engine (CC10=(&0xF8)|4 is the same subcmd-4 link-up
+ * arm usb4_phy_arm uses, CC11.1 is the PHY-done bit). Driving it from sleep() corrupts the
+ * policy engine on the USB4 path. handmade's sleep() therefore targets Timer1 (this block),
+ * which the stock fw uses as a standalone timer (stock d47f: CC16=(&0xF8)|4 DIV/mode,
+ * CC18/CC19 threshold, CC17 CSR with clear/enable/expired bits — same bit layout as
+ * TIMER_CSR_* below). Keep CSR volatile (sleep() polls the expired bit).
+ */
 #define REG_TIMER1_DIV          XDATA_REG8(0xCC16)
-#define REG_TIMER1_CSR          XDATA_REG8(0xCC17)
+#define REG_TIMER1_CSR          XDATA_REG8V(0xCC17)
 #define REG_TIMER1_THRESHOLD    XDATA_REG16(0xCC18)
 #define REG_TIMER1_THRESHOLD_HI XDATA_REG8(0xCC18)  /* Timer 1 threshold high byte */
 #define REG_TIMER1_THRESHOLD_LO XDATA_REG8(0xCC19)  /* Timer 1 threshold low byte */

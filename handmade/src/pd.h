@@ -253,4 +253,122 @@ static void pd_rx_isr(void) {
   if (PR(0xE314) & 0x01) PR(0xE314) = 0x01;    /* E314 PHY-completion W1C */
 }
 
+/* ====================================================================================
+ * cc_pd_timer_tick @0xB4BA — the C806.0 INT1 timer-tick = PD/USB4 policy-engine tick.
+ * Forward declarations for usb4_mode_entry_commit (vdm.h, #included AFTER pd.h) and the
+ * deeper PD-state helpers. usb4_mode_entry_commit is the USB4 mode-entry latch the host
+ * waits on (CC91.1 -> it). pd_drive_hard_reset is defined above.
+ * ==================================================================================== */
+static uint8_t usb4_mode_entry_commit(void);          /* vdm.h @0xD78A; returns mode in R7 */
+
+/* cc_cc23_reinit_event @0xE3D8 — CC23.1 re-init / SB-reconnect event. Stock body chains into
+ * banked helpers (e3b7 if 0x0B41, 3578(0x0AEE), d810 link re-prep) then 0x07E8=0, 0x0B2F=1.
+ * The 3578/d810 chain is a large banked re-prep path (CM-owned); transcribe the two verified
+ * XDATA seeds and NOTE the banked chain. W1C of CC23 is done by the caller. */
+static void cc_cc23_reinit_event(void) {
+  /* NOTE: stock also calls 3578(0x0AEE)+d810 (banked link re-prep) before these writes; not
+   * transcribed (deep/banked, CM-owned). The verified tail state-seeds are kept. */
+  PR(0x07E8) = 0x00;                                  /* e3f2 */
+  PR(0x0B2F) = 0x01;                                  /* e3f7 */
+}
+
+/* cc_state_full_reset @0xD676 — Type-C error-recovery. Stock body is a single banked uart_puts
+ * (R3:R2:R1=0xFF:0x23:0x4B -> string "[Error_Recovery]" via the r3_read_dispatch print routine
+ * @0x538d->0x0bc8); it is a diagnostic print, NOT a HW register op. */
+static void cc_state_full_reset(void) {
+  uart_puts("[Error_Recovery]\n");                    /* d676: 538d print of 0x234B string */
+}
+
+/* pd_cc81_hard_reset_4 @0xE90B — CC81 |= 4 then pd_drive_hard_reset (LJMP 0xBE8B). Verbatim. */
+static void pd_cc81_hard_reset_4(void) {
+  PR(0xCC81) = 0x04;                                  /* e910 (MOV #4, not RMW per disasm) */
+  pd_drive_hard_reset();                              /* e911 LJMP 0xBE8B */
+}
+
+/* pd_queue_ctrl_msg @0xE529 — enqueue a PD control message (code in `code`). Stock: 0x0AA3=code;
+ * dd42(0); if e6d2() (mailbox build/send, banked: e396/0dc5/d17a) returns nonzero then
+ * 0x7000=0x0AA3 + e478() (banked send: 0d84/b851/b104). The e6d2/e478 mailbox path is deep and
+ * banked (CM/PD TX engine); transcribe the two verified XDATA writes (0x0AA3 record + dd42(0))
+ * and NOTE the banked send. The timer-tick's MUST-BE-CORRECT branches (CC91 commit, CC81
+ * hard/full reset) do not depend on this deep path; e529 is reached only when 0x07BC!=0. */
+static void pd_queue_ctrl_msg(uint8_t code) {
+  PR(0x0AA3) = code;                                  /* e52d: record ctrl-msg code */
+  PR(0xE7E3) = 0x00;                                  /* e530: dd42(0) with param 0 -> E7E3=0 */
+  /* NOTE: stock e533 e6d2()/e541 e478() PD-TX mailbox send not transcribed (deep banked). */
+}
+
+/* cc_cc99_default_event @0xE883 — CC99 default branch. Stock: e73a (clear PD TX buf), then
+ * 95e1(R5=0,R7=0x10) + LJMP e1c6 (PD-TX engine drain). Both are banked PD-TX helpers; the
+ * channel's required side effect for the timer-tick is the CC99 W1C ack (done by the caller).
+ * NOTE the banked TX drain. */
+static void cc_cc99_default_event(void) {
+  /* NOTE: stock e73a (TX buf clear) + 95e1/e1c6 (banked PD-TX drain) not transcribed. The CC99
+   * W1C ack is performed by the caller so the source can't storm. */
+}
+
+/* cc_ccf9_subdemux @0xDF79 — CCF9.1 sub-demux on 0x0A9D (copied from 0x0B1B). Stock: e74e then
+ * dispatch on 0x0A9D: ==1 -> e374; ==2 && 0x07FF==0x69 -> e545; ==3 -> 0x055c. All banked CM
+ * sub-handlers. Transcribe the verified 0x0A9D<-0x0B1B copy and NOTE the banked dispatch. */
+static void cc_ccf9_subdemux(void) {
+  PR(0x0A9D) = PR(0x0B1B);                             /* df7c-df80 */
+  /* NOTE: stock e74e + (0x0A9D==1->e374 / ==2&&0x07FF==0x69->e545 / ==3->055c) banked CM
+   * sub-handlers not transcribed. */
+}
+
+/* cc_pd_timer_tick @0xB4BA — INT1 C806.0 timer-tick = PD/USB4 policy-engine tick. Services 6
+ * Type-C/CC controller per-channel event regs (CC23/CC81/CC91/CC99/CCD9/CCF9), bit1=event,
+ * W1C by writing 2. CC91.1 -> usb4_mode_entry_commit (USB4 mode-entry latch the host waits on);
+ * CC81.1 -> hard/full reset re-elicitation of Source_Cap. Verbatim from stock disasm @0xB4BA. */
+/* Instrumentation (decision-rule diagnostic): tick_seen counts C806.0 timer-tick entries;
+ * cc_hit is a bitmask of which CC channels ever showed bit1 (1=CC23,2=CC81,4=CC91,8=CC99,
+ * 0x10=CCD9,0x20=CCF9). Surfaced on the [U ...] status line. */
+static volatile uint8_t tick_seen = 0;
+static volatile uint8_t cc_hit = 0;
+
+static void cc_pd_timer_tick(void) {
+  tick_seen++;
+  if (PR(0xCC23) & 0x02) cc_hit |= 0x01;
+  if (PR(0xCC81) & 0x02) cc_hit |= 0x02;
+  if (PR(0xCC91) & 0x02) cc_hit |= 0x04;
+  if (PR(0xCC99) & 0x02) cc_hit |= 0x08;
+  if (PR(0xCCD9) & 0x02) cc_hit |= 0x10;
+  if (PR(0xCCF9) & 0x02) cc_hit |= 0x20;
+  if (PR(0xCC23) & 0x02) {                 /* CC23.1: re-init / SB-reconnect */
+    cc_cc23_reinit_event();                /* 0xE3D8 */
+    PR(0xCC23) = 0x02;
+  }
+  if (PR(0xCC81) & 0x02) {                 /* CC81.1: CC attach/detach, branch on substate 0x07BD */
+    uint8_t sub = PR(0x07BD);
+    if (sub == 0x0E || sub == 0x0D) {      /* Data_Reset / Enter_USB pending */
+      PR(0xCC81) = 0x02;
+      if (PR(0x07BC) != 0) pd_queue_ctrl_msg(0x3B);   /* 0xE529 queue Data_Reset */
+      cc_state_full_reset();               /* 0xD676 Type-C error recovery / full reset */
+    } else {
+      pd_cc81_hard_reset_4();              /* 0xE90B: CC81|=4 then pd_drive_hard_reset() */
+      PR(0xCC81) = 0x02;
+    }
+  }
+  if (PR(0xCC91) & 0x02) {                 /* CC91.1: 1s sender-response timeout -> COMMIT USB4 mode */
+    PR(0xCC91) = 0x02;
+    uart_puts("[1 sec time out]\n");       /* stock string @0x53F8 */
+    PR(0x07BB) = 0x01;
+    PR(0x09FA) = 0x04;
+    PR(0x0AE2) = usb4_mode_entry_commit(); /* 0xD78A returns mode in R7 */
+  }
+  if (PR(0xCC99) & 0x02) {                 /* CC99.1: role-dependent reset */
+    uint8_t role = PR(0x07BC);
+    if (role == 0x02) { pd_queue_ctrl_msg(0x3C); pd_drive_hard_reset(); }   /* 0xBE8B */
+    else if (role == 0x03) { pd_queue_ctrl_msg(0xFF); }
+    else { cc_cc99_default_event(); PR(0xCC99) = 0x02; }                    /* 0xE883 */
+  }
+  if (PR(0xCCD9) & 0x02) {                 /* CCD9.1 */
+    PR(0xCCD9) = 0x02;
+    PR(0x0719) = 0x02;                     /* disasm: 0x0719 = A (=2) */
+  }
+  if (PR(0xCCF9) & 0x02) {                 /* CCF9.1 */
+    PR(0xCCF9) = 0x02;
+    cc_ccf9_subdemux();                    /* 0xDF79 */
+  }
+}
+
 #endif /* PD_H */

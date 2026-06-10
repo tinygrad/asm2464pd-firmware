@@ -182,17 +182,18 @@ static void vdm_build_discover_modes(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
  * (USB global int mask). Else: 0x0ACD=1; 0x0ACE = 0x0D if (0x09F9 & 0x81)==0 else 5.
  * NOTE: bba8(0x92C2) in stock is a banked helper (USB engine kick); reproduced as the 92C2 RMW it
  * performs is not on the contract-critical path — left as the direct latch writes per RE. */
-static void usb4_mode_entry_commit(void) {
+static uint8_t usb4_mode_entry_commit(void) {
   uint8_t f9 = PR(0x09F9);
   if (f9 & 0x40) {
     PR(0x0ACD) = 3;
     PR(0x0ACE) = 1;
     PR(0x92E1) = 0x10;                 /* USB4 mode-entry latch */
     PR(0x9090) = PR(0x9090) & 0x7F;    /* clear USB global int mask bit7 */
-    return;
+    return 4;                          /* stock d7b1: R7=4 (USB4 mode) */
   }
   PR(0x0ACD) = 1;
   PR(0x0ACE) = ((f9 & 0x81) == 0) ? 0x0D : 0x05;
+  return 1;                            /* stock d7ca: R7=1 */
 }
 
 /* ---------- EnterMode responder @0xB966 ----------

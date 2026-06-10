@@ -34,7 +34,10 @@ static void usb4_connect_u4(void) {
     PR(0xCA81) = PR(0xCA81) & 0xFE;              /* a405 */
     PR(0xCA06) = (PR(0xCA06) & 0x1F) | 0x60;     /* a40c */
   }
-  /* a424: 0x07BA gate (set by Enter_USB Accept). Latch the route mode from 0x09F9 low 2 bits. */
+  /* a424: 0x07BA gate (set by Enter_USB Accept). Latch the route mode from 0x09F9 low 2 bits.
+   * NOTE: the stock a415-a421 pre-gate helpers (dd42(0)/e7c1(1)/e0d9(0)) and the fuller a48c tail
+   * were tried and REGRESSED E302 training on HW (mode 3 -> mode 0). The simpler baseline tail
+   * trains E302 to mode 3, so the extra PHY pre-stage is kept OUT. */
   if (PR(0x07BA) != 0) {
     PR(0x09FA) = PR(0x09F9) & 0x03;              /* a42a */
     if (PR(0x09F4) == 0x03) {                    /* a434: DP-alt sub-case */
@@ -65,19 +68,23 @@ static void usb4_connect_u4(void) {
  * ISR short): bit0=C80A.5 SB, bit1=C80A.4 evt, bit2=EC06.0 routerop, bit3=C80A.0-3 tunnel. */
 static volatile uint8_t usb4_int_seen = 0;
 
-/* Set once any USB4 INT source has been observed; int1_isr then stops calling the demux so the
- * main super-loop can run and print E302 (M1 diagnostic: the C80A.5 SB-router source has no W1C
- * here yet — its W1C lives in the not-yet-implemented a066 handler — so leaving it serviced every
- * ISR would storm the CPU and starve the loop). Once M2's a066 handler exists this latch is
- * removed. */
-static volatile uint8_t usb4_int_latched = 0;
-/* Snapshot of C80A/EC06/E302/E318 taken at the first USB4 INT, printed once from the loop. */
-static volatile uint8_t usb4_first_c80a = 0, usb4_first_ec06 = 0, usb4_first_e302 = 0;
+/* M2: the SB-router event handler (a066) is implemented in sb_router.h and W1C-acks the C80A.5
+ * source, so the int1 demux no longer needs the M1 one-shot latch (it can service every ISR
+ * without storming). sb_router_event_handler is forward-declared here (defined in sb_router.h,
+ * included before usb4.h). */
+static void sb_router_event_handler(void);
 
-/* Called from int1_isr after PD-RX, gated by (0x09F9 & 0x83). Observe + safe-ack only. */
+/* Sticky accumulator of every C80A value seen in the ISR (catches a transient C80A.5). */
+static volatile uint8_t c80a_acc = 0;
+
+/* Called from int1_isr after PD-RX, gated by (0x09F9 & 0x83). Reactive W1C-ack + forward. */
 static void usb4_int_demux(void) {
   uint8_t c80a = PR(0xC80A);
-  if (c80a & 0x20) usb4_int_seen |= 0x01;   /* C80A.5 -> SB router/connect (bank1 0xA066) */
+  c80a_acc |= c80a;
+  if (c80a & 0x20) {                         /* C80A.5 -> SB router/connect (bank1 0xA066) */
+    usb4_int_seen |= 0x01;
+    sb_router_event_handler();               /* M2: a066 — per-channel connect + lane-bond + W1C */
+  }
   if (c80a & 0x10) usb4_int_seen |= 0x02;   /* C80A.4 -> USB4 adapter/link event (bank0 0xC105) */
   if (PR(0xEC06) & 0x01) {                   /* EC06.0 -> router-op mailbox (bank1 0xC0A5) */
     usb4_int_seen |= 0x04;
@@ -88,14 +95,6 @@ static void usb4_int_demux(void) {
     { uint8_t e763 = PR(0xE763);             /* documented W1C: bit2->0x04, bit3->0x08 */
       if (e763 & 0x04) PR(0xE763) = 0x04;
       if (e763 & 0x08) PR(0xE763) = 0x08; }
-  }
-  /* M1 diagnostic latch: snapshot the link state at the first USB4 INT, then stop re-servicing
-   * (the SB-router source can't be W1C'd until a066/M2). */
-  if (usb4_int_seen && !usb4_int_latched) {
-    usb4_first_c80a = c80a;
-    usb4_first_ec06 = PR(0xEC06);
-    usb4_first_e302 = PR(0xE302);
-    usb4_int_latched = 1;
   }
 }
 
