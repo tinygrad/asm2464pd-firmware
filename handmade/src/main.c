@@ -510,6 +510,14 @@ void main(void) {
   uart_puts(" e712=");          uart_puthex(XDATA_REG8V(0xE712));
   uart_puts(" sb05=");          uart_puthex(SB_RD(0x05)); uart_puts("]\n");
 
+  // 0x0AF1 RAM-state seed. Stock's RAM-state seed bank0_92c5 ALWAYS writes 0x0AF1 (to 0x00 on the
+  // no-OTP-width-override path at 0x94d4, or 0x3F at 0x94da); handmade never runs 92c5, so 0x0AF1
+  // is left at its uninitialised power-on value (observed 0x55). 0x55 has bits 0/2/4/6 set, which
+  // WRONGLY trips the 0x0AF1.0 gate in usb4_connect_u4 (E716/CA81/CA06 RMW) and the 0x0AF1.4 gate
+  // in sb_connect_path_state. Seed it to the stock target 0x00 (the bank0_92c5 R7==0 default) so
+  // the SB-page diff matches stock. See bank0_92c5 @0x94d1-0x94df.
+  XDATA_REG8V(0x0AF1) = 0x00;
+
   // Establish USB4 intent BEFORE the boot-interference block below. 0x09F9 is the runtime mode
   // flag (0x87 = USB4 tunnel route + VDM-ACK); it is otherwise not set until pd_keystone_init()
   // later, so without setting it here the !(0x09F9&0x83) gates below would read the boot-default

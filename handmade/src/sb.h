@@ -181,12 +181,30 @@ static void sb_block_init(void) {
   PR(0xC344) = (PR(0xC344) & 0xBF) | 0x40;
   PR(0xC35C) = PR(0xC35C) & 0xC0;
 
-  /* e34b PHY lane cfg */
+  /* e34b PHY lane cfg (bc42). Helpers: b70d(a)=&FE;&FD;(&C3)|1C;&BF ; b796(a)=(&BF)|40 ;
+   * b73b: C2C3&=7F;C343&=7F. Transcribed VERBATIM from bank1 e34b (e34b..e38e). */
   PR(0x0AB3) = 0; PR(0x0AB4) = 3; PR(0x0AB5) = 3; PR(0x0AB6) = 0;
-  PR(0xC2CB) = PR(0xC2CB) & ~0x04;
-  PR(0xC34B) = PR(0xC34B) & ~0x04;
-  PR(0xC208) = PR(0xC208) & ~0x40;
-  SB_CLR(0x1D, 0x02);                             /* (DPX=1) */
+  /* b70d(C2C3) */
+  PR(0xC2C3) = PR(0xC2C3) & 0xFE; PR(0xC2C3) = PR(0xC2C3) & 0xFD;
+  PR(0xC2C3) = (PR(0xC2C3) & 0xC3) | 0x1C; PR(0xC2C3) = PR(0xC2C3) & 0xBF;
+  PR(0xC2CB) = PR(0xC2CB) & 0xFB;                 /* e35f C2CB &= ~0x04 */
+  /* b70d(C343) */
+  PR(0xC343) = PR(0xC343) & 0xFE; PR(0xC343) = PR(0xC343) & 0xFD;
+  PR(0xC343) = (PR(0xC343) & 0xC3) | 0x1C; PR(0xC343) = PR(0xC343) & 0xBF;
+  PR(0xC34B) = PR(0xC34B) & 0xFB;                 /* e36c C34B &= ~0x04 */
+  PR(0xC21C) = (PR(0xC21C) & 0xBF) | 0x40;        /* e373 b796(C21C) */
+  PR(0xC208) = PR(0xC208) & 0xBF;                 /* e379 C208 &= ~0x40 */
+  PR(0xC2C3) = PR(0xC2C3) & 0x7F;                 /* e380 b73b: C2C3 &= 0x7F */
+  PR(0xC343) = PR(0xC343) & 0x7F;                 /* e380 b73b: C343 &= 0x7F */
+  SB_CLR(0x1D, 0x02);                             /* e387 SB[0x1D] &= ~0x02 (DPX=1) */
+
+  /* --- bb45 tail (bc45..bc5d): the truncated SB[0xBA]/[0xBD] + 0x09F7 sub-block --- */
+  SB_WR(0xBA, 0x3F);                               /* bc45: SB[0xBA]=0x3F (via 0x9838) */
+  SB_WR(0xBD, 0x3F);                               /* bc4c: SB[0xBD]=0x3F (A retained = 0x3F) */
+  /* bc51: if (0x09F7 < 2) lcall func_05a2 (trampoline -> bank1 0xC523, a connect-state helper).
+   * Not transcribed: it does NOT touch the SB-page target bytes (0xBA/0xBD already set above), and
+   * 0x09F7 is the PD/USB4 sub-state counter which is >=2 on the happy connect path. Left as a
+   * documented omission rather than fabricating the C523 body. */
 }
 
 /* d436: program B434 lane-ramp x4 + B436. Stock ramps B434 up to `width` (0xF) across 4 lanes. */
