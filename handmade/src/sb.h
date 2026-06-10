@@ -251,6 +251,18 @@ static void sb_assert(void) {
   uart_puts(" sb2d=");  uart_puthex(SB_RD(0x2D));
   uart_puts(" sbc9=");  uart_puthex(SB_RD(0xC9));
   uart_puts("]");
+
+  /* Full SB-page + gating-reg snapshot for the STOCK-vs-handmade diff. Format mirrors the stock
+   * patch_sbtrace.py [SBCON:...] line EXACTLY: gating regs in the SAME order, then '|', then the
+   * full 256-byte SB page-1 block SB[0x00..0xFF] (DPX=1 paged XDATA at 0x2800+off). Taken right
+   * after our SB-assert (the logical equivalent of stock's [===SB Con===] transition). */
+  uart_puts("[HMSB:");
+  uart_puthex(PR(0x0AF1)); uart_puthex(PR(0xC80A)); uart_puthex(PR(0xE302));
+  uart_puthex(PR(0x09F9)); uart_puthex(PR(0x09FA)); uart_puthex(PR(0xEC06));
+  uart_puthex(PR(0x91C0)); uart_puthex(PR(0xE318));
+  uart_putc('|');
+  { uint16_t off; for (off = 0; off < 0x100; off++) uart_puthex(SB_RD(off)); }
+  uart_puts("]\n");
 }
 
 #endif /* SB_H */
