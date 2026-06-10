@@ -40,12 +40,16 @@ clear_ram_loop:
     mov     @r0, a
     djnz    r0, clear_ram_loop
 
-    ; Stack at 0xB0-0xFF (80 bytes). Raised from 0x72 because the lane-bond-FSM DSEG (IRAM globals)
-    ; grew to ~0x74, and a fixed sp=0x72 then sat INSIDE DSEG -> the stack corrupted the PD/FSM
-    ; globals on the first push -> boot hang. 0xB0 leaves DSEG the whole 0x08-0xAF window. (The
-    ; linker's __start__stack symbol does NOT relocate into a #imm here -- it assembles to 0xFF and
-    ; wraps the stack -> use a fixed literal with margin instead.)
-    mov     sp, #0xB0
+    ; Stack at 0x72. Do NOT raise this. The USB4 SB-router CONNECT path (nested INT1 a066 +
+    ; bank0_8a89 + the deep connect-tail call chain) needs ~133 bytes of stack headroom; sp=0x72
+    ; gives 0x72..0xFF = 141 bytes. HW bisection (afb938e..038a6e0) proved that 4d1cc11's change
+    ; raising this to 0xB0 (only 79 bytes) is THE regression that killed C80A.5: the connect path
+    ; overflowed the short stack so the host's [===SB Con===] never fired. Empirically firing needs
+    ; sp <= ~0x7A (0x7A fires, 0x7D/0x80/0xB0 do not) -- a stack-DEPTH cliff, not a DSEG-overlap
+    ; issue. 0x72 overlaps the top few DSEG global bytes harmlessly (the firmware clears IRAM at
+    ; boot and re-seeds those globals); restoring it brings C80A.5 back (HEAD 0/7 -> 6/8). If DSEG
+    ; grows enough to make this marginal, shrink IRAM globals -- do not move the stack up.
+    mov     sp, #0x72
 
     ; Initialize DPX = 0 (bank 0)
     mov     0x96, #0x00
