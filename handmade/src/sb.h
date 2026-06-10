@@ -68,24 +68,31 @@ static void sb_lane_flip_init(void) {
   if (PR(0x07BA) != 0 || PR(0x07B9) != 0) P1_CLR(0x0100, 0x01);
   else                                    P1_SET(0x0100, 0x01);
 
-  /* orientation-dependent SB lane map (Risk R1: host/orientation-interactive) */
+  /* orientation-dependent lane map. AUDIT FIX I11 (byte-exact from bank1 b230 @0x131ec, base
+   * 0xFF6F): stock writes the orientation map on the P1[0x0101]/[0x0102] plane (R3=2,R2=1,R1={1,2}
+   * via the r3_xdata paged accessor = DPX=1 at XDATA 0x0101/0x0102), NOT SB[0x01]/[0x02] (which is
+   * DPX=1 at 0x2801/0x2802). The prior handmade code targeted the WRONG plane -> the SB-PHY RX was
+   * enabled on the wrong SBU pins and never locked. Sense (verified via helpers 0x9958=set b0,
+   * 0x97fc=set b1, 0x96c7=write+reread): flip(C6DB.0=1) -> set b0,b1; straight -> clear b0,b1. */
   if (flip) {                 /* C6DB.0 == 1 */
-    SB_CLR(0x02, 0x03);
-    SB_CLR(0x01, 0x03);
+    P1_SET(0x0102, 0x03);     /* set b0,b1 */
+    P1_SET(0x0101, 0x03);     /* set b0,b1 */
   } else {                    /* straight */
-    SB_SET(0x01, 0x01);
-    SB_SET(0x01, 0x02);
-    SB_SET(0x02, 0x02);
+    P1_CLR(0x0102, 0x03);     /* clear b0,b1 */
+    P1_CLR(0x0101, 0x03);     /* clear b0,b1 */
   }
 
+  /* connect-state lane-bond map on P1[0x0101] (b22f/b247). connect: set b4, clr b5, set b7 +
+   * E7FC &= ~3; no-connect: clr b4, clr b7 + E7FC |= 3. (Was wrongly on SB[0x01].) */
   if (PR(0x07BA) != 0 || PR(0x07B9) != 0) {
-    SB_WR(0x01, (SB_RD(0x01) & 0xEF) | 0x10);   /* clr b5/b6 path -> set b4 */
-    SB_WR(0x01, (SB_RD(0x01) & 0x7F) | 0x80);   /* set b7 */
-    PR(0xE7FC) = PR(0xE7FC) & ~0x03;            /* connect pending -> clear bond gate */
+    P1_WR(0x0101, (P1_RD(0x0101) & 0xEF) | 0x10);   /* 0x9685+0x96b7: set b4, clr b5 */
+    P1_CLR(0x0101, 0x20);                            /* 0x96b7: clr b5 */
+    P1_SET(0x0101, 0x80);                            /* 0x980d: set b7 */
+    PR(0xE7FC) = PR(0xE7FC) & ~0x03;                /* connect -> clear bond gate */
   } else {
-    SB_CLR(0x01, 0x70);                          /* clr bits4,5,6 */
-    SB_WR(0x01, SB_RD(0x01) & 0x7F);            /* clr bit7 */
-    PR(0xE7FC) = PR(0xE7FC) | 0x03;             /* no connect -> set bond gate */
+    P1_CLR(0x0101, 0x10);                            /* 0x96b2: clr b4 */
+    P1_CLR(0x0101, 0x80);                            /* clr b7 */
+    PR(0xE7FC) = PR(0xE7FC) | 0x03;                 /* no connect -> set bond gate */
   }
 
   SB_WR(0xD1, (SB_RD(0xD1) & 0xEF) | 0x10);     /* b4=1 */

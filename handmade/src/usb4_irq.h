@@ -36,6 +36,8 @@ static void PG_WR(uint16_t addr, uint8_t v) {
   DPX = 0x01; XDATA_REG8V(addr) = v; DPX = 0x00;
 }
 
+#include "usb4_rx_table.h"   /* u4rx_tab[][4]: the full ef1e SB-PHY RX-lane arm RMW table */
+
 /* C2xx/C3xx PHY-config helper RMWs, transcribed VERBATIM from the bank1 helper functions that
  * 8E31 LCALLs. Each operates on a single XDATA reg `a` (the value 8E31 loaded into DPTR).
  *   c390:(&FB)|04  c34a:(&8F)|70  c2f8:(&FE)|01  c351:(&FD)|02  c358:(&1F)|60  c2f1:(&F0)|0B
@@ -274,14 +276,17 @@ static void usb4_irq_db0d(void) {
   PR(0xC22F) = PR(0xC22F) & 0xBF;                 /* db75 C22F &= 0xBF */
 }
 
-/* ef1e (d0ac + 9a63): SB-PHY page-0x78 RX-lane arm. */
+/* ef1e (d0ac + 9a63): the SB-PHY 4-lane RX arm. AUDIT FIX T2: the prior handmade version did ONLY
+ * a single 0x7834 RMW; the real ef1e is ~324 paged RMWs across PHY pages 0x78-0x7b + descriptor
+ * pages 0x60/0x64/0x68/0x6c (the dual-bank RX equalizer/rate config that lets the lanes lock onto
+ * the host's sideband). Reproduced byte-exact via the u4rx_tab table (usb4_rx_table.h), applied as
+ * read-modify-write. This is the SB-PHY RX lane enable the host's connect packets need to be seen.*/
 static void usb4_irq_ef1e(void) {
-  (void)PG_RD(0x789B);                            /* d0ac: read page-0x78 reg 0x9b (discard) */
-  (void)PG_RD(0x7840);                            /* 9a63: read 0x40 */
-  (void)PG_RD(0x7841);                            /* read 0x41 */
-  (void)PG_RD(0x7834);                            /* read 0x34 */
-  PG_WR(0x7834, (PG_RD(0x7834) & 0x8F) | 0x60);   /* 9661: 0x7834 RMW */
-  (void)PG_RD(0x7820);                            /* read 0x20 (discard) */
+  uint16_t i;
+  for (i = 0; i < (uint16_t)(sizeof(u4rx_tab) / 4); i++) {
+    uint16_t a = ((uint16_t)u4rx_tab[i][0] << 8) | u4rx_tab[i][1];
+    PG_WR(a, (uint8_t)((PG_RD(a) & u4rx_tab[i][2]) | u4rx_tab[i][3]));
+  }
 }
 
 /* ef24 = db0d + 8e31 (CODE_BANK1: `ef24: lcall db0d; ljmp 8e31`). Faithful order. */

@@ -510,13 +510,12 @@ void main(void) {
   uart_puts(" e712=");          uart_puthex(XDATA_REG8V(0xE712));
   uart_puts(" sb05=");          uart_puthex(SB_RD(0x05)); uart_puts("]\n");
 
-  // 0x0AF1 RAM-state seed. Stock's RAM-state seed bank0_92c5 ALWAYS writes 0x0AF1 (to 0x00 on the
-  // no-OTP-width-override path at 0x94d4, or 0x3F at 0x94da); handmade never runs 92c5, so 0x0AF1
-  // is left at its uninitialised power-on value (observed 0x55). 0x55 has bits 0/2/4/6 set, which
-  // WRONGLY trips the 0x0AF1.0 gate in usb4_connect_u4 (E716/CA81/CA06 RMW) and the 0x0AF1.4 gate
-  // in sb_connect_path_state. Seed it to the stock target 0x00 (the bank0_92c5 R7==0 default) so
-  // the SB-page diff matches stock. See bank0_92c5 @0x94d1-0x94df.
-  XDATA_REG8V(0x0AF1) = 0x00;
+  // bank0 92C5 RAM-state seed (audit O6/S4). Seeds the lane-engine link WIDTH (0x0AE9=0x0F), MODE
+  // (0x0AEE=3) and the 0x0AE3..0x0AF0 state flags the USB4 tunnel reads, plus the 0x0AF1 gate (->0)
+  // and C65A/CC35/0x905F tail. handmade never ran 92C5 before, so all of these were uninitialised
+  // garbage (0x0AF1 observed 0x55, width/mode random) -> the lane engine ran against garbage. This
+  // is the FULL faithful seed (was: only the single 0x0AF1=0 byte). See bank0_92c5_seed (boot_phy.h).
+  bank0_92c5_seed();
 
   // Establish USB4 intent BEFORE the boot-interference block below. 0x09F9 is the runtime mode
   // flag (0x87 = USB4 tunnel route + VDM-ACK); it is otherwise not set until pd_keystone_init()

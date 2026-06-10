@@ -179,4 +179,37 @@ static void boot_phy_bringup_early(void) {
   boot_phy_d996_pcie_tunnel_boot();                           /* 7. PCIe tunnel boot pre-stage */
 }
 
+/* bank0 92C5 RAM-state seed (audit O6/S4). Stock's boot step 4e: seeds the lane-engine link
+ * WIDTH/MODE/state RAM the USB4 tunnel reads. Faithful to the decompiled 92C5 HEAD + the non-OTP
+ * (no 0x5A magic at 0x707E) LAB_94c5 tail. NOTE vs audit: the head seeds 0x0AE3..0x0AE8/0x0AF0 to
+ * *1* (NOT zero as the audit guessed) and 0x0AEB..0x0AEF to *3*; 0x0AE9=0x0F (width), 0x0AEE=3
+ * (mode). With 0x0AE6=1 the tail sets 0x0AF1=0 (matches stock); 0x0AE4=1 -> C65A &= 0xF7; 0x0AE3=1
+ * & 0x0AE6=1 -> CC35 &= 0xFB; 0x905F &= 0xEF. The OTP-override branch (0x707E=='Z') is absent on
+ * this part so it is not reproduced. Run at boot before the SB path (stock runs it in boot_hw_init
+ * step 4e, before the USB4 fork). */
+static void bank0_92c5_seed(void) {
+  XDATA_REG8(0x0213) = 0;
+  XDATA_REG8(0x0AEA) = 1;
+  XDATA_REG8(0x0AE3) = 1;
+  XDATA_REG8(0x0AE4) = 1;
+  XDATA_REG8(0x0AF0) = 1;
+  XDATA_REG8(0x0AE5) = 1;
+  XDATA_REG8(0x0AE6) = 1;
+  XDATA_REG8(0x0AE7) = 1;
+  XDATA_REG8(0x0AE8) = 1;
+  XDATA_REG8(0x0AE9) = 0x0F;   /* link WIDTH */
+  XDATA_REG8(0x0AEE) = 3;      /* link MODE */
+  XDATA_REG8(0x0AEF) = 3;
+  XDATA_REG8(0x0AEB) = 3;
+  XDATA_REG8(0x0AEC) = 3;
+  XDATA_REG8(0x0AED) = 3;
+  XDATA_REG8(0x0A83) = 0;
+  /* non-OTP LAB_94c5 tail (resolved with the seeded values above) */
+  XDATA_REG8(0x0AEB) = XDATA_REG8V(0x0AEB) | 0x01;              /* 0x0AEB |= 1 (stays 3) */
+  XDATA_REG8(0x0AF1) = 0x00;                                    /* 0x0AE6!=0 -> 0x0AF1 = 0 */
+  XDATA_REG8(0xC65A) = XDATA_REG8V(0xC65A) & 0xF7;              /* 0x0AE4!=0 -> C65A &= 0xF7 */
+  XDATA_REG8(0xCC35) = XDATA_REG8V(0xCC35) & 0xFB;              /* 0x0AE3,0x0AE6!=0 -> CC35 &= 0xFB */
+  XDATA_REG8(0x905F) = XDATA_REG8V(0x905F) & 0xEF;             /* 0x905F &= 0xEF */
+}
+
 #endif /* BOOT_PHY_H */
