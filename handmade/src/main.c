@@ -658,7 +658,7 @@ void main(void) {
     /* R-timer hazard: sleep() drives the CC10-CC13 mailbox shared with the PHY/PD command path.
      * After the SB assert the mailbox may be left in a state where the timer never expires and
      * sleep() hangs. Once sb_asserted, use a busy-NOP delay instead so the diagnostic always runs. */
-    if (sb_asserted) { uint32_t b; for (b = 0; b < 600000UL; b++) { __asm nop __endasm; } }
+    if (sb_asserted) { uint32_t b; for (b = 0; b < 60000UL; b++) { __asm nop __endasm; } }
     else             { sleep(500); }
     /* E302 diagnostic: poll E302 in a bounded window to read whether the upstream USB4 PHY trained
      * the link in response to the sideband block. (M2: INT1 stays enabled now, so the C80A.5
@@ -775,7 +775,15 @@ void main(void) {
         uart_puts("[LB arm]");
         u4lb_eb62(0, 3);
       }
-      u4lb_e672();                                /* cb10 tail: dispatch the lane-bond FSM by 0x06ED */
+      /* INSTR: the TB4 host tears the transient connect down within ~ms, so the one-e672-per-loop
+       * cadence never reaches state-4 (b0b4) before teardown. Pump e672 up to 4x per iteration so the
+       * FSM walks 3(ConnRout)->4(b0b4)->5 back-to-back inside the connect window. Each e672 call still
+       * runs exactly ONE faithful state body; breaks when 0x06ED stops advancing. */
+      { uint8_t pmp, prev; for (pmp = 0; pmp < 4; pmp++) {
+          prev = XDATA_REG8V(0x06ED);
+          u4lb_e672();
+          if (XDATA_REG8V(0x06ED) == prev) break;
+      } }
       IE |= IE_EA;
     }
     /* RE-AUDIT chicken-and-egg driver: the host raises C80A.5 (SB-router connect) but never the
@@ -796,25 +804,20 @@ void main(void) {
       uart_puts(" e302=");           uart_puthex(XDATA_REG8V(0xE302));
       uart_puts(" c80a=");           uart_puthex(XDATA_REG8V(0xC80A));
       uart_puts(" ec06=");           uart_puthex(XDATA_REG8V(0xEC06)); uart_puts("]\n");
-      /* STEP 0 ROP BURST (decisive de-risk): immediately after the connect engine has run, sample
-       * the host-query mailboxes 10x back-to-back with EX1 masked (so the C80A.5 storm cannot starve
-       * us; the host's mailbox writes are HW and land regardless of our ISR being masked). This block
-       * reliably executes once and answers: does the host CM post ANYTHING to CE88/CE89/EA80/EA90/
-       * EC06/SB[0x26] after [===SB Con===]? Flat-zero across all 10 => host is NOT querying. */
+      /* STEP 0 ROP BURST (decisive de-risk): sample the host-query mailboxes after the connect engine
+       * ran, to answer: does the host CM post ANYTHING to CE88/EA80/EA90/EC06 after [===SB Con===]?
+       * Settled across prior sessions: flat-zero -> host is NOT querying.
+       * NOTE: the old 10x ROPB burst (1.2M-nop delay) consumed the entire transient connect window
+       * and prevented b0b4 (state-4, next super-loop iteration) from EVER running before the host
+       * tore the connect down. Per memory the host posts NOTHING here (flat-zero, settled). Reduced
+       * to a single quick sample (no delay) so the FSM can advance to state-4 within the connect. */
       IE &= (uint8_t)~IE_EX1;
-      { uint8_t s; for (s = 0; s < 10; s++) {
-          uart_puts("[ROPB ce88="); uart_puthex(XDATA_REG8V(0xCE88));
-          uart_puts(" ce89=");       uart_puthex(XDATA_REG8V(0xCE89));
-          uart_puts(" ea80=");       uart_puthex(XDATA_REG8V(0xEA80));
-          uart_puts(" ea81=");       uart_puthex(XDATA_REG8V(0xEA81));
-          uart_puts(" ea90=");       uart_puthex(XDATA_REG8V(0xEA90));
-          uart_puts(" ec06=");       uart_puthex(XDATA_REG8V(0xEC06));
-          uart_puts(" sb26=");       uart_puthex(SB_RD(0x26));
-          uart_puts(" c80a=");       uart_puthex(XDATA_REG8V(0xC80A));
-          uart_puts(" e302=");       uart_puthex(XDATA_REG8V(0xE302));
-          uart_puts("]\n");
-          { uint32_t b; for (b = 0; b < 120000UL; b++) { __asm nop __endasm; } }
-      } }
+      uart_puts("[ROPB ce88="); uart_puthex(XDATA_REG8V(0xCE88));
+      uart_puts(" ea80=");       uart_puthex(XDATA_REG8V(0xEA80));
+      uart_puts(" ea90=");       uart_puthex(XDATA_REG8V(0xEA90));
+      uart_puts(" ec06=");       uart_puthex(XDATA_REG8V(0xEC06));
+      uart_puts(" c80a=");       uart_puthex(XDATA_REG8V(0xC80A));
+      uart_puts("]\n");
       IE |= IE_EX1;
     }
     /* Deferred tunnel-up: the SB-router ISR (e52d) sets sb_tunnel_up_pending on lane-bond-complete;

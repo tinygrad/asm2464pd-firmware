@@ -304,6 +304,7 @@ static void u4lb_b226(void) { phy_cc10_cmd_wait(2, 0, 0xC8); }
  * b0b4 body (CODE_BANK1::b0b4 @ file 0x130b4) — state-4 assembled per the plan's dependency order.
  * ==================================================================================== */
 static void u4lb_state4_b0b4(void) {
+  uart_puts("[b4:A]");   /* INSTR: b0b4 entered (before any poll) */
   /* --- (A) entry / retrain guard (b0b4-b0cc): 0x0776 != 0 -> retrain {e07d; b226} x2 --- */
   if (PR(0x0776) != 0) {
     uint8_t i;
@@ -324,15 +325,20 @@ static void u4lb_state4_b0b4(void) {
     }
     u4lb_b226();                                            /* b10c: settle */
   }
+  uart_puts("[b4:B]");   /* INSTR: past prewrite/retrain (d5da/b226 polls survived) */
 
   /* --- (B) lane-width ready gate (b10f-b12d): (0x0768:0x0769)-(CCE4:CCE5) < 0x38 -> abort --- */
   { uint16_t width = ((uint16_t)PR(0x0768) << 8) | PR(0x0769);
     uint16_t neg   = ((uint16_t)PR(0xCCE4) << 8) | PR(0xCCE5);
-    if ((uint16_t)(width - neg) < 0x0038) return;          /* b12d: LJMP b225 (RET) */
+    uart_puts("[b4:wid="); uart_puthex(PR(0x0768)); uart_puthex(PR(0x0769));
+    uart_puts(" neg="); uart_puthex(PR(0xCCE4)); uart_puthex(PR(0xCCE5));
+    uart_puts(" 765="); uart_puthex(PR(0x0765)); uart_puthex(PR(0x0766)); uart_puts("]");
+    if ((uint16_t)(width - neg) < 0x0038) { uart_puts("[b4:WIDGATE-abort]"); return; }  /* b12d */
   }
 
   /* --- (C) connect-present gate (b130-b13c): 0x0765==0 && 0x0766==0 -> abort --- */
-  if (PR(0x0765) == 0 && PR(0x0766) == 0) return;          /* b13a: LJMP b225 (RET) */
+  if (PR(0x0765) == 0 && PR(0x0766) == 0) { uart_puts("[b4:CONGATE-abort]"); return; }  /* b13a */
+  uart_puts("[b4:C]");   /* INSTR: past width+connect gates */
 
   /* --- E716/CA06 enable (b13d-b15b), gated 0x0AF1.0 --- */
   if (PR(0x0AF1) & 0x01) {
@@ -364,6 +370,7 @@ static void u4lb_state4_b0b4(void) {
     PR(0x081F) = (PR(0x081F) & 0x7F) | 0x80;        /* b186-b18e: latch L1 OS-armed (0x081F.7) */
   }
 
+  uart_puts("[b4:D]");   /* INSTR: past E716/PwrOn-stub/OS-arm; entering rate-change */
   /* --- CC37.2 set -> d3b0(3) Chg2 20G -> e980 rate apply -> e9e7 RstRxpll -> CC37.2 clr (b18f-b1a3) */
   PR(0xCC37) = (PR(0xCC37) & 0xFB) | 0x04;          /* b18f-b194 984d: CC37 |= 0x04 */
   u4lb_d3b0(3);                                     /* b195-b197: d3b0(3) Chg2 20G */
