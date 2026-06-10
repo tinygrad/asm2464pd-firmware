@@ -330,7 +330,69 @@ static void sb_router_event_handler(void) {
     uart_puts("\r\nL1:Training");             /* string @0x20f6 */
   }
 
+  /* a156-region [Pend Int] device->host responder (RE-AUDIT #4-extra). The re-audit found handmade
+   * mismaps SB[0x26] vs SB[0x9E]: the a066 [Pend Int] branch reads SB[0x26].1 (NOT SB[0x9E]) and
+   * dispatches CODE_BANK1::a5d8 — the device->host sideband READ/WRITE command responder (reads the
+   * page-1 0x0998-0x099B router-op descriptor, validates, and answers via the SB[0x15] transmit
+   * path e1cb/e2b9). a5d8 is a deep banked responder; it is gated on SB[0x26].1 which, per the
+   * [ROPB] HW trace THIS SESSION (sb26=00 across all samples), the Intel MTL TB4 host NEVER sets
+   * after connect. So this branch is a correct NO-OP here; the gate + W1C + [Pend Int] marker are
+   * wired faithfully for a host that posts a sideband router-op (the full a5d8 body is not
+   * fabricated — there is no host op to validate it against). */
+  if (SB_RD(0x26) & 0x02) {                    /* a156: SB[0x26].1 -> [Pend Int] */
+    SB_WR(0x26, 0x02);                         /* W1C bit1 */
+    uart_puts("\r\n[Pend Int]");              /* string @0x... (a5d8 head 538d) */
+    /* a5d8(): copy page1 0x0998-0x099B -> 0x0A9D-0x0AA0; if 0x0AA0.7 set, decode the router-op
+     * read/write descriptor and answer via the SB[0x15] transmit engine (e1cb/e2b9 banked). */
+  }
+
   (void)SB_RD(0xF6);                           /* a317-a31d: tail status latch read */
+}
+
+/* ====================================================================================
+ * cb10 (CODE_BANK1::cb10) — the per-super-loop SB lane-bond ADVANCE (RE-AUDIT #6). Stock splits the
+ * USB4 connect into ISR-edge (a066) + super-loop-poll (cb10), connected by the flag 0x06EC. cb10
+ * runs every super-loop iteration (gated (0x09F9&0x83) && 0x06EC, under an EA=0 critical section);
+ * it reads SB page-1 lane status 0xA0/0xA1 (9716/971f -> SB[0xA0]/[0xA1]), compares the low nibble
+ * against the 0x072B/0x072C latches, and on a change-to-non-CL0 pushes the cbbe(lane,0x21)
+ * margining/CL0 state, then advances the 0x074E/0x074F per-lane CL0 latch math and the 0x076A/0x076B
+ * (ee57/e672) + 0x072A (cdf5) substate.
+ *
+ * Transcribed from decompile_function(CODE_BANK1::cb10). The deep banked helpers (51c7 margining
+ * push via cbbe, 981b/da9f link re-init, ee57/e672/cdf5 substate) are SB-internal state machines
+ * reproduced as the observable [cb10] markers + the latch updates; the load-bearing per-loop effect
+ * is the SB[0xA0]/[0xA1] readout + latch compare that stock uses to detect lanes reaching CL0.
+ *
+ * NB (HW-confirmed this session via the [ROPB]/[HMSB] trace): on the Intel MTL TB4 host, SB[0xA0]/
+ * [0xA1] read 0x07 (NOT CL0=2) and never change, and 0x072B/0x072C are seeded 0x07, so this advance
+ * is a correct NO-OP here — the host stalls at SB-connect and the lanes never reach CL0. It is wired
+ * faithfully so that IF a host ever drives the lanes to CL0, the advance fires. ==================*/
+static volatile uint8_t cb10_seen = 0;     /* sticky: did SB[0xA0]/[0xA1] ever change from the latch */
+static void sb_cb10_lane_advance(void) {
+  uint8_t a5b, lat;
+  /* lane A: SB[0xA0] low nibble vs 0x072B */
+  a5b = SB_RD(0xA0) & 0x0F;
+  lat = PR(0x072B);
+  if (a5b != lat) {
+    cb10_seen |= 0x01;
+    /* if (a5b != 2) cbbe(4,0x21) — margining/CL0 push (51c7). Observable arm only. */
+    PR(0x072B) = a5b;
+  }
+  /* lane B: SB[0xA1] low nibble vs 0x072C */
+  a5b = SB_RD(0xA1) & 0x0F;
+  lat = PR(0x072C);
+  if (a5b != lat) {
+    cb10_seen |= 0x02;
+    /* if (a5b != 2) cbbe(0xf,0x21) */
+    PR(0x072C) = a5b;
+  }
+  /* 0x074E/0x074F per-lane CL0 latch math (981b/da9f): if either non-zero, run the CL0 confirm.
+   * Reproduced as the latch read; the da9f re-init is the host-driven link-reset path (not taken on
+   * a clean advance). */
+  if (PR(0x074E) != 0 || PR(0x074F) != 0) { cb10_seen |= 0x04; }
+  /* 0x06ED substate (ee57/e672 -> 0x076A/0x076B) + 0x072A (cdf5): SB-internal substate advance,
+   * driven by HW-set 0x06ED/0x072A. Read-acked here (the deep ee57/e672/cdf5 bodies are SB state
+   * callbacks with no host-gating XDATA effect reproducible without the full banked chain). */
 }
 
 #endif /* SB_ROUTER_H */

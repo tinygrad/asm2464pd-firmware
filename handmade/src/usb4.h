@@ -84,6 +84,55 @@ static void sb_router_event_handler(void);
 /* Sticky accumulator of every C80A value seen in the ISR (catches a transient C80A.5). */
 static volatile uint8_t c80a_acc = 0;
 
+/* ====================================================================================
+ * cm_routerop_mailbox (CODE_BANK1::c0a5) — the EC06.0 config-space router-op dispatcher (RE-AUDIT
+ * #7c). The host USB4 Connection-Manager posts router config-space read(0x50)/write(0x51) ops into
+ * the EA80/EA90 mailbox; this builds the reply in the 0x0B02-0x0B1F working buffer and signals it
+ * back via C805|=0x02 + EA90=0xA5. Replaces the prior EC04=1-only stub (a regression).
+ *
+ *   gate:        EA90 == 0x5A (host posted a router-op; else return)
+ *   state 0x0B02: 0=idle (read opcode from EA80 -> 0x0B03, dispatch movc func_0def@c0c2),
+ *                 1=read-resp pending (0x0B03==0xE2 -> send read resp, addr-in-bounds check),
+ *                 2=write-resp pending (0x0B03==0xE3 -> send write resp).
+ *   reply:       EA90 = 0xA5 (ack the host).
+ *
+ * Transcribed from decompile_function(CODE_BANK1::c0a5). The opcode-dispatch bodies (d945/ceab
+ * config read/write, e21b/e4a6 link-control, e2b9 connect-fill) are deep banked router-config state
+ * machines reached only when the host posts a 0x5A op. Per the [ROPB] HW trace THIS SESSION, EA90 is
+ * ALWAYS 0x00 on the Intel MTL TB4 host after connect (the host never posts a router-op), so this
+ * dispatcher is a correct NO-OP here; the gate + EA90 ack are wired faithfully for a host that does.
+ * The full dispatch bodies are intentionally not fabricated (no host posts them to validate against).
+ * ==================================================================================== */
+static void cm_routerop_mailbox(void) {
+  if (PR(0xEA90) != 0x5A) return;            /* c0a5 gate: host must have posted a 0x5A router-op */
+  {
+    uint8_t state = PR(0x0B02);
+    if (state == 0) {
+      PR(0x0B03) = PR(0xEA80);               /* read opcode/path from EA80 into the working buf */
+      /* movc func_0def(0x0B03) @c0c2 dispatches the config read/write/link-control op into 0x0B0A..;
+       * the deep d945/ceab/e21b/e4a6/e2b9 bodies are banked router-config state machines (not
+       * reproduced — no host op to validate against on this HW). The reply is signalled below. */
+      PR(0xC805) = PR(0xC805) | 0x02;         /* reply trigger: C805 |= 0x02 */
+    } else if (state == 1) {
+      if (PR(0x0B03) == 0xE2) {               /* read-resp pending */
+        /* cm_routerop_send_read_resp() + addr-in-bounds check; banked. */
+        PR(0x0B02) = 0;
+        PR(0xEA90) = 0xA5;                     /* ack */
+        return;
+      }
+      PR(0x0B02) = 0;
+    } else if (state == 2) {
+      if (PR(0x0B03) == 0xE3) {               /* write-resp pending */
+        /* cm_routerop_send_write_resp() + addr-in-bounds check; banked. */
+        PR(0x0B02) = 0;
+        PR(0xEA90) = 0xA5;                     /* ack */
+        return;
+      }
+      PR(0x0B02) = 0;
+    }
+  }
+}
+
 /* Called from int1_isr after PD-RX, gated by (0x09F9 & 0x83). Reactive W1C-ack + forward. */
 static void usb4_int_demux(void) {
   uint8_t c80a = PR(0xC80A);
@@ -96,6 +145,7 @@ static void usb4_int_demux(void) {
   if (PR(0xEC06) & 0x01) {                   /* EC06.0 -> router-op mailbox (bank1 0xC0A5) */
     usb4_int_seen |= 0x04;
     PR(0xEC04) = 1;                          /* documented ack (orchestrator @0x4486) */
+    cm_routerop_mailbox();                    /* RE-AUDIT #7c: c0a5 config-space router-op dispatch */
   }
   if (c80a & 0x0F) {                         /* C80A.0-3 -> PCIe-tunnel link events (bank1 0xE911) */
     usb4_int_seen |= 0x08;

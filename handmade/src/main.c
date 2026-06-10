@@ -49,6 +49,7 @@ static uint8_t is_usb2;
 /* Streaming PCIe state — configured via 0xF0 control message */
 static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer */
 
+
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
 #include "i2c.h"
@@ -595,6 +596,18 @@ void main(void) {
   uart_puts(" e741=");        uart_puthex(XDATA_REG8V(0xE741));
   uart_puts(" cc43=");        uart_puthex(XDATA_REG8V(0xCC43)); uart_puts("]\n");
 
+  // RE-AUDIT #7a: USB4 CM router-op RX-enable (bank1 e56f). Turns on the EC00 router-op engine and
+  // sets C807.7 (SB-transport RX-enable) so the host CM's router-op queries (CE88/CE89 transport +
+  // EA80/EA90 mailbox) are actually RECEIVED. STEP 0 prereq: the host can only post to a mailbox
+  // the device has enabled; without e56f the [ROP] probe below would always read 0. Gated USB4.
+  if (XDATA_REG8V(0x09F9) & 0x81) {
+    usb4_routerop_init();
+    uart_puts("[U4rop ec00="); uart_puthex(XDATA_REG8V(0xEC00));
+    uart_puts(" ec04=");        uart_puthex(XDATA_REG8V(0xEC04));
+    uart_puts(" c807=");        uart_puthex(XDATA_REG8V(0xC807));
+    uart_puts(" ea88=");        uart_puthex(XDATA_REG8V(0xEA88)); uart_puts("]\n");
+  }
+
   // USB-mode fork (USB4_BOOT_REDESIGN.md Step A.2). In USB4 mode (0x09F9 & 0x83) do NOT bring
   // up the USB3 SuperSpeed *device* engine: usb_init_controller(0) SS_FAILs on a TB4 host and
   // force-drops the link to USB2, which makes the host abandon USB4 (E302 never trains). The
@@ -704,7 +717,18 @@ void main(void) {
     uart_puts("[M2 766=");      uart_puthex(XDATA_REG8V(0x0766));
     uart_puts(" 6f1=");         uart_puthex(XDATA_REG8V(0x06F1));
     uart_puts(" 72d=");         uart_puthex(XDATA_REG8V(0x072D));
+    uart_puts(" 72b=");         uart_puthex(XDATA_REG8V(0x072B));
+    uart_puts(" 72c=");         uart_puthex(XDATA_REG8V(0x072C));
+    uart_puts(" cb10s=");       uart_puthex(cb10_seen);
     uart_puts("]\n");
+    /* RE-AUDIT #6: per-super-loop SB lane-bond advance (bank1 cb10), gated exactly as stock
+     * ((0x09F9&0x83) && 0x06EC) inside an EA=0 critical section. Reads SB[0xA0]/[0xA1] lane status
+     * and advances the CL0/lane-bond latches. (0x06EC is armed by sb_con_consequence/dea1.) */
+    if ((XDATA_REG8V(0x09F9) & 0x83) && XDATA_REG8V(0x06EC)) {
+      IE &= (uint8_t)~IE_EA;
+      sb_cb10_lane_advance();
+      IE |= IE_EA;
+    }
     /* RE-AUDIT chicken-and-egg driver: the host raises C80A.5 (SB-router connect) but never the
      * INT0 link-events, so bank0_8a89 (E764.4/E751 link-MODE engine) is never driven via INT0.
      * Drive it ONCE from here when the SB-router connect fired (sb_run_8a89_pending), via c9a8 with
@@ -723,13 +747,40 @@ void main(void) {
       uart_puts(" e302=");           uart_puthex(XDATA_REG8V(0xE302));
       uart_puts(" c80a=");           uart_puthex(XDATA_REG8V(0xC80A));
       uart_puts(" ec06=");           uart_puthex(XDATA_REG8V(0xEC06)); uart_puts("]\n");
+      /* STEP 0 ROP BURST (decisive de-risk): immediately after the connect engine has run, sample
+       * the host-query mailboxes 10x back-to-back with EX1 masked (so the C80A.5 storm cannot starve
+       * us; the host's mailbox writes are HW and land regardless of our ISR being masked). This block
+       * reliably executes once and answers: does the host CM post ANYTHING to CE88/CE89/EA80/EA90/
+       * EC06/SB[0x26] after [===SB Con===]? Flat-zero across all 10 => host is NOT querying. */
+      IE &= (uint8_t)~IE_EX1;
+      { uint8_t s; for (s = 0; s < 10; s++) {
+          uart_puts("[ROPB ce88="); uart_puthex(XDATA_REG8V(0xCE88));
+          uart_puts(" ce89=");       uart_puthex(XDATA_REG8V(0xCE89));
+          uart_puts(" ea80=");       uart_puthex(XDATA_REG8V(0xEA80));
+          uart_puts(" ea81=");       uart_puthex(XDATA_REG8V(0xEA81));
+          uart_puts(" ea90=");       uart_puthex(XDATA_REG8V(0xEA90));
+          uart_puts(" ec06=");       uart_puthex(XDATA_REG8V(0xEC06));
+          uart_puts(" sb26=");       uart_puthex(SB_RD(0x26));
+          uart_puts(" c80a=");       uart_puthex(XDATA_REG8V(0xC80A));
+          uart_puts(" e302=");       uart_puthex(XDATA_REG8V(0xE302));
+          uart_puts("]\n");
+          { uint32_t b; for (b = 0; b < 120000UL; b++) { __asm nop __endasm; } }
+      } }
+      IE |= IE_EX1;
     }
     /* Deferred tunnel-up: the SB-router ISR (e52d) sets sb_tunnel_up_pending on lane-bond-complete;
-     * run the downstream PCIe bring-up here (it uses sleep()/long polls, unsafe inside the ISR). */
+     * run the downstream PCIe bring-up here (it uses sleep()/long polls, unsafe inside the ISR).
+     * GATE on E302 actually trained ((E302>>4)&3 >= 2): bringing up downstream PCIe before the USB4
+     * link trains is pointless (the tunnel has no upstream) and its 20-retry timeout loop floods the
+     * UART, drowning the ROP probe. Until E302 trains, just consume the pending flag. */
     if (sb_tunnel_up_pending) {
       sb_tunnel_up_pending = 0;
-      uart_puts("[TunnelUp->pcie_on]\n");
-      pcie_power_on();
+      if (((XDATA_REG8V(0xE302) >> 4) & 3) >= 2) {
+        uart_puts("[TunnelUp->pcie_on]\n");
+        pcie_power_on();
+      } else {
+        uart_puts("[TunnelUp deferred: E302 not trained]\n");
+      }
     }
     if (!pd_seen && kicks < 60) {
       pd_drive_hard_reset();

@@ -306,4 +306,32 @@ static void usb4_irq_arm(void) {
   usb4_irq_ef1e();
 }
 
+/* phy_cc10_cmd_wait is defined in boot_phy.h (included AFTER this file). Forward-declare for e56f's
+ * e80a(0,9,0) call. */
+static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
+
+/* ====================================================================================
+ * usb4_routerop_init() = bank1 e56f VERBATIM (RE-AUDIT #7a). The USB4 CM router-op RX-enable:
+ * turns on the EC00 router-op engine, seeds the EA88=100/EA89=0x24 speed descriptor, arms EC04,
+ * clears EC05.0, and sets C807 bit7 (the SB-transport RX-enable) so the host's router-op posts to
+ * CE88/CE89 + EA80/EA90 are actually RECEIVED. Without it the mailbox the host writes is never even
+ * enabled, so the device cannot see (let alone answer) the CM's queries. Gated 0x09F9&0x81 like
+ * stock; call once at boot after usb4_irq_arm.
+ *
+ *   stock e56f:  EC00&=~1; e80a(0,9,0); EC00=(&0xFE)|1; EA88=100; EA89=0x24; EC04=1; EC05&=~1;
+ *                C807&=0xBF; C807=(&0x7F)|0x80; 0x0B02=0;
+ * ==================================================================================== */
+static void usb4_routerop_init(void) {
+  PR(0xEC00) = PR(0xEC00) & 0xFE;                 /* e56f: EC00 &= ~1 */
+  phy_cc10_cmd_wait(0, 9, 0);                      /* e80a(0,9,0): CC10 mailbox settle */
+  PR(0xEC00) = (PR(0xEC00) & 0xFE) | 0x01;        /* EC00 = (&0xFE)|1 (router-op engine enable) */
+  PR(0xEA88) = 100;                                /* EA88 = 100 (0x64) speed descriptor lo */
+  PR(0xEA89) = 0x24;                               /* EA89 = 0x24 speed descriptor hi */
+  PR(0xEC04) = 1;                                  /* EC04 = 1 (router-op event ack/arm) */
+  PR(0xEC05) = PR(0xEC05) & 0xFE;                 /* EC05 &= ~1 */
+  PR(0xC807) = PR(0xC807) & 0xBF;                 /* C807 &= 0xBF */
+  PR(0xC807) = (PR(0xC807) & 0x7F) | 0x80;        /* *** C807 bit7 SET = SB-transport RX-enable *** */
+  PR(0x0B02) = 0;                                  /* 0x0B02 = 0 (router-op message state idle) */
+}
+
 #endif /* USB4_IRQ_H */
