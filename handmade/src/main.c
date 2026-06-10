@@ -35,7 +35,9 @@ static void sleep(uint16_t milliseconds) {
   REG_TIMER0_THRESHOLD_HI = threshold >> 8;
   REG_TIMER0_THRESHOLD_LO = threshold & 0xFF;
   REG_TIMER0_CSR = TIMER_CSR_ENABLE;
-  while (!(REG_TIMER0_CSR & TIMER_CSR_EXPIRED));
+  /* Bounded: the CC10-CC13 timer mailbox is shared with the PHY/PD command path; after a PHY/PD
+   * command sequence the expiry bit may never set and this would hang forever. Cap the spin. */
+  { uint32_t g = 0; while (!(REG_TIMER0_CSR & TIMER_CSR_EXPIRED) && ++g < 4000000UL); }
 }
 
 static uint8_t is_usb2;
@@ -415,13 +417,21 @@ void int0_isr(void) __interrupt(0) {
     } else if (periph_status & USB_PERIPH_LINK_EVENT) {
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
-        uart_puts("[USB2 fallback]\n");
-        // fallback to USB2
-        is_usb2 = 1;
-        // without this, USB2 is flaky
-        REG_CPU_MODE = CPU_MODE_USB2;
-        // enable USB high speed mode
-        REG_USB_PHY_CTRL_91C0 = 0x10;
+        /* USB2-fallback presentation. In USB4 mode (0x09F9 & 0x83) we must NOT drop to USB2:
+         * doing so makes the TB4 host see a USB2-HS device and abandon USB4 lane training
+         * (E302 stays 0). Gate the USB2 drop on NOT-USB4 mode; still W1C-ack the SS event
+         * (REG_BUF_CFG_9300 = ep below) unconditionally so it does not re-storm. */
+        if (!(XDATA_REG8V(0x09F9) & 0x83)) {
+          uart_puts("[USB2 fallback]\n");
+          // fallback to USB2
+          is_usb2 = 1;
+          // without this, USB2 is flaky
+          REG_CPU_MODE = CPU_MODE_USB2;
+          // enable USB high speed mode
+          REG_USB_PHY_CTRL_91C0 = 0x10;
+        } else {
+          uart_puts("[SS_FAIL ack (USB4, no USB2 drop)]\n");
+        }
       }
       REG_BUF_CFG_9300 = ep;
       uart_puts("[LINK EVENT ");
@@ -493,12 +503,33 @@ void main(void) {
   // PCIe power on for backwards compatibility, can be removed
   pcie_power_on();
 
-  // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
-  usb_init_controller(0);
+  // Step B (USB4_BOOT_REDESIGN.md sec 2): bring up the USB PIPE engine + arm the upstream USB4
+  // PHY link. usb_pipe_engine_init() is the stock B1CB PIPE config (unconditional, both modes);
+  // usb4_phy_arm() issues the CC10 subcmd-4 link-up arm and waits E318.4. Run at boot BEFORE the
+  // super-loop so no sleep() (which shares the CC10-CC13 mailbox) races the arm's CC11.1 ack.
+  usb_pipe_engine_init();
+  boot_phy_early_settle();   // Step C: optional early PHY settle (cc10 subcmd2/3 + E712 wait)
+  usb4_phy_arm();
+  uart_puts("[PHYarm e318="); uart_puthex(XDATA_REG8V(0xE318));
+  uart_puts(" 91c0=");        uart_puthex(XDATA_REG8V(0x91C0));
+  uart_puts(" e712=");        uart_puthex(XDATA_REG8V(0xE712)); uart_puts("]\n");
 
   // USB4/PD keystone: present a PD-capable Type-C attach + arm the PD engine so the host
   // engages USB-PD. Must run before interrupts are enabled (so a Source_Cap can be RX'd).
+  // Run BEFORE the USB-mode fork so 0x09F9 (set to 0x87 = USB4 here) is valid for the fork.
   pd_keystone_init();
+
+  // USB-mode fork (USB4_BOOT_REDESIGN.md Step A.2). In USB4 mode (0x09F9 & 0x83) do NOT bring
+  // up the USB3 SuperSpeed *device* engine: usb_init_controller(0) SS_FAILs on a TB4 host and
+  // force-drops the link to USB2, which makes the host abandon USB4 (E302 never trains). The
+  // PD/CC attach the USB4 branch needs is already done by pd_keystone_init() above.
+  // REGRESSION GUARD: a real USB3 host (0x09F9 not USB4) MUST still reach usb_init_controller(0).
+  if (XDATA_REG8V(0x09F9) & 0x83) {
+    uart_puts("[USB4 mode: skip USB3 device bring-up]\n");
+  } else {
+    // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
+    usb_init_controller(0);
+  }
 
   // Zero-init the USB4 CM router-op mailbox working state (0x0B02-0x0B1F) and the SB-router
   // active-port index (0x06F1) before any USB4 INT can fire. (M0 prereq, USB4_TUNNEL_PLAN.md sec5.)
@@ -518,8 +549,43 @@ void main(void) {
   // Milestone 1: prompt the host into PD with periodic Hard Resets until it engages
   // (pd_seen is set by the PD-RX ISR on the first received message), then just observe.
   uint8_t kicks = 0;
+  uint8_t sb_diag_count = 0;
   while (1) {
-    sleep(500);
+    /* R-timer hazard: sleep() drives the CC10-CC13 mailbox shared with the PHY/PD command path.
+     * After the SB assert the mailbox may be left in a state where the timer never expires and
+     * sleep() hangs. Once sb_asserted, use a busy-NOP delay instead so the diagnostic always runs. */
+    if (sb_asserted) { uint32_t b; for (b = 0; b < 600000UL; b++) { __asm nop __endasm; } }
+    else             { sleep(500); }
+    /* M1' E302 diagnostic: sb_assert() masks EX1 once the SB assert runs (the un-W1C'd C80A.5
+     * SB-router source would otherwise storm INT1 and starve this loop). With EX1 masked we poll
+     * E302 in a bounded window to read whether the upstream USB4 PHY trained the link in response
+     * to the sideband block. (Removed once the a066/M2 handler W1Cs C80A.5.) */
+    if (sb_asserted && sb_diag_count < 8) {
+      /* EX1 already masked by sb_assert() so this poll is not preempted by the C80A.5 storm. */
+      sb_diag_count++;
+      { uint32_t p; uint8_t e302 = 0, best = 0;
+        for (p = 0; p < 2000000UL; p++) {     /* bounded ~100ms+ poll window for HW to train */
+          e302 = XDATA_REG8V(0xE302);
+          if (((e302 >> 4) & 3) > ((best >> 4) & 3)) best = e302;
+          if (((e302 >> 4) & 3) >= 2) break;
+        }
+        uart_puts("[SBDIAG e302=");      uart_puthex(e302);
+        uart_puts(" best=");             uart_puthex(best);
+        uart_puts(" c80a=");             uart_puthex(XDATA_REG8V(0xC80A));
+        uart_puts(" ec06=");             uart_puthex(XDATA_REG8V(0xEC06));
+        uart_puts(" 91c0=");             uart_puthex(XDATA_REG8V(0x91C0));
+        uart_puts(" e318=");             uart_puthex(XDATA_REG8V(0xE318));
+        uart_puts(" cc30=");             uart_puthex(XDATA_REG8V(0xCC30));
+        uart_puts(" is_usb2=");          uart_puthex(is_usb2);
+        uart_puts(" 09f9=");             uart_puthex(XDATA_REG8V(0x09F9));
+        uart_puts(" 09fa=");             uart_puthex(XDATA_REG8V(0x09FA));
+        uart_puts(" 07ba=");             uart_puthex(XDATA_REG8V(0x07BA));
+        uart_puts(" 0af1=");             uart_puthex(XDATA_REG8V(0x0AF1));
+        uart_puts("]\n");
+        if (((best >> 4) & 3) >= 2) uart_puts("[*** USB4 TRAINED ***]\n");
+        else                        uart_puts("[!!! E302 NOT TRAINED !!!]\n");
+      }
+    }
     uart_puts("[U ");
     uart_puthex(XDATA_REG8V(0xE302)); uart_putc(':');   /* USB4 link-mode ((>>4)&3 >=2 == trained) */
     uart_puthex(XDATA_REG8V(0xC80A)); uart_putc(':');   /* PD/USB4 int status (bit6=PD,5=SB,4=evt) */
@@ -529,6 +595,8 @@ void main(void) {
     uart_puthex(XDATA_REG8V(0xE765)); uart_putc(':');   /* PCIe link-up (bit1) */
     uart_puthex(usb4_int_seen); uart_putc(':');         /* USB4 INT sources seen (1=SB,2=evt,4=rop,8=tun) */
     uart_puthex(pd_cc_timeout); uart_puts("]\n");       /* 1 = a CC cmd wait timed out */
+    /* M1' pass: USB4 upstream link trained (E302 link-mode (E302>>4)&3 >= 2). */
+    if (((XDATA_REG8V(0xE302) >> 4) & 3) >= 2) uart_puts("[*** USB4 TRAINED ***]\n");
     if (usb4_int_latched) {                              /* first-USB4-INT snapshot (M1 diag) */
       uart_puts("[U4int c80a=");  uart_puthex(usb4_first_c80a);
       uart_puts(" ec06=");        uart_puthex(usb4_first_ec06);

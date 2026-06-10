@@ -218,6 +218,11 @@ static void sb_connect_path_state(void) {
   }
 }
 
+/* M1' diagnostic: set once the SB assert has run, so the super-loop can switch to the post-SB
+ * E302-poll diagnostic (the un-W1C'd C80A.5 SB-router source storms INT1 and starves the loop
+ * until the a066/M2 handler exists; the diagnostic masks EX1 to read the trained E302). */
+static volatile uint8_t sb_asserted = 0;
+
 /* ============================ SB-assert entry (usb4_connect_u4 tail) ============================
  * The synchronous tail reached at 0xa51b/0xa51e after the route latch, gated on 0x07BA!=0.
  * Order: intermediate path-state -> sb_lane_flip_init (b230) FIRST -> sb_block_init (bb37). */
@@ -226,6 +231,26 @@ static void sb_assert(void) {
   PR(0x07FF) = 0;               /* 0x07FF=0 (stock clears just before b230) */
   sb_lane_flip_init();          /* b230 — FIRST */
   sb_block_init();              /* bb37 — SECOND */
+  sb_asserted = 1;              /* M1' diagnostic gate (see super-loop) */
+  /* M1' diagnostic: the un-W1C'd C80A.5 SB-router source storms INT1 from here on and would
+   * starve the super-loop before it can read E302. Mask EX1 (INT1) NOW so the super-loop runs
+   * and the SBDIAG E302 poll executes. (PD contract + Enter_USB are already complete; the
+   * a066/M2 handler that W1Cs C80A.5 replaces this once E302 training is confirmed.) */
+  IE &= (uint8_t)~0x04;         /* clear IE_EX1 */
+  /* Immediate (ISR-context, single-read) E302 marker so we capture the post-SB link mode even if
+   * the super-loop's sleep() hangs on the shared CC10 timer mailbox (R-timer hazard). */
+  uart_puts("[SBdone e302=");
+  uart_puthex(PR(0xE302));
+  /* SB write-landed self-readback (diagnostic): the page-1 0x2800 alias for the SB block is
+   * RE-asserted, not HW-confirmed. Read back the keystone bits we just wrote: SB[0x81]==0x08,
+   * SB[0x66]==0x20, SB[0x9E]==0x20, SB[0x01] bits6,7 set, SB[0xC9] (host connect bits). */
+  uart_puts(" sb81=");  uart_puthex(SB_RD(0x81));
+  uart_puts(" sb66=");  uart_puthex(SB_RD(0x66));
+  uart_puts(" sb9e=");  uart_puthex(SB_RD(0x9E));
+  uart_puts(" sb01=");  uart_puthex(SB_RD(0x01));
+  uart_puts(" sb2d=");  uart_puthex(SB_RD(0x2D));
+  uart_puts(" sbc9=");  uart_puthex(SB_RD(0xC9));
+  uart_puts("]");
 }
 
 #endif /* SB_H */

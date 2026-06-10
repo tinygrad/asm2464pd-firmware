@@ -177,6 +177,79 @@ static void usb_init_controller(uint8_t force_usb2) {
     }
 }
 
+/* usb_pipe_engine_init — the stock boot_usb4_vs_usb3_mode_decision @0xB1CB USB-PIPE engine config
+ * (register writes only; the d07f/e214/545c/bbb6 helpers are mode-decision glue, not the PIPE arm).
+ * Run UNCONDITIONALLY at boot (identical for USB3 and USB4 per USB4_BOOT_REDESIGN.md sec 2). This
+ * brings up the USB PIPE/PHY layer the upstream USB4 lane engine needs. Verbatim register set. */
+static void usb_pipe_engine_init(void) {
+    REG_POWER_ENABLE      = (REG_POWER_ENABLE & 0x7F) | 0x80;   /* 92C0.7 */
+    REG_USB_PHY_CTRL_91D1 = 0x0F;
+    REG_BUF_CFG_9300      = 0x0C;
+    REG_BUF_CFG_9301      = 0xC0;
+    REG_BUF_CFG_9302      = 0xBF;
+    XDATA_REG8(0x9091)    = 0x1F;        /* control-phase reg, boot-time raw write */
+    REG_USB_EP_CFG1       = 0x0F;        /* 0x9093 */
+    REG_USB_PHY_CTRL_91C1 = 0xF0;
+    REG_BUF_CFG_9303      = 0x33;
+    REG_BUF_CFG_9304      = 0x3F;
+    REG_BUF_CFG_9305      = 0x40;
+    REG_USB_CONFIG        = 0xE0;        /* 0x9002 */
+    REG_USB_EP0_CFG       = 0xF0;        /* 0x9005 */
+    REG_USB_MODE          = 0x01;        /* 0x90E2 */
+    REG_USB_EP_MGMT      &= (uint8_t)~0x01;   /* 905E.0 = 0 */
+    REG_USB_MSC_CTRL      = 0x01;        /* C42C (verbatim; MSC-vs-strap ambiguous, copy as-is) */
+    REG_USB_MSC_STATUS   &= (uint8_t)~0x01;   /* C42D.0 = 0 */
+    REG_USB_PHY_CTRL_91C3 &= (uint8_t)~0x20;  /* 91C3.5 = 0 */
+    REG_USB_PHY_CTRL_91C0 |= 0x01;       /* pulse 91C0.0 */
+    REG_USB_PHY_CTRL_91C0 &= (uint8_t)~0x01;
+}
+
+/* boot_phy_early_settle — the CC10 portion of stock boot_phy_bringup_early @0xCE79 (Step C, the
+ * optional early PHY settle per USB4_BOOT_REDESIGN.md sec 2). cc10(subcmd=2, CC12=0, CC13=0x14)
+ * via phy_cmd_cc10_and_wait (poll CC11.1, ack), then cc10(subcmd=3, CC12=0, CC13=0x0A) + WAIT
+ * E712[1:0] OR CC11.1, then ack. (Omits the CE79 Type-C/SBU/PCIe-tunnel helpers d0d3/cf28/d996
+ * which touch CC30/CC33/CC3F/E324 + the downstream PCIe tunnel — out of scope, HW-risky.) */
+static void boot_phy_early_settle(void) {
+    /* subcmd=2, CC12=0, CC13=0x14, then poll CC11.1 + ack (phy_cmd_cc10_and_wait) */
+    XDATA_REG8(0xCC11) = 0x04; XDATA_REG8(0xCC11) = 0x02;
+    XDATA_REG8(0xCC10) = (XDATA_REG8(0xCC10) & 0xF8) | 0x02;
+    XDATA_REG8(0xCC12) = 0x00;
+    XDATA_REG8(0xCC13) = 0x14;
+    XDATA_REG8(0xCC11) = 0x01;
+    { uint16_t g = 0; while (!(XDATA_REG8V(0xCC11) & 0x02) && ++g < 0xFFFF); }
+    XDATA_REG8(0xCC11) = 0x02;
+    /* subcmd=3, CC12=0, CC13=0x0A, then WAIT E712[1:0] OR CC11.1 + ack */
+    XDATA_REG8(0xCC11) = 0x04; XDATA_REG8(0xCC11) = 0x02;
+    XDATA_REG8(0xCC10) = (XDATA_REG8(0xCC10) & 0xF8) | 0x03;
+    XDATA_REG8(0xCC12) = 0x00;
+    XDATA_REG8(0xCC13) = 0x0A;
+    XDATA_REG8(0xCC11) = 0x01;
+    { uint16_t g = 0;
+      while (!((XDATA_REG8V(0xE712) & 0x03) || (XDATA_REG8V(0xCC11) & 0x02)) && ++g < 0xFFFF); }
+    XDATA_REG8(0xCC11) = 0x04; XDATA_REG8(0xCC11) = 0x02;
+}
+
+/* usb4_phy_arm — the upstream USB4 PHY link-up arm (stock phy_link_train_cmd_cc10 @0xE50D, called
+ * from B1CB as cc10(subcmd=4, CC12=1, CC13=0x8F)), then WAIT E318.4 (PHY link-up) OR CC11.1, then
+ * ack. Uses the CC10-CC13 mailbox; run ONCE at boot before the super-loop (no sleep() may run
+ * between the CC10 issue and the CC11.1 ack — the arm is self-contained). Values verbatim. */
+static void usb4_phy_arm(void) {
+    /* ack any prior event (phy_cc11_ack_event @0xE8EF): CC11=4 then CC11=2 */
+    XDATA_REG8(0xCC11) = 0x04;
+    XDATA_REG8(0xCC11) = 0x02;
+    /* issue subcmd=4, CC12=0x01, CC13=0x8F */
+    XDATA_REG8(0xCC10) = (XDATA_REG8(0xCC10) & 0xF8) | 0x04;
+    XDATA_REG8(0xCC12) = 0x01;
+    XDATA_REG8(0xCC13) = 0x8F;
+    XDATA_REG8(0xCC11) = 0x01;            /* go */
+    /* WAIT E318.4 (PHY link-up) OR CC11.1 (done), bounded */
+    { uint16_t g = 0;
+      while (!((XDATA_REG8V(0xE318) & 0x10) || (XDATA_REG8V(0xCC11) & 0x02)) && ++g < 0xFFFF); }
+    /* ack (E8EF): CC11=4 then CC11=2 */
+    XDATA_REG8(0xCC11) = 0x04;
+    XDATA_REG8(0xCC11) = 0x02;
+}
+
 /* EP0 IN: send `len` bytes of DESC_BUF, or a zero-length ack. */
 static void usb_send_data(uint16_t len) {
     REG_USB_EP0_LEN_H = (uint8_t)(len >> 8);
