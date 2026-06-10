@@ -749,6 +749,15 @@ void main(void) {
     uart_puts(" e751=");         uart_puthex(XDATA_REG8V(0xE751));
     uart_puts(" e763=");         uart_puthex(XDATA_REG8V(0xE763));
     uart_puts(" e765=");         uart_puthex(XDATA_REG8V(0xE765));
+    uart_puts(" e764=");         uart_puthex(XDATA_REG8V(0xE764));
+    uart_puts("]\n");
+    /* LANE-BOND state-4 (b0b4) observability: the 0x06ED FSM state + the four 0x075x OS1 latches
+     * (must reach 0x10 for e672 to enter state-5) + the SB lane state. */
+    uart_puts("[S4 6ed=");       uart_puthex(XDATA_REG8V(0x06ED));
+    uart_puts(" 75b=");          uart_puthex(XDATA_REG8V(0x075B));
+    uart_puts(" 759=");          uart_puthex(XDATA_REG8V(0x0759));
+    uart_puts(" 75c=");          uart_puthex(XDATA_REG8V(0x075C));
+    uart_puts(" 75a=");          uart_puthex(XDATA_REG8V(0x075A));
     uart_puts("]\n");
     /* LANE-BOND FSM (this session): the stock lane-bond engine runs from the SUPER-LOOP via cb10's
      * tail -> e672, dispatched by the 0x06ED state. Stock trace: [===SB Con===] -> [SB P03]
