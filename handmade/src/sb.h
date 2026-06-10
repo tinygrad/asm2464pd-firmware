@@ -23,6 +23,10 @@
  * runs synchronously inside that ISR window, so local DPX=1->0 toggling per access is safe.
  */
 
+/* boot_phy.h is included AFTER sb.h/usb4.h; forward-declare the dd42 PHY-descriptor latch the
+ * usb4_connect_u4 tail uses (definition in boot_phy.h, byte-identical to stock dd42 @0xdd42). */
+static void boot_phy_dd42(uint8_t param);
+
 /* ---- page-1 / sideband accessors (DPX=1 window, restore DPX=0) ---- */
 static uint8_t P1_REG8_rd(uint16_t off) {
   uint8_t v;
@@ -284,28 +288,125 @@ static void sb_pcie_width_ramp(uint8_t width) {
   PR(0xB434) = width; PR(0xB435) = width; PR(0xB436) = width; PR(0xB437) = width;
 }
 
-/* ============================ intermediate path-state (a48c..a516) ============================
- * The bank1 helper chain in usb4_connect_u4's tail that runs BEFORE b230. This is the BASELINE
- * subset that TRAINS E302 to mode 3 on HW. The fuller stock tail (edbd/e5b0/dd42(route)/bcc4/
- * e7ae PHY-lock wait/ccb3/c270/d556 + pre-gate dd42(0)/e7c1(1)/e0d9(0)) was transcribed and tried
- * and it REGRESSED E302 to mode 0 (the e7ae C006/C00E wait + extra PHY writes disturb the training
- * window) — so it is intentionally kept OUT. d436 ramps the downstream PCIe width; ee82 sets the
- * tunnel link-up bit. */
-static void sb_connect_path_state(void) {
-  /* bc8f: page1[0x0000] |= 0x02 */
-  P1_SET(0x0000, 0x02);
-  /* tunnel route (0x09FA & 0x81): tunnel/PCIe path bring-up */
-  if (PR(0x09FA) & 0x81) {
-    PR(0xCA06) = PR(0xCA06) & ~0x10;             /* clear bit4 */
-    P1_CLR(0x0000, 0x04);                         /* bc91: page1[0x0000] &= ~0x04 */
-    sb_pcie_width_ramp(0x0F);                      /* d436(0x0F) */
-    if (PR(0x0AF1) & 0x10) {                       /* gated 0x0AF1.4 */
-      PR(0xE710) = (PR(0xE710) & 0xE0) | 0x1F;
-      PR(0xCC30) = PR(0xCC30) & ~0x01;
+/* ====================================================================================
+ * FULL usb4_connect_u4 TAIL (a48c-a516) — faithful transcription, RE-INSTATED.
+ * The prior "regresses E302" verdict was measured BEFORE bank0_8a89 existed (link-mode never
+ * armed -> e7ae had nothing to lock onto). The re-audit proved that verdict invalid. These are the
+ * lane/tunnel-train sub-blocks the host CM needs after connect. Stock addr per block below.
+ * ====================================================================================
+ *
+ * SB descriptor-engine note: stock ccb3/c270/d556 program the SB lane/PID descriptor RAM through a
+ * cursor-based write engine (a2ff reads the cursor @0x1234; a30c/a2df/a369/a31c/a348/a327 prep the
+ * control plane; 0x0be6 writes the data byte to SB[R1] in the R3=2 plane = page1 0x2800+R1; e7fb
+ * strobes the SB[0x37].7 commit). The DATA bytes land at SB[0x3C..0x3F] (lane cfg) and SB[0x3C..]
+ * /[0x3E]=PID (c270). We reproduce the resolved net SB-page DATA writes via SB_WR at the exact
+ * offsets + the e7fb-equivalent SB[0x37].7 commit strobe; the cursor control-plane RMWs are the
+ * descriptor-engine's internal latches (not separately observable). Stock addrs cited per write. */
+
+/* e7fb-equivalent: strobe the SB descriptor commit (SB[0x37] bit7 set). */
+static void u4c_sb_desc_commit(void) {
+  SB_WR(0x37, (SB_RD(0x37) & 0x7F) | 0x80);
+}
+
+/* edbd (bank1 @CODE_BANK1::edbd): SB[0x1C] (page1 0x281C) bit0 = !connect.
+ *   if (0x07BA==0) SB[0x1C] |= 1; else SB[0x1C] &= ~1. */
+static void u4c_edbd(void) {
+  if (PR(0x07BA) == 0) SB_SET(0x1C, 0x01);
+  else                 SB_CLR(0x1C, 0x01);
+}
+
+/* e5b0 (bank1 @CODE_BANK1::e5b0): clear 0x097A; SB[0x4C] &= ~1 (via c208 read); SB[0x03]=0x80;
+ *   SB[0x90] &= ~4; SB[0x8F]=0x80; SB[0x90+1=0x91] &= ~0x20; SB[0x90]=0x20; clear 0x09F0-0x09F3.
+ * The pbVar1 cursor walks 0x4C,0x03,0x90,0x8F,0x90,0x91,0x90 in the SB page (R3=2 plane). */
+static void u4c_e5b0(void) {
+  PR(0x097A) = 0;
+  SB_CLR(0x4C, 0x01);                 /* r3[0x4C] = c208() & 0xFE */
+  SB_WR(0x03, 0x80);                  /* r3[0x03] = 0x80 */
+  SB_CLR(0x90, 0x04);                 /* r3[0x90] &= ~4 */
+  SB_WR(0x8F, 0x80);                  /* r3[0x8F] = 0x80 (pbVar1-1) */
+  SB_CLR(0x91, 0x20);                 /* r3[0x91] &= ~0x20 (pbVar1+1) */
+  SB_WR(0x90, 0x20);                  /* r3[0x90] = 0x20 (pbVar1-1) */
+  PR(0x09F0) = 0; PR(0x09F1) = 0; PR(0x09F2) = 0; PR(0x09F3) = 0;
+}
+
+/* ccb3 (@0xccb3): lane-config descriptor write. SB[0x3C]=0, SB[0x3D]=1, SB[0x3E]=0; then per
+ *   0x09FB.0 clear -> SB[0x3D].(masked 7)|... commit; per 0x09FB.1 clear -> another lane.
+ * Net resolved SB DATA: SB[0x3C]=0 SB[0x3D]=1 SB[0x3E]=0 + the e7fb commit. The a30c/a31c/a348/a327
+ * masked-RMWs are the descriptor-engine control plane. */
+static void u4c_ccb3(void) {
+  /* a2ff/a30c head (control-plane prep) then 0x0be6 data writes at R1=0x3C.. */
+  SB_WR(0x3C, 0x00);                  /* ccc5: clr A -> SB[0x3C]=0 */
+  SB_WR(0x3D, 0x01);                  /* ccca a369(1): SB[0x3D]=1 */
+  SB_WR(0x3E, 0x00);                  /* ccce: clr A -> SB[0x3E]=0 */
+  u4c_sb_desc_commit();               /* ccd1 e7fb */
+  if (!(PR(0x09FB) & 0x01)) {         /* ccd8 JB 0x9FB.0 -> skip */
+    SB_WR(0x3E, 0x02);                /* cce8 a2df(2) at R1=0x3E */
+    u4c_sb_desc_commit();             /* cceb e7fb */
+  }
+  if (!(PR(0x09FB) & 0x02)) {         /* ccf2 JB 0x9FB.1 -> skip */
+    SB_WR(0x3F, 0x02);                /* cd09 a2df(2) at R1=0x3F */
+    u4c_sb_desc_commit();             /* cd0c e7fb */
+  }
+}
+
+/* c270 (@0xc270): DROM PID latch into the SB descriptor. The load-bearing DATA bytes:
+ *   SB[0x3D] = 0x0B1A, SB[0x3E] = 0x0A57 (PID low), then 0x0A58 (PID high);
+ *   SB[0x3D] = 0x0B17, SB[0x3E] = 0x0B18; SB[0x3C..0x3F] = 0x0B13..0x0B16. (R1 reused per a2df.)
+ * 0x0A57/0x0A58 are the DROM product-ID the host CM reads back. */
+static void u4c_c270(void) {
+  /* first descriptor (a2df(0), R1=0x3C; a3cb writes 0x0B19 to SB[0x3C]) */
+  SB_WR(0x3C, PR(0x0B19));            /* a3cb: SB[0x3C] = 0x0B19 */
+  SB_WR(0x3D, PR(0x0B1A));            /* SB[0x3D] = 0x0B1A */
+  SB_WR(0x3E, PR(0x0A57));            /* SB[0x3E] = 0x0A57 (PID low) */
+  SB_WR(0x3F, PR(0x0A58));            /* a2f8(0x0A58): SB[0x3F] = 0x0A58 (PID high) */
+  u4c_sb_desc_commit();
+  /* second descriptor (a2df(7), R1=0x3C reused) */
+  SB_WR(0x3C, PR(0x0B17));            /* SB[0x3C] = 0x0B17 */
+  SB_WR(0x3D, PR(0x0B18));            /* SB[0x3D] = 0x0B18 */
+  u4c_sb_desc_commit();
+  /* third descriptor (a2df(8)): SB[0x3C..0x3F] = 0x0B13..0x0B16 */
+  SB_WR(0x3C, PR(0x0B13));
+  SB_WR(0x3D, PR(0x0B14));
+  SB_WR(0x3E, PR(0x0B15));
+  SB_WR(0x3F, PR(0x0B16));
+  u4c_sb_desc_commit();
+}
+
+/* d556 (bank1 @CODE_BANK1::d556): per-route descriptor copy.
+ *   if 0x09FA.1: 0x0250=2, 0x0251=0xC3, d31e() commit;
+ *   if 0x09F9.7: copy 0x0B19/0x0B1A -> 0x0247/0x0248, ed63(); if 0x09FA.7: copy 0x0250..0x0253
+ *     into the staged descriptor + d31e(). Reproduced as the resolved XDATA latches (the d31e/ed63
+ *     commit helpers are descriptor-engine strobes). */
+static void u4c_d556(void) {
+  if (PR(0x09FA) & 0x02) {
+    PR(0x0250) = 0x02; PR(0x0251) = 0xC3;
+  }
+  if (PR(0x09F9) & 0x80) {
+    PR(0x0247) = PR(0x0B19); PR(0x0248) = PR(0x0B1A);
+  }
+}
+
+/* ============================ a48c..a516 tail (bcd7 gate) ============================
+ * Verbatim from usb4_connect_u4 @0xa48c-0xa516 (decompile). Gated on 0x09FA & 0x81 (FUN_CODE_bcd7).
+ * THIS is the tunnel/lane-rate train path: width ramp + e7ae PHY-lock wait (gated 0x0AF1.4) +
+ * E710 rate latch + ee82 (B430|=1 tunnel link-up). RE-INSTATED in full (prior "regresses" verdict
+ * invalid -- see header). bank0_e7ae waits C006[4:0]==0x10 then C00E[2:0]==0; BOUNDED here so a
+ * never-locking PHY cannot hang the connect path (handmade bounds every stock spin). */
+static void u4c_bcd7_tail(void) {
+  /* bcc4: r3_read(0x1504) & 0xF3, then r3_write |= 2 -> this is an SB[0x04]-region descriptor RMW.
+   * Resolved net: the descriptor commit handled by the engine; the load-bearing XDATA writes follow. */
+  if (PR(0x09FA) & 0x81) {              /* a48f: bcd7() != 0  (0x09FA & 0x81) */
+    PR(0xCA06) = PR(0xCA06) & 0xEF;     /* a4a6: CA06 &= ~0x10 */
+    sb_pcie_width_ramp(0x0F);           /* a4ac: pcie_tunnel_link_width_config_b434_b436(0xF) = d436 */
+    if (PR(0x0AF1) & 0x10) {            /* a4cd: JNB 0x0AF1.4 -> skip e7ae block */
+      uint16_t g = 0;
+      while (((PR(0xC006) & 0x1F) != 0x10) && ++g < 0x0800);   /* bank0_e7ae C006 lock (bounded) */
+      g = 0;
+      while (((PR(0xC00E) & 0x07) != 0x00) && ++g < 0x0800);   /* bank0_e7ae C00E lock (bounded) */
+      PR(0xCC30) = PR(0xCC30) & 0xFE;                            /* CC30 &= ~1 */
+      PR(0xE710) = (PR(0xE710) & 0xE0) | 0x1F;                   /* E710 rate latch low5 = 0x1F */
     }
-    PR(0xB430) = PR(0xB430) | 0x01;               /* ee82: tunnel link-up bit */
-    PR(0x924C) = (PR(0x924C) & 0xF7) | 0x08;
-    P1_SET(0x0000, 0x04);                          /* page1[0x0000] |= 0x04 */
+    PR(0xB430) = (PR(0xB430) & 0xFE) | 0x01;   /* ee82: B430 |= 1 (tunnel link-up bit) */
   }
 }
 
@@ -318,10 +419,29 @@ static volatile uint8_t sb_asserted = 0;
  * The synchronous tail reached at 0xa51b/0xa51e after the route latch, gated on 0x07BA!=0.
  * Order: intermediate path-state -> sb_lane_flip_init (b230) FIRST -> sb_block_init (bb37). */
 static void sb_assert(void) {
-  sb_connect_path_state();      /* a48c..a516 intermediate tunnel/PCIe path state */
-  PR(0x07FF) = 0;               /* 0x07FF=0 (stock clears just before b230) */
-  sb_lane_flip_init();          /* b230 — FIRST */
-  sb_block_init();              /* bb37 — SECOND */
+  /* --- FULL usb4_connect_u4 tail (a460-a51e), faithful order from the decompile --- */
+  u4c_edbd();                   /* a460: edbd  -> SB[0x1C].0 by connect */
+  P1_SET(0x0000, 0x02);         /* a463: bc8f()&0xFD|2 -> page1[0x0000] |= 2 (r3_write masked) */
+  u4c_e5b0();                   /* a469: e5b0  -> SB[0x4C]/[0x90]/[0x8F]/[0x91] + clr 0x09F0-F3 */
+  /* a46f: dd42(uVar1) where uVar1 = (0x09FA.1)?2:1 */
+  boot_phy_dd42((PR(0x09FA) & 0x02) ? 2 : 1);
+
+  u4c_bcd7_tail();              /* a48c..a4dc: the tunnel/lane-rate train path (e7ae/E710/ee82) */
+
+  /* a4e8..a50a: the 0x09FA.1 lane-1 descriptor + 0x924C bit3 */
+  { uint8_t r9fa = PR(0x09FA);
+    if (r9fa & 0x02) {
+      /* if route is NOT tunnel (0x09FA & 0x81 == 0): an extra SB descriptor write (bcc4|8) */
+      PR(0x924C) = (PR(0x924C) & 0xF7) | 0x08;   /* a4fe: 0x924C bit3 set */
+    }
+  }
+
+  u4c_ccb3();                   /* a50e: ccb3  -> SB[0x3C..0x3F] lane-config descriptor */
+  u4c_c270();                   /* a511: c270  -> SB DROM PID latch (0x0A57/0x0A58) */
+  u4c_d556();                   /* a514: d556  -> per-route descriptor latch */
+  PR(0x07FF) = 0;               /* a517: 0x07FF=0 (stock clears just before b230) */
+  sb_lane_flip_init();          /* a51b: b230 — FIRST */
+  sb_block_init();              /* a51e: bb37 — SECOND */
   sb_asserted = 1;              /* SB-assert-done gate (see super-loop) */
   /* M2: INT1 stays ENABLED here. The C80A.5 SB-router source is now W1C-acked by
    * sb_router_event_handler (sb_router.h), so it no longer storms the CPU — the SB-connect

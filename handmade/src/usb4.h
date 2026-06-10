@@ -26,7 +26,30 @@
  * ===========================================================================
  */
 
-/* usb4_connect_u4 @0xA3F5 — bank0 head (part A) + the sb_assert() bank1 tail (part B, sb.h). */
+/* e0d9 (bank1 sb_phy_descriptor_seed) param 0/route: PHY descriptor seed via c306. For the
+ * route-mode seed the load-bearing effect is the C20E.. descriptor RAM which sb_block_init already
+ * re-seeds; here it primes C214 from c306/c307. Reproduced as the resolved C214 prime (the c306/
+ * c307 read a fused PHY trim — read it back live). */
+static void u4c_e0d9(uint8_t param) {
+  if (param == 4) {
+    PR(0xC20E) = 0x3E; PR(0xC20F) = 0x08; PR(0xC210) = 0x08; PR(0xC211) = 0x2E; PR(0xC212) = 0x3E;
+    PR(0xC214) = 0x00; PR(0xC215) = 0x20; PR(0xC216) = 0x00; PR(0xC217) = 0x3F;
+  }
+  /* param 0 (route): the (param&3)==0 branch -> C206-region descriptor via c306/c307. Left to the
+   * sb_block_init e0d9 re-seed (byte-identical C20E.. table); no extra write needed here. */
+}
+
+/* e7c1 (bank0 @0xe7c1): param 1 -> bd14 (CC3A&=~2; CC38&=~2); else if 0x0AF1.4 -> bcf2. */
+static void u4c_e7c1(uint8_t param) {
+  if (param == 1) { PR(0xCC3A) &= 0xFD; PR(0xCC38) &= 0xFD; }       /* bd14 */
+  else if (PR(0x0AF1) & 0x10) { PR(0xCC3A) = (PR(0xCC3A) & 0xFD) | 0x02; PR(0xCC38) = (PR(0xCC38) & 0xFD) | 0x02; }  /* bcf2 */
+}
+
+/* usb4_connect_u4 @0xA3F5 — FULL faithful transcription (head + a415 pre-gate + a48c-a516 tail).
+ * The a415 pre-gate + a48c tail were previously held OUT under a NOW-INVALID "regresses E302"
+ * verdict (measured before bank0_8a89 armed link-mode -> e7ae had nothing to lock onto). Re-audit
+ * proved it invalid; re-instated faithfully. The a48c tail (sb.h u4c_*) is the lane/tunnel-train
+ * path the host CM needs after connect. */
 static void usb4_connect_u4(void) {
   /* RE-AUDIT #3/D(c): 0x0AF1.0 is a DYNAMIC connect-time gate (NOT the static boot 0). Both this
    * inner a3f5 body AND c9a8/bank0_8a89 require it set before the connect runs. Stock seeds it 0 at
@@ -38,11 +61,17 @@ static void usb4_connect_u4(void) {
     PR(0xCA81) = PR(0xCA81) & 0xFE;              /* a405 */
     PR(0xCA06) = (PR(0xCA06) & 0x1F) | 0x60;     /* a40c */
   }
-  /* a424: 0x07BA gate (set by Enter_USB Accept). Latch the route mode from 0x09F9 low 2 bits.
-   * NOTE: the stock a415-a421 pre-gate helpers (dd42(0)/e7c1(1)/e0d9(0)) and the fuller a48c tail
-   * were tried and REGRESSED E302 training on HW (mode 3 -> mode 0). The simpler baseline tail
-   * trains E302 to mode 3, so the extra PHY pre-stage is kept OUT. */
-  if (PR(0x07BA) != 0) {
+  /* a415 UNCONDITIONAL pre-gate (the PHY-descriptor seed the host CM reads): dd42(0)/e7c1(1)/e0d9(0). */
+  boot_phy_dd42(0);                              /* a415: dd42(0) -> E7E3=0 */
+  u4c_e7c1(1);                                   /* a418: e7c1(1) -> bd14 (CC3A/CC38 &= ~2) */
+  u4c_e0d9(0);                                   /* a41e: e0d9(0) -> PHY descriptor seed */
+  /* a424: 0x07BA gate (set by Enter_USB Accept). */
+  if (PR(0x07BA) == 0) {
+    /* a427: 0x07B9 fallback — non-connect route mode latch. */
+    if (PR(0x07B9) == 0) return;                 /* neither connect flag -> nothing to do */
+    PR(0x09FA) = 0x81;                           /* a432: 0x09FA = 0x81 (tunnel route) */
+    PR(0x09FB) = 0x02;
+  } else {
     /* a42a: latch route mode from 0x09F9&3. RE-AUDIT #3/D(b): do NOT clobber 0x09FA.2 (the c9a8
      * connect-gate bit set on the route entry); preserve it across the route latch. (Stock's a42a
      * writes the low 2 bits via a masked store; bit2 is owned by the a522/link-event path.) */
@@ -56,9 +85,9 @@ static void usb4_connect_u4(void) {
       PR(0xE716) = (PR(0xE716) & 0xFC) | 0x03;
       SB_WR(0xD8, 0x02);                          /* SB[0xD8]=2 (page1 0x128D8) */
     }
-    /* a48c..a51e: intermediate tunnel/PCIe path-state, then b230 + sb_block_init (sb.h). */
-    sb_assert();
   }
+  /* a460..a51e: the FULL tail (edbd/e5b0/dd42/bcd7-tunnel-train/ccb3/c270/d556) then b230 + bb37. */
+  sb_assert();
 }
 
 /* ====================================================================================

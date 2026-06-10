@@ -721,6 +721,25 @@ void main(void) {
     uart_puts(" 72c=");         uart_puthex(XDATA_REG8V(0x072C));
     uart_puts(" cb10s=");       uart_puthex(cb10_seen);
     uart_puts("]\n");
+    /* LANE-TRAIN trace (this session): watch the rate gate C8FF (>=6 == Gen3, REQUIRED for E751)
+     * and the lane state SB[0xA0]/[0xA1] (0x07 -> CL0=2). C8FF is a READ-ONLY HW status (the PHY-
+     * negotiated rate) -- nothing in stock writes it (verified). E751 (USB4 link arm) is gated on
+     * 0x0AA0.0, which bank0_8a89 sets to 1 only when C8FF>=6 (else 0x0AA0=0x0A). So lane TRAINING
+     * to Gen3 is a PHY/host outcome we observe, not a register we can poke. */
+    uart_puts("[LANE c8ff=");   uart_puthex(XDATA_REG8V(0xC8FF));
+    uart_puts(" aa0=");          uart_puthex(XDATA_REG8V(0x0AA0));
+    uart_puts(" sba0=");         uart_puthex(SB_RD(0xA0));
+    uart_puts(" sba1=");         uart_puthex(SB_RD(0xA1));
+    uart_puts(" e710=");         uart_puthex(XDATA_REG8V(0xE710));
+    uart_puts(" ca06=");         uart_puthex(XDATA_REG8V(0xCA06));
+    uart_puts(" a9e=");          uart_puthex(XDATA_REG8V(0x0A9E));
+    uart_puts(" a9f=");          uart_puthex(XDATA_REG8V(0x0A9F));
+    uart_puts(" b430=");         uart_puthex(XDATA_REG8V(0xB430));
+    uart_puts(" b432=");         uart_puthex(XDATA_REG8V(0xB432));
+    uart_puts(" e751=");         uart_puthex(XDATA_REG8V(0xE751));
+    uart_puts(" e763=");         uart_puthex(XDATA_REG8V(0xE763));
+    uart_puts(" e765=");         uart_puthex(XDATA_REG8V(0xE765));
+    uart_puts("]\n");
     /* RE-AUDIT #6: per-super-loop SB lane-bond advance (bank1 cb10), gated exactly as stock
      * ((0x09F9&0x83) && 0x06EC) inside an EA=0 critical section. Reads SB[0xA0]/[0xA1] lane status
      * and advances the CL0/lane-bond latches. (0x06EC is armed by sb_con_consequence/dea1.) */
