@@ -40,8 +40,12 @@ clear_ram_loop:
     mov     @r0, a
     djnz    r0, clear_ram_loop
 
-    ; Initialize stack pointer
-    mov     sp, #0x72
+    ; Stack at 0xB0-0xFF (80 bytes). Raised from 0x72 because the lane-bond-FSM DSEG (IRAM globals)
+    ; grew to ~0x74, and a fixed sp=0x72 then sat INSIDE DSEG -> the stack corrupted the PD/FSM
+    ; globals on the first push -> boot hang. 0xB0 leaves DSEG the whole 0x08-0xAF window. (The
+    ; linker's __start__stack symbol does NOT relocate into a #imm here -- it assembles to 0xFF and
+    ; wraps the stack -> use a fixed literal with margin instead.)
+    mov     sp, #0xB0
 
     ; Initialize DPX = 0 (bank 0)
     mov     0x96, #0x00

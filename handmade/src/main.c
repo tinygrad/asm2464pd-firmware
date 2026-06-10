@@ -63,6 +63,10 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 #include "boot_phy.h"
 #include "usb4_connect.h"   /* bank0_8a89 (USB4 lane-MODE engine) + c9a8 link-event dispatcher;
                              * MUST be last: needs boot_phy helpers, usb4_connect_u4, sb_tunnel_up_pending */
+/* usb4_lanebond.h: the 0x06ED lane-bond FSM (e672 + cm_conn_routing_setup + eb62) that drives the
+ * stock [ConnRout]->[SB P04]->[PcieTunnel-PwrOn]->lane-bond->CL0 sequence from the super-loop.
+ * After usb4_connect.h (needs the SB/P1/PR/uart accessors). */
+#include "usb4_lanebond.h"
 
 /* Hardware status packet */
 typedef struct {
@@ -629,6 +633,12 @@ void main(void) {
   XDATA_REG8V(0x0766) = 0; XDATA_REG8V(0x072D) = 0;
   XDATA_REG8V(0x074E) = 0; XDATA_REG8V(0x074F) = 0;
   XDATA_REG8V(0x06EE) = 0; XDATA_REG8V(0x06EF) = 0; XDATA_REG8V(0x06F0) = 0;
+  // Lane-bond FSM (usb4_lanebond.h): 0x06EC = cb10 enable gate, 0x06ED = the FSM state, 0x0758/0x075x
+  // = the cm_conn_routing_setup sub-states, 0x0718 = the route-enable latch. All uninit XDATA (0x55)
+  // -> must zero so the FSM starts idle and the [LB arm] (0x06ED==0) first-arm fires correctly.
+  XDATA_REG8V(0x06EC) = 0; XDATA_REG8V(0x06ED) = 0;
+  XDATA_REG8V(0x0758) = 0; XDATA_REG8V(0x0759) = 0; XDATA_REG8V(0x075A) = 0;
+  XDATA_REG8V(0x075B) = 0; XDATA_REG8V(0x075C) = 0; XDATA_REG8V(0x0718) = 0;
   // 0x07ED is the [Connect_U4] one-shot suppress (a176-a17e: if 0x07ED!=0, skip usb4_connect_u4
   // and clear it). It is uninitialised XDATA in handmade, so the FIRST connect can take the
   // suppress branch and never run the SB assert. Stock has it clear on the happy path -> force 0.
@@ -740,12 +750,23 @@ void main(void) {
     uart_puts(" e763=");         uart_puthex(XDATA_REG8V(0xE763));
     uart_puts(" e765=");         uart_puthex(XDATA_REG8V(0xE765));
     uart_puts("]\n");
-    /* RE-AUDIT #6: per-super-loop SB lane-bond advance (bank1 cb10), gated exactly as stock
-     * ((0x09F9&0x83) && 0x06EC) inside an EA=0 critical section. Reads SB[0xA0]/[0xA1] lane status
-     * and advances the CL0/lane-bond latches. (0x06EC is armed by sb_con_consequence/dea1.) */
+    /* LANE-BOND FSM (this session): the stock lane-bond engine runs from the SUPER-LOOP via cb10's
+     * tail -> e672, dispatched by the 0x06ED state. Stock trace: [===SB Con===] -> [SB P03]
+     * (db7a->eb62(0,3)) -> cb10->e672 state3 ([ConnRout]) -> [SB P04] -> state4 (PcieTunnel-PwrOn/
+     * lane-bond) -> [SB P05] -> state5 (Trig/CL0) -> [SB P00]. handmade's cb10 omitted e672 and its
+     * db7a omitted eb62(0,3), so 0x06ED was never armed and the FSM never ran. Wire both:
+     *   (1) ARM: stock db7a (from sb_con_consequence/dea1 on [===SB Con===]) does eb62(0,3). handmade's
+     *       db7a (sb_router.h) is included before usb4_lanebond.h so it can't call eb62; first-arm it
+     *       here once the connect consequence ran (0x06EC==1) and 0x06ED is still 0.
+     *   (2) DISPATCH: run e672 (gated 0x06ED!=0) as cb10's tail, every iteration, EA=0. */
     if ((XDATA_REG8V(0x09F9) & 0x83) && XDATA_REG8V(0x06EC)) {
       IE &= (uint8_t)~IE_EA;
-      sb_cb10_lane_advance();
+      sb_cb10_lane_advance();                     /* the SB[0xA0]/[0xA1] readout + latch compare */
+      if (XDATA_REG8V(0x06ED) == 0) {             /* db7a effect: first-arm the FSM -> [SB P03] */
+        uart_puts("[LB arm]");
+        u4lb_eb62(0, 3);
+      }
+      u4lb_e672();                                /* cb10 tail: dispatch the lane-bond FSM by 0x06ED */
       IE |= IE_EA;
     }
     /* RE-AUDIT chicken-and-egg driver: the host raises C80A.5 (SB-router connect) but never the
@@ -789,16 +810,16 @@ void main(void) {
     }
     /* Deferred tunnel-up: the SB-router ISR (e52d) sets sb_tunnel_up_pending on lane-bond-complete;
      * run the downstream PCIe bring-up here (it uses sleep()/long polls, unsafe inside the ISR).
-     * GATE on E302 actually trained ((E302>>4)&3 >= 2): bringing up downstream PCIe before the USB4
-     * link trains is pointless (the tunnel has no upstream) and its 20-retry timeout loop floods the
-     * UART, drowning the ROP probe. Until E302 trains, just consume the pending flag. */
+     * GATE FIX (this session): the OLD gate ((E302>>4)&3 >= 2 "E302 trained") was WRONG -- the stock
+     * lanetrace proves stock reaches the GPU with E302 at mode0 the WHOLE run. The REAL success axis
+     * is the per-lane CL state SB[0xA0]/[0xA1] reaching CL0=0x02. Gate on that instead. */
     if (sb_tunnel_up_pending) {
       sb_tunnel_up_pending = 0;
-      if (((XDATA_REG8V(0xE302) >> 4) & 3) >= 2) {
+      if ((SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02) {  /* both lanes CL0 */
         uart_puts("[TunnelUp->pcie_on]\n");
         pcie_power_on();
       } else {
-        uart_puts("[TunnelUp deferred: E302 not trained]\n");
+        uart_puts("[TunnelUp deferred: lanes not CL0]\n");
       }
     }
     if (!pd_seen && kicks < 60) {
