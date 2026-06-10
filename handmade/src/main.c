@@ -49,6 +49,7 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 #include "pd.h"
 #include "pd_dispatch.h"
 #include "vdm.h"
+#include "sb.h"
 #include "usb4.h"
 
 /* Hardware status packet */
@@ -463,8 +464,9 @@ void int1_isr(void) __interrupt(1) {
     pd_rx_isr();
   }
   /* USB4 event demux, gated by (0x09F9 & 0x83) like the stock orchestrator @0x4486.
-   * Observe-and-safe-ack only (the bank1 handler bodies are un-RE-able; see usb4.h). */
-  if (XDATA_REG8V(0x09F9) & 0x83) {
+   * M1: observe-and-snapshot only, and stop once latched so the un-W1C'able C80A.5 SB-router
+   * source does not storm the CPU and starve the super-loop (which prints E302). */
+  if ((XDATA_REG8V(0x09F9) & 0x83) && !usb4_int_latched) {
     usb4_int_demux();
   }
   DPX = saved_dpx;
@@ -498,6 +500,15 @@ void main(void) {
   // engages USB-PD. Must run before interrupts are enabled (so a Source_Cap can be RX'd).
   pd_keystone_init();
 
+  // Zero-init the USB4 CM router-op mailbox working state (0x0B02-0x0B1F) and the SB-router
+  // active-port index (0x06F1) before any USB4 INT can fire. (M0 prereq, USB4_TUNNEL_PLAN.md sec5.)
+  { uint8_t z; for (z = 0; z <= (0x0B1F - 0x0B02); z++) XDATA_REG8V(0x0B02 + z) = 0; }
+  XDATA_REG8V(0x06F1) = 0;
+  // 0x07ED is the [Connect_U4] one-shot suppress (a176-a17e: if 0x07ED!=0, skip usb4_connect_u4
+  // and clear it). It is uninitialised XDATA in handmade, so the FIRST connect can take the
+  // suppress branch and never run the SB assert. Stock has it clear on the happy path -> force 0.
+  XDATA_REG8V(0x07ED) = 0;
+
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
@@ -518,6 +529,12 @@ void main(void) {
     uart_puthex(XDATA_REG8V(0xE765)); uart_putc(':');   /* PCIe link-up (bit1) */
     uart_puthex(usb4_int_seen); uart_putc(':');         /* USB4 INT sources seen (1=SB,2=evt,4=rop,8=tun) */
     uart_puthex(pd_cc_timeout); uart_puts("]\n");       /* 1 = a CC cmd wait timed out */
+    if (usb4_int_latched) {                              /* first-USB4-INT snapshot (M1 diag) */
+      uart_puts("[U4int c80a=");  uart_puthex(usb4_first_c80a);
+      uart_puts(" ec06=");        uart_puthex(usb4_first_ec06);
+      uart_puts(" e302=");        uart_puthex(usb4_first_e302);
+      uart_puts("]\n");
+    }
     if (!pd_seen && kicks < 60) {
       pd_drive_hard_reset();
       kicks++;

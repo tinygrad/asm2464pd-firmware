@@ -210,7 +210,11 @@ static void pd_int1_enable_group(void) {
  * mode-decision, which we short-circuit by forcing the USB4 mode flag for now). */
 static void pd_keystone_init(void) {
   pd_int1_enable_group();
-  PR(0x09F9) = 0x01;            /* force USB4 mode (TODO: real mode-decision @0xB1CB) */
+  /* 0x09F9 runtime mode flag. bit7 = VDM-ACK enable (Discover and EnterMode ACK gates); bits1:0
+   * = route -> 0x09FA. 0x87 = VDM-ACK + route 3 (USB4 tunnel): (0x09FA&0x81)!=0 selects the
+   * tunnel route and 0x09FA.1 fires SB[0xD8]=2 + E716 reflip in usb4_connect_u4. (Was 0x01, which
+   * clears bit7 -> all VDM NAK and mis-selects route 1.) See USB4_TUNNEL_PLAN.md sec 4. */
+  PR(0x09F9) = 0x87;           /* VDM-ACK + USB4 tunnel route (TODO: real mode-decision @0xB1CB) */
   cc_pd_phy_term_init();
   pd_internal_state_init();
 }
