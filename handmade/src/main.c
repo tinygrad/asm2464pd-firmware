@@ -49,6 +49,7 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 #include "pd.h"
 #include "pd_dispatch.h"
 #include "vdm.h"
+#include "usb4.h"
 
 /* Hardware status packet */
 typedef struct {
@@ -458,8 +459,13 @@ void int0_isr(void) __interrupt(0) {
 void int1_isr(void) __interrupt(1) {
   uint8_t saved_dpx = DPX;
   DPX = 0x00;
-  if (XDATA_REG8V(0xC80A) & 0x40) {
+  if (XDATA_REG8V(0xC80A) & 0x40) {     /* C80A.6 -> PD-RX (Source_Cap/VDM/Enter_USB) */
     pd_rx_isr();
+  }
+  /* USB4 event demux, gated by (0x09F9 & 0x83) like the stock orchestrator @0x4486.
+   * Observe-and-safe-ack only (the bank1 handler bodies are un-RE-able; see usb4.h). */
+  if (XDATA_REG8V(0x09F9) & 0x83) {
+    usb4_int_demux();
   }
   DPX = saved_dpx;
 }
@@ -504,9 +510,13 @@ void main(void) {
   while (1) {
     sleep(500);
     uart_puts("[U ");
-    uart_puthex(XDATA_REG8V(0xE302)); uart_putc(':');   /* USB4 link-mode */
-    uart_puthex(XDATA_REG8V(0xC80A)); uart_putc(':');   /* PD/USB4 int status (bit6=PD) */
-    uart_puthex(XDATA_REG8V(0xE40F)); uart_putc(':');   /* PD RX event */
+    uart_puthex(XDATA_REG8V(0xE302)); uart_putc(':');   /* USB4 link-mode ((>>4)&3 >=2 == trained) */
+    uart_puthex(XDATA_REG8V(0xC80A)); uart_putc(':');   /* PD/USB4 int status (bit6=PD,5=SB,4=evt) */
+    uart_puthex(XDATA_REG8V(0xEC06)); uart_putc(':');   /* USB4 router-op event (bit0) */
+    uart_puthex(XDATA_REG8V(0xE763)); uart_putc(':');   /* PCIe-tunnel link event */
+    uart_puthex(XDATA_REG8V(0xB432)); uart_putc(':');   /* downstream PCIe lane status (&7==7 up) */
+    uart_puthex(XDATA_REG8V(0xE765)); uart_putc(':');   /* PCIe link-up (bit1) */
+    uart_puthex(usb4_int_seen); uart_putc(':');         /* USB4 INT sources seen (1=SB,2=evt,4=rop,8=tun) */
     uart_puthex(pd_cc_timeout); uart_puts("]\n");       /* 1 = a CC cmd wait timed out */
     if (!pd_seen && kicks < 60) {
       pd_drive_hard_reset();

@@ -55,6 +55,9 @@
  *   then pd_tx_commit_engine() transmits the staged E420.. buffer.
  */
 
+/* usb4_connect_u4 @0xA3F5 — post-Enter_USB connect handler (defined in usb4.h, included after). */
+static void usb4_connect_u4(void);
+
 /* VDM identity constants */
 #define VDM_VID_LO        0x4C   /* 0x174C low byte  */
 #define VDM_VID_HI        0x17   /* 0x174C high byte */
@@ -253,10 +256,17 @@ static void pd_handle_enter_usb(void) {
     usb4_mode_entry_commit();                     /* d78a: 92E1=0x10 if 0x09F9.6 */
     PR(0x0AE2) = mode;
   } else if (mode == 2 && PR(0x07BC) == 0) {
-    /* USB4 requested + not in alt-mode: Accept and flag connect-pending. */
+    /* USB4 requested + not in alt-mode: Accept and flag connect-pending.
+     * Stock @0xA108-0xA11F: build Accept header (dd12), then iff cable_cur:
+     *   0x07BB=1 (connect-pending), print "[Enter_USB 4]"@0x229e, **0x07BA=1** (Connect_U4 gate).
+     * The prior handmade transcription set only 0x07BB and dropped 0x07BA — so the tail's
+     * `if (0x07BA) -> [Connect_U4] -> usb4_connect_u4()` never fired. 0x07BA is REQUIRED. */
     pd_tx_set_sop_header(0, 3);                   /* dd12: 0 VDO, MsgType 3 = Accept */
-    if (cable_cur) PR(0x07BB) = 1;                /* connect-pending */
-    uart_puts("[Enter_USB4]");
+    if (cable_cur) {
+      PR(0x07BB) = 1;                             /* connect-pending */
+      uart_puts("[Enter_USB 4]");
+      PR(0x07BA) = 1;                             /* a11f: Connect_U4 gate (WAS MISSING) */
+    }
   } else {
     /* Reject (mode not USB4 / wrong state). */
     pd_tx_set_sop_header(0, 4);                   /* dd12: MsgType 4 = Reject */
@@ -264,6 +274,18 @@ static void pd_handle_enter_usb(void) {
 
   PR(0x07C4) = 2;                                 /* 95e4: control reply length */
   pd_tx_commit_engine();                          /* e1c6 */
+
+  /* Stock tail @0xA167: after sending Accept, if the Connect_U4 gate (0x07BA) is set, print
+   * "[Connect_U4]" and (when 0x07ED==0) run the USB4 connect handler @0xA3F5, which drives the
+   * sideband (b230 flip + sb_block_init) + tunnel route setup. This is the PD->USB4 handoff. */
+  if (PR(0x07BA) != 0) {
+    uart_puts("[Connect_U4]");
+    if (PR(0x07ED) != 0) {
+      PR(0x07ED) = 0;                             /* a17c: one-shot suppress, then return */
+    } else {
+      usb4_connect_u4();                          /* a17f -> 0xA3F5 (SB/tunnel bring-up) */
+    }
+  }
 }
 
 /* ---------- VDM TX CC strobe + commit (stock @0x9BBF tail) ----------
