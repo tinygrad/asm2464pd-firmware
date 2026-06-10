@@ -46,6 +46,9 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
 #include "i2c.h"
+#include "pd.h"
+#include "pd_dispatch.h"
+#include "vdm.h"
 
 /* Hardware status packet */
 typedef struct {
@@ -449,8 +452,16 @@ void int0_isr(void) __interrupt(0) {
   }
 }
 
+/* INT1 / EX1 (vector 0x13, wired by crt0.s): the PD / USB4 / system interrupt aggregate
+ * (C806/C80A/EC06). For this milestone we service only the PD-RX source (C80A bit6). DPX is
+ * forced to 0 so the PD MMIO accesses hit bank 0 even if we preempted a DPX=1 window. */
 void int1_isr(void) __interrupt(1) {
-  uart_puts("[int1]\n");
+  uint8_t saved_dpx = DPX;
+  DPX = 0x00;
+  if (XDATA_REG8V(0xC80A) & 0x40) {
+    pd_rx_isr();
+  }
+  DPX = saved_dpx;
 }
 
 void main(void) {
@@ -477,13 +488,29 @@ void main(void) {
   // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
   usb_init_controller(0);
 
-  // enable interrupts
+  // USB4/PD keystone: present a PD-capable Type-C attach + arm the PD engine so the host
+  // engages USB-PD. Must run before interrupts are enabled (so a Source_Cap can be RX'd).
+  pd_keystone_init();
+
+  // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
   i2c_init();
   ina231_init();
 
+  // Milestone 1: prompt the host into PD with periodic Hard Resets until it engages
+  // (pd_seen is set by the PD-RX ISR on the first received message), then just observe.
+  uint8_t kicks = 0;
   while (1) {
-    // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
+    sleep(500);
+    uart_puts("[U ");
+    uart_puthex(XDATA_REG8V(0xE302)); uart_putc(':');   /* USB4 link-mode */
+    uart_puthex(XDATA_REG8V(0xC80A)); uart_putc(':');   /* PD/USB4 int status (bit6=PD) */
+    uart_puthex(XDATA_REG8V(0xE40F)); uart_putc(':');   /* PD RX event */
+    uart_puthex(pd_cc_timeout); uart_puts("]\n");       /* 1 = a CC cmd wait timed out */
+    if (!pd_seen && kicks < 60) {
+      pd_drive_hard_reset();
+      kicks++;
+    }
   }
 }
