@@ -681,12 +681,13 @@ void main(void) {
   // crt0's stack no longer overlaps live globals on the deep INT1 connect path. XDATA is NOT cleared
   // by crt0 (which only zeroes IRAM), so seed them here explicitly. All start at 0 except the
   // [===SB Con===] print budget (=6).
-  { uint8_t z; for (z = 0; z <= (0x8817 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
+  { uint8_t z; for (z = 0; z <= (0x8818 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
   sb_con_print_budget = 6;
   sb_eaac_print_budget = 6;   /* [EAAC] dump budget (sb_router.h @0x8815) */
   sb_af38_print_budget = 6;   /* [AF38] dump budget (sb_router.h @0x8816) */
   sb_af38_force_budget = 0;   /* PROBE off by default (HW-answered: host doesn't respond to af38 TX);
                                * set =8 to re-run the chicken-and-egg test (sb_router.h @0x8817) */
+  u4lb_edf5_print_budget = 6; /* [EDF5] route-query dump budget (usb4_lanebond.h @0x8818) */
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;

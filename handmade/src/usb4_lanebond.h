@@ -59,6 +59,94 @@ static void u4lb_eb62(uint8_t p1, uint8_t p2) {
 /* (Instrumentation flags removed to save DSEG/IRAM; the UART markers [ConnRout]/[u4lb:S4]/[u4lb:S5]
  * + the [SB P0x] prints already show how far the FSM walks.) */
 
+/* [EDF5] dump budget (XDATA, seeded in main()). */
+static volatile uint8_t __xdata __at(0x8818) u4lb_edf5_print_budget;
+
+/* ====================================================================================
+ * edf5 / e2b9 (CODE_BANK1::edf5 -> e2b9) — THE DROPPED DEVICE->HOST SB-TRANSPORT ROUTE-QUERY.
+ *
+ * THIS IS THE TRIGGER THAT MAKES THE HOST START POSTING THE CONNECTION-ROUTING DESCRIPTOR.
+ * Stock's cm_conn_routing_setup (a7de) at FSM state 0x0758==0x10 calls edf5(); handmade DROPPED it
+ * and only bumped 0x0758=0x11 (the comment wrongly claimed "0x0758=0x11 is the load-bearing effect").
+ * The REAL load-bearing effect is e2b9(R7=5,R5=7,R3=5,R2=4): it builds a small SB-transport TX
+ * descriptor, writes SB[0x15]=5 (the SB-transport TX COMMAND), and TRIGGERS the transport via d5da.
+ * That device->host message is what tells the host CM "router ready, send the routing descriptor",
+ * so the host then HW-DMA-fills the 0x2a00 RX plane with the 0x0C descriptor -> cd3f/eaac -> 0x0777
+ * -> the [ConnRout] confirm passes. Without it the host posts NOTHING (0x2a00 RX stays all-zeros,
+ * SB[0x18]=00, SB[0x28].3/.4 never set) -- exactly the observed wall.
+ *
+ * edf5 (CODE_BANK1::edf5, byte-exact disasm edf5-ee10):
+ *   if (0x0719 != 0) return;          // a route-query is already in flight (token), don't re-send
+ *   0x0AAB = 0;  e2b9(R7=5,R5=7,R3=5,R2=4);   // SEND it
+ * e2b9 (CODE_BANK1::e2b9, byte-exact disasm e2b9-e304):
+ *   0xAA8=R7(=5); 0xAA9=R5(=7); 0xAAA=R3(=5);
+ *   d4cd();                                   // sb_transport_substate_poll (drain pending edges)
+ *   997e(0xAA9):  SBTX[0] = 0xAA9 (=7)        // TX-plane byte 0
+ *   A=0xAAB(=0); 9923(A, 0xAAA): SBTX[1] = (0xAAA(=5) | A<<7) = 5;  returns A(=0) -> JZ branch:
+ *     9695(): A = SB[0x0C];  A = (A & 0x80) | 0x08;  SBTX[1] = A   // overwrite byte 1 w/ status|8
+ *   96f7(0xAA8 -> R1=0x15):  SB[0x15] = 0xAA8 (=5)   // THE SB-TRANSPORT TX COMMAND
+ *   d5da(0):  trigger (SB[0x10]=1, wait SB[0x2C].2)  // HW transport send
+ *   97ef():  CCD9=4; CCD9=2;   then CCD9=(2-1)=1;  0x0719 = 1   // set the in-flight token
+ * The token 0x0719 is cleared by eda0 (0x0775!=0 path) once the host's descriptor arrives, which
+ * re-allows the confirm body / a fresh query.
+ *
+ * STACK: runs in the SUPER-LOOP (cb10->e672->cm_conn_routing_setup), never the a066/INT1 ISR.
+ * d5da's stock busy-poll on SB[0x2C].2 is bounded here so the super-loop can't hang (same pattern
+ * as sb_af38_descriptor_response). ==================================================================
+ */
+static uint8_t u4lb_edf5_route_query(void) {
+  uint8_t b1;
+  if (PR(0x0719) != 0) return 0;               /* edff-ee01: in-flight token set -> R7=0, don't re-send */
+
+  PR(0x0AAB) = 0;                              /* ee04-ee08: 0x0AAB = 0 */
+  /* ---- e2b9(R7=5, R5=7, R3=5, R2=4) ---- */
+  PR(0x0AA8) = 5;                              /* e2b9-e2bd: 0xAA8 = R7 = 5 (-> SB[0x15] opcode) */
+  PR(0x0AA9) = 7;                              /* e2be-e2c0: 0xAA9 = R5 = 7 (-> SBTX[0]) */
+  PR(0x0AAA) = 5;                              /* e2c1-e2c3: 0xAAA = R3 = 5 (-> SBTX[1] base) */
+  sb_transport_substate_poll();                /* e2c4: d4cd (drain pending SB[0x28].3 edges) */
+
+  SBTX_WR(0, PR(0x0AA9));                       /* 997e: SBTX[0] = 0xAA9 (=7) */
+  /* 9923(A=0xAAB(=0), 0xAAA(=5)): SBTX[1] = 5; returns 0 -> JZ branch (e2d7) */
+  SBTX_WR(1, (uint8_t)(PR(0x0AAA) | ((PR(0x0AAB) & 1) << 7)));   /* = 5 */
+  /* JZ taken (9923 returned 0): 9695()=SB[0x0C]; (&0x80)|8; overwrite SBTX[1] */
+  b1 = (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08);  /* e2e3-e2e8 */
+  SBTX_WR(1, b1);                               /* r3_write_dispatch(b1, 0x2900+1) */
+
+  SB_WR(0x15, PR(0x0AA8));                       /* 96f7: SB[0x15] = 0xAA8 (=5) -- TX COMMAND */
+
+  /* ---- d5da(0): the SB-transport TX trigger (byte-faithful CODE_BANK1::d5da, bounded poll) ---- */
+  { uint8_t tx_done;
+    PR(0x0AAC) = 0;                              /* d5dd: 0x0AAC = R7(=0) (param!=1 -> skip 96cf/97e8) */
+    P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));  /* d5ea 9777: P1[0x0100] &= 0xFE (NOT SB[0x00]) */
+    SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));  /* d5f2 98c7(R2=0x28,R1=4): SB[0x04] clr bit1 */
+    SB_WR(0x10, 0x01);                           /* d5f9: SB[0x10] = 1 (TX go) */
+    /* d600 poll: wait SB[0x2C].2 (TX complete) */
+    { uint16_t g = 0; while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { } }
+    tx_done = (uint8_t)((SB_RD(0x2C) >> 2) & 1);
+    SB_WR(0x2C, 0x04);                           /* d60d 9799(4): W1C SB[0x2C].2 */
+    phy_cc10_cmd(1, 0, 0x0B);                    /* d614-d61a e80a(subcmd=1,cc12=0,cc13=0x0b) */
+    SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));  /* d61d 96ee(0x0f): SB[0x0F] &= 0xFE */
+    /* d627: if 0x0AAC==0 (our case) zero the 0x2900 tail when SB[0x0C]>6 -- omitted (descriptor short) */
+    (void)tx_done;
+  }
+
+  /* 97ef + tail: CCD9 strobe, set the in-flight token 0x0719 = 1 */
+  PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02; PR(0xCCD9) = 0x01;   /* 97ef + DEC A tail */
+  PR(0x0719) = 0x01;                             /* e300-e303: 0x0719 = 1 (in-flight token) */
+
+  if (u4lb_edf5_print_budget) {
+    u4lb_edf5_print_budget--;
+    uart_puts("\r\n[EDF5 sb15="); uart_puthex(SB_RD(0x15));
+    uart_puts(" tx="); { uint8_t i; for (i = 0; i < 4; i++) uart_puthex(SBTX_RD(i)); }
+    uart_puts(" sb2c="); uart_puthex(SB_RD(0x2C));
+    uart_puts(" sb18="); uart_puthex(SB_RD(0x18));
+    uart_puts(" sb28="); uart_puthex(SB_RD(0x28));
+    uart_puts(" 719="); uart_puthex(PR(0x0719));
+    uart_puts("]\r\n");
+  }
+  return 1;                                      /* ee0e: R7 = 1 (a query was just sent) */
+}
+
 /* ====================================================================================
  * cm_conn_routing_setup (CODE_BANK1::a7de) — [ConnRout] connection-routing FSM (state 0x06ED==3).
  * FSM on 0x0758 (state: 0x10/0x11/0x00). On the confirm path it prints [ConnRout]@0x2004 and writes
@@ -76,8 +164,15 @@ static void u4lb_eb62(uint8_t p1, uint8_t p2) {
 static void u4lb_cm_conn_routing_setup(void) {
   uint8_t st = PR(0x0758);
   if (st == 0x10) {
-    /* a800: edf5(0,3) sub-confirm then 0x0758=0x11. edf5 gated on 0x0719==0 -> e2b9(..,5) banked
-     * sideband op; reproduced as the state advance (the load-bearing effect is 0x0758=0x11). */
+    /* a7eb-a800: edf5() then 0x0758=0x11. edf5 (CODE_BANK1::edf5) is the DEVICE->HOST SB-TRANSPORT
+     * ROUTE-QUERY (-> e2b9(..,5) -> SB[0x15]=5 + d5da TX) that ELICITS the host to post the
+     * connection-routing descriptor into the 0x2a00 RX plane. handmade had DROPPED it (only the
+     * 0x0758=0x11 advance) -> the host never started posting -> 0x0777 stayed 0x55, state-3 stalled.
+     * Now wired faithfully: edf5 sends the query (gated by the 0x0719 in-flight token) and returns
+     * R7=1 only when it actually sent; a7f5 advances to 0x11 ONLY then (else stays at 0x10 to retry).
+     * At 0x11, eda0 watches 0x0775 (the host's posted descriptor) -> clears 0x0719 -> on 0x0777!=0x0C
+     * it loops back to 0x10 and edf5 re-queries. This is the query/response retry loop. */
+    if (u4lb_edf5_route_query() != 1) return;    /* a7f1-a7f4: edf5 R7!=1 -> stay at 0x10 */
     PR(0x0758) = 0x11;
     return;
   }
