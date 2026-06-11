@@ -30,13 +30,25 @@
  *   0x072D                     : Lane-Bonded flag (set by eed6)
  */
 
-/* phy_cc10_cmd_wait is defined in boot_phy.h (included AFTER this file); forward-declare it for
- * sb_con_consequence's e80a(0,0x15,2) call. */
+/* phy_cc10_cmd / phy_cc10_cmd_wait are defined in boot_phy.h (included AFTER this file);
+ * forward-declare them for sb_con_consequence's tight-bounded PHY-settle (stock dea1 e80a call). */
 static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
+static void phy_cc10_cmd(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
 
 /* Print budget for the [===SB Con===] edge so the C80A.5 re-assert can't saturate the UART and
  * starve the super-loop diagnostics. The functional W1C/consequence still runs every edge. */
 static volatile uint8_t __xdata __at(0x880C) sb_con_print_budget;   /* IRAM-HEADROOM FIX: relocated to XDATA; seeded =6 in main() */
+
+/* SESSION 2026-06-11i DEADLOCK-BREAK: the Intel MTL TB4 host HOLDS connect (SB[0x2C].0=1, level)
+ * after [SB Init] until it sees [ConnRout]. C80A.5 is level -> INT1 re-fires on every IRET ->
+ * the super-loop gets <32 iterations in 18s (HW-confirmed: [HB] never prints after [SB Init]) ->
+ * cb10->e672->[ConnRout] (the thing that would release the host) never runs = deadlock. Stock's
+ * loop is NOT starved because its connect clears. To break the deadlock the FIRST connect
+ * consequence (after arming the FSM 0x06ED=3 in the ISR) requests the super-loop to MASK IE_EX1
+ * for ONE pumped window: with INT1 off the loop runs cb10->e672->[ConnRout]/[SB P04] uninterrupted,
+ * the host releases connect (C80A.5 de-asserts), then the loop re-enables IE_EX1 so the next
+ * connect/lane events are serviced. Set in the ISR; consumed+cleared by the super-loop. */
+static volatile uint8_t __xdata __at(0x8813) sb_ex1_mask_pending;
 
 /* RE-AUDIT chicken-and-egg fix: the Intel MTL TB4 host raises C80A.5 (SB-router connect) but NEVER
  * drives the INT0 link-events (0x9101/0x91D1/0x9302), so c9a8 -> bank0_8a89 (the USB4 lane-MODE
@@ -181,6 +193,24 @@ static void sb_db7a_route_arm(void) {
  * runs e80a(0,0x15,2), sets page1 0x0100 bit6, sets 0x06EC=1 (arms the per-loop cb10 advance), and
  * runs db7a (tunnel-route arm). Transcribed verbatim from CODE_BANK1::dea1. ---- */
 static void sb_con_consequence(void) {
+  /* SESSION 2026-06-11i STORM ROOT-CAUSE (HW-confirmed via the [a66 ...] ISR probe): the Intel MTL
+   * TB4 host HOLDS the connect (SB[0x2D].0=0, SB[0x2C].0=1) the WHOLE window after [SB Init] and only
+   * releases it once it sees [ConnRout] progress. C80A.5 == SB[0x2C].0 is LEVEL, so a066's connect
+   * branch re-fires the heavy dea1 on EVERY INT1 -> the super-loop NEVER gets a single iteration
+   * (heartbeat [HB] printed at boot, NEVER after [SB Init]) -> the FSM (cb10->e672->ConnRout) that
+   * would release the host never runs = deadlock. STOCK does the heavy dea1 ONCE (its SB[0x2C].0
+   * write lands / connect clears) then a066 returns fast so the loop pumps [ConnRout].
+   *
+   * FIX (faithful, stock semantics + GOFWD plan opt-b/c): run the heavy consequence (SB RMW block +
+   * the blocking PHY-cmd wait + db7a route-arm) exactly ONCE per connect session, edge-gated on
+   * 0x06EC. On the re-asserted edges only the light SB[0x2C]++ / SB[0x66] W1C (already done in the
+   * a066 connect branch BEFORE this call) runs and we RETURN FAST -> the super-loop gets cycles ->
+   * cb10->e672 dispatches [ConnRout] -> the host releases connect -> C80A.5 de-asserts. Also ARM the
+   * lane-bond FSM (0x06ED=3, 0x0758=0x10, width snapshot) HERE in the ISR -- exactly what stock's
+   * db7a TAIL does (eb62(0,3)+98ec, which handmade had DROPPED to the now-starved super-loop). Bare
+   * XDATA stores (no UART LCALLs) so they add ~0 stack on the sp=0x6B INT1 connect path. */
+  if (PR(0x06EC)) return;                       /* heavy consequence already done this session -> fast return */
+
   if (P1_RD(0x0109) & 0x01) {                 /* 989b: page1 0x0109.0 lane-bond -> per-chan arm */
     SB_CLR(0x28, 0x01);                        /* 98b7+973d per-channel arm (reproduced) */
   }
@@ -190,12 +220,35 @@ static void sb_con_consequence(void) {
   SB_WR(0x01, (SB_RD(0x01) & 0xBF) | 0x40);   /* SB[0x01] set bit6 */
   SB_WR(0x00, (SB_RD(0x00) & 0xEF) | 0x10);   /* SB[0x00] set bit4 */
   SB_WR(0x00, SB_RD(0x00) & 0xFE);            /* SB[0x00] clr bit0 */
-  phy_cc10_cmd_wait(0, 0x15, 2);              /* e80a(0,0x15,2) */
+  /* STOCK dea1 @CODE_BANK1::dee2-dee8 sets R5=0x15(cc13), R4=0x00(cc12), R7=0x02(subcmd) then
+   * LCALL 0x051b -> bank0 e80a (phy_cmd_cc10_and_wait): RE'd convention phy_cc10_cmd_wait(subcmd=R7,
+   * cc12=R4, cc13=R5) -> the correct command is (subcmd=2, cc12=0, cc13=0x15). (The pre-fix
+   * (0, 0x15, 2) was SCRAMBLED.) Tight-bound the poll so even a non-ack can't monopolize the ISR. */
+  phy_cc10_cmd(2, 0, 0x15);                   /* STOCK dea1 dee2-dee8: subcmd=2,cc12=0,cc13=0x15 */
+  { uint16_t g = 0; while (!((XDATA_REG8V(0xCC11) >> 1) & 1) && ++g < 0x0400); }
+  XDATA_REG8(0xCC11) = 0x02;                   /* W1C the PHY-cmd event (e80a tail) */
   P1_WR(0x0100, (P1_RD(0x0100) & 0xBF) | 0x40);  /* page1 0x0100 set bit6 */
   PR(0x06EC) = 1;                              /* *** the dropped arm: gates the per-loop cb10 *** */
   sb_db7a_route_arm();                         /* db7a: tunnel-route arm */
+  /* db7a TAIL = eb62(0,3) + 98ec() (stock CODE_BANK1::db7a). Reproduce its NET XDATA effect with
+   * BARE stores (no UART -> safe on the stack cliff): 0x06ED=3 (FSM state-3 = [ConnRout] entry),
+   * 0x0758=0x10 (cm_conn_routing_setup sub-FSM entry), and the 98ec lane-width snapshot
+   * 0x0768=CCE4 / 0x0769=CCE5 so b0b4's width gate diffs a real value (not uninit 0x55). The
+   * super-loop's `if(0x06ED==0)` first-arm + [LB arm] print is now redundant (kept harmless). */
+  PR(0x06ED) = 3;                              /* eb62(0,3): FSM -> state 3 (ConnRout) */
+  PR(0x0758) = 0x10;                           /* 98ec: cm_conn_routing_setup sub-FSM entry */
+  PR(0x0768) = PR(0xCCE4);                      /* 98ec: lane-width snapshot hi (GAP1) */
+  PR(0x0769) = PR(0xCCE5);                      /* 98ec: lane-width snapshot lo (GAP1) */
   /* drive bank0_8a89 from the super-loop ONCE (the connect edge re-fires; we want one drive). */
   if (!sb_8a89_done) sb_run_8a89_pending = 1;
+  /* DEADLOCK-BREAK: the C80A.5 storm is so tight the super-loop never runs even ONE iteration after
+   * [SB Init] (HW: deferred mask-request was never consumed). So MASK IE_EX1 HERE in the ISR, right
+   * after arming the FSM (0x06ED=3) -- on this IRET the storm stops and the super-loop finally runs
+   * cb10->e672->[ConnRout]. The loop re-enables IE_EX1 (sb_ex1_mask_pending==2 path) once the FSM
+   * advances past state-3, so subsequent connect/lane events are serviced. IE is the 8051 SFR
+   * (in scope from main.c); EX1 is bit2. */
+  sb_ex1_mask_pending = 2;                     /* 2 = masked, loop should pump then unmask */
+  IE &= (uint8_t)~0x04;                        /* mask IE_EX1 now (stop the storm on IRET) */
 }
 
 /* ---- eed6: post-[Lane Bonded] consequence. 0x072D=1; eeee (SB[0xC9]=0xFF arm + page1 0x01xx). ---- */

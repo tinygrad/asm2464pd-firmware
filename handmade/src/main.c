@@ -673,7 +673,7 @@ void main(void) {
   // crt0's stack no longer overlaps live globals on the deep INT1 connect path. XDATA is NOT cleared
   // by crt0 (which only zeroes IRAM), so seed them here explicitly. All start at 0 except the
   // [===SB Con===] print budget (=6).
-  { uint8_t z; for (z = 0; z <= (0x8812 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
+  { uint8_t z; for (z = 0; z <= (0x8814 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
   sb_con_print_budget = 6;
 
   // enable interrupts (EX1 = PD/USB4 INT1)
@@ -687,6 +687,15 @@ void main(void) {
   uint8_t kicks = 0;
   uint8_t sb_diag_count = 0;
   while (1) {
+    /* DEADLOCK-BREAK (SESSION 2026-06-11i): the C80A.5 storm starves this loop SO hard it never ran a
+     * single iteration after [SB Init] (HW-confirmed). So the ISR's FIRST connect consequence now
+     * masks IE_EX1 itself (sb_ex1_mask_pending=2) and the storm stops on that IRET, letting THIS loop
+     * finally run. Print a marker the first time we observe the masked state. The loop pumps the armed
+     * FSM (0x06ED=3 -> cb10->e672->[ConnRout]) below, then re-enables IE_EX1 once it advances. */
+    if (sb_ex1_mask_pending == 2 && !XDATA_REG8V(0x8814)) {
+      XDATA_REG8V(0x8814) = 1;
+      uart_puts("[EX1masked 6ed="); uart_puthex(XDATA_REG8V(0x06ED)); uart_puts("]\n");
+    }
     /* ===== FIX#3 (GOFWD): FSM-advance HOISTED to the TOP of the loop, before any delay/prints =====
      * Stock's super-loop (main_boot_and_superloop@0x2FB4) runs `if((0x09F9&0x83)&&0x06EC){EA=0;cb10();
      * ...EA=1;}` FIRST, delay-free and UART-free, so cb10->e672->[ConnRout]->b0b4 runs within us of the
@@ -721,6 +730,17 @@ void main(void) {
        * 8a89-fallback threshold; reset the counter as soon as it advances. */
       if (XDATA_REG8V(0x06ED) == fsm_before) { if (fsm_stall < 0xFF) fsm_stall++; }
       else                                   { fsm_stall = 0; }
+      /* DEADLOCK-BREAK: while IE_EX1 is masked (sb_ex1_mask_pending==2) keep pumping the armed FSM with
+       * the storm suppressed. RE-ENABLE IE_EX1 only once the FSM has actually ADVANCED past state-3
+       * (0x06ED != 3 -> [ConnRout] confirmed and the engine moved on to b0b4/tunnel), at which point we
+       * need the SB-router lane-bond/CL0 events again. If the FSM is stuck at state-3 (the host
+       * connect-descriptor gate 0x0777!=0x0C -- host-driven per USB4_GOFWD_PLAN B#4), KEEP EX1 masked
+       * so the loop stays alive and keeps pumping rather than re-starving on the storm. */
+      if (sb_ex1_mask_pending == 2 && XDATA_REG8V(0x06ED) != 3) {
+        sb_ex1_mask_pending = 3;              /* 3 = done (one-shot; do not re-mask) */
+        IE |= IE_EX1;
+        uart_puts("[EX1unmask 6ed="); uart_puthex(XDATA_REG8V(0x06ED)); uart_puts("]\n");
+      }
     }
 
     /* FIX#4 (GOFWD): bank0_8a89 drive DEFERRED off the connect critical path. In STOCK 8a89 is reached
@@ -869,6 +889,8 @@ void main(void) {
     uart_puts(" 75a=");          uart_puthex(XDATA_REG8V(0x075A));
     uart_puts(" 765=");          uart_puthex(XDATA_REG8V(0x0765));   /* GAP2 connect-present latch */
     uart_puts(" 768=");          uart_puthex(XDATA_REG8V(0x0768));   /* GAP1 width snapshot hi */
+    uart_puts(" 758=");          uart_puthex(XDATA_REG8V(0x0758));   /* cm_conn_routing_setup sub-FSM */
+    uart_puts(" 777=");          uart_puthex(XDATA_REG8V(0x0777));   /* host connect-descriptor confirm gate (==0x0C) */
     uart_puts(" sb18=");         uart_puthex(SB_RD(0x18));           /* host connect descriptor (cd3f) */
     uart_puts(" cce4=");         uart_puthex(XDATA_REG8V(0xCCE4));   /* HW lane-width counter */
     uart_puts("]\n");
