@@ -66,6 +66,64 @@ static void sb_write_c9_ack(uint8_t pos) {
 }
 
 /* ====================================================================================
+ * SB-PLANE-2 (page 0x2a/0x2b) accessor + the eaac block-copy 0x0777-populate (VERIFIED FIX #1).
+ *
+ * eaac (CODE_BANK1::eaac) is the SOLE writer of the 0x0777 connect-descriptor block that
+ * cm_conn_routing_setup's state-3 confirm gates on (a820 reads 0x0777, requires ==0x0C). handmade
+ * NEVER implemented it, so 0x0777 read uninit 0x55 and the state-3 FSM stalled. eaac is reached
+ * from cd3f's dispatch branch (cddc-cdf1) when (0x0752 & 0x60)!=0x60 AND (0x0752 & 0x01)==0 -- the
+ * branch the prior handmade cd3f-poll dropped (it only did the ebb5 (x&0x60)==0x60 branch).
+ *
+ * eaac body (VERIFIED byte-exact vs the raw disasm eaac-eada):
+ *   PR(0x0775) = 1;                                  (eaac-eab1)
+ *   for (i=0; i<0x40; i++)  PR(0x0777+i) = SBP2_RD(base+i);   (eab3-ead4)
+ *   97ef()  (CCD9 mailbox strobe 4 then 2)           (ead7)
+ * The SB source is read via the 0x0755 R3:R2:R1 tuple (loaded by cd3f @cd6e-cd83 from ROM 0x212d):
+ * for port0 the tuple = {R3=2 (plane -> DPX=1), R2=0x2a, R1=0x00} -> XDATA 0x2a00+i (SB-PLANE-2);
+ * for port1 = {2, 0x2b, 0x00} -> 0x2b00+i.  base hi/lo verified vs ROM 0x212d = {2a 00, 2b 00} +
+ * the 97a9/9a45/0de6 tuple math (R5=2 plane = 2 + carry(hi+lo) = 2). So SB-PLANE-2 = DPX=1 page 0x2a.
+ *
+ * NOTE: the 0x0777 gate VALUE (==0x0C) is HOST-DRIVEN -- the host/router writes the SB-plane-2
+ * descriptor into 0x2a00.. and eaac only RELAYS it into 0x0777. If the host posts 00 (like SB[0x18]),
+ * 0x0777 populates with 00 (gate stays != 0x0C) -- that is the host-driven wall, observable via the
+ * [EAAC] dump below. ==================================================================================== */
+
+/* SBP2: SB-PLANE-2 read at page-1 (DPX=1) 0x2a00+off (port0) / 0x2b00+off (port1). The plane is
+ * DPX=1 (R3=2) like SB_RD's 0x2800 base, just a different page byte. */
+#define SBP2_RD(base, off)   P1_REG8_rd((uint16_t)((base) + (off)))
+
+/* Print budget for the [EAAC] dump so the super-loop poll can't saturate the UART. Seeded =6 in
+ * main()'s 0x8800.. zero-init window (extended below). */
+static volatile uint8_t __xdata __at(0x8815) sb_eaac_print_budget;
+
+/* The eaac base hi byte, selected by the cd3f substate port (0x06F0): port0 -> 0x2a00, port1 ->
+ * 0x2b00. (cd3f/eaac both derive it from 0x06F0 via 9a3e + ROM 0x212d.) */
+static void sb_eaac_populate_0777(void) {
+  uint16_t base = (PR(0x06F0) == 0) ? 0x2a00u : 0x2b00u;   /* ROM 0x212d {2a00, 2b00}, plane DPX=1 */
+  uint8_t i;
+  PR(0x0775) = 1;                                          /* eaac-eab1: 0x0775 = 1 */
+  for (i = 0; i < 0x40; i++) {                             /* eab3-ead4: 0x0777+i = SBP2[base+i] */
+    PR(0x0777 + i) = SBP2_RD(base, i);
+  }
+  /* ead7 97ef: CCD9 mailbox strobe (4 then 2) */
+  PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02;
+
+  /* INSTRUMENT (the host-driven question): after the eaac copy, dump 0x0777, SB-plane-2
+   * [0x2a00..0x2a0F], 0x0775, 0x0758, 0x06ED. This tells us whether the Intel host posts a 0x0C
+   * descriptor (gate passes -> FSM advances) or 00 (host-driven wall like SB[0x18]). */
+  if (sb_eaac_print_budget) {
+    sb_eaac_print_budget--;
+    uart_puts("\r\n[EAAC 777="); uart_puthex(PR(0x0777));
+    uart_puts(" p2=");
+    for (i = 0; i < 0x10; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i)));
+    uart_puts(" 775="); uart_puthex(PR(0x0775));
+    uart_puts(" 758="); uart_puthex(PR(0x0758));
+    uart_puts(" 6ed="); uart_puthex(PR(0x06ED));
+    uart_puts("]\r\n");
+  }
+}
+
+/* ====================================================================================
  * CONNECT-PRESENT producer (GAP 2) — the cd3f connect-descriptor reader + ebb5 0x0765 setter.
  *
  * STOCK PATH (all CODE_BANK1, decompiled byte-exact): d4cd (sb_transport_substate_poll, called from
@@ -107,13 +165,21 @@ static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
     if (!(PR(0x0752) & 0x04)) return;        /* cda6-cda9: need 0x752.2 */
     if (PR(0x0752) & 0x10) return;           /* cdb3-cdb9 (port 0/1): 0x752.4 set -> no connect */
   }
-  if ((PR(0x0752) & 0x60) == 0x60) sb_set_connect_present_ebb5();  /* cdce-cdd9 */
+  /* cdce-cdf1 dispatch tail: (0x752&0x60)==0x60 -> ebb5 (0x0765=1); else if (0x752&1)==0 -> eaac
+   * (0x0777-populate, VERIFIED FIX #1). The two are mutually exclusive. */
+  if ((PR(0x0752) & 0x60) == 0x60) {
+    sb_set_connect_present_ebb5();         /* cdce-cdd9: LJMP ebb5 */
+  } else if ((PR(0x0752) & 0x01) == 0) {   /* cddc: JNB 0x752.0 -> cdf1 LCALL eaac */
+    sb_eaac_populate_0777();               /* eaac: populate 0x0777..0x07B6 from SB-plane-2 */
+  }
 }
 static void sb_connect_present_poll(void) {
   if (PR(0x0765)) return;                     /* already latched -> nothing to do */
   sb_cd3f_dispatch(0x28, 0x18);              /* L0 (port 0): 0x4E=SB[0x28], 0x752=SB[0x18] */
   if (PR(0x0765)) return;
-  sb_cd3f_dispatch(0x29, 0x19);              /* L1 (port 1): 0x4E=SB[0x29], 0x752=SB[0x19] */
+  sb_cd3f_dispatch(0x2A, 0x19);              /* L1 (port 1): 0x4E=SB[0x2A] (FIX #9: ROM 0x2135
+                                              * {28 28, 28 2a} -> port1=SB[0x2a] NOT SB[0x29]),
+                                              * 0x752=SB[0x19] (ROM 0x2125 {28 18, 28 19}) */
   if (PR(0x0765)) return;
   /* DOCUMENTED-EQUIVALENT (per the unblock spec): on the Intel MTL TB4 host the SB-router CONNECT
    * engages (C80A.5 / [===SB Con===] -> sb_con_consequence set 0x06EC=1) but the host never drives
@@ -211,23 +277,36 @@ static void sb_con_consequence(void) {
    * XDATA stores (no UART LCALLs) so they add ~0 stack on the sp=0x6B INT1 connect path. */
   if (PR(0x06EC)) return;                       /* heavy consequence already done this session -> fast return */
 
-  if (P1_RD(0x0109) & 0x01) {                 /* 989b: page1 0x0109.0 lane-bond -> per-chan arm */
-    SB_CLR(0x28, 0x01);                        /* 98b7+973d per-channel arm (reproduced) */
+  /* VERIFIED FIX #4: the SB-accessor TARGETS were mis-mapped. dea1's self-contained helpers force
+   * R1/R2 so the writes land on SB[0x00]/[0x04]/[0x01] and P1[0x0100], NOT SB[0x28]/[0x2C]. Verified
+   * byte-exact vs the raw dea1 disasm (dea1-defe) + the helper bodies (967e R3=2/R1=0; 97e5 R1 read+
+   * set bit0; 980d set bit7; 96c7=0be6 write; 9777 R1=0; with R2 carried 0x28 then 1):
+   *   prelude (989b/98b7/973d): if (P1[0x0109].0) { P1[0x0109] &= ~1; SB[0xD8] = 0x02; }
+   *   SB[0x00] |= 0x40 (967e+96c7); SB[0x00] = (x&0x7F)|0x80 (980d -- the dropped set-bit7 step)
+   *   SB[0x04] = (x&0xFE)|0x01 (97e5 R1=4)
+   *   SB[0x01] |= 0x40 (96c7 R1=1); SB[0x01] = (x&0x7F)|0x80 (980d -- dropped set-bit7)
+   *   P1[0x0100] = (x&0xEF)|0x10 (R2=1 R1=0 set bit4); P1[0x0100] &= ~1 (clr bit0)
+   *   phy_cc10_cmd(2,0,0x15)
+   *   P1[0x0100] |= 0x40 (9777 set bit6); P1[0x0100] = (x&0x7F)|0x80 (980d -- dropped set-bit7) */
+  if (P1_RD(0x0109) & 0x01) {                 /* dea1-dea4 989b: page1 0x0109.0 lane-bond */
+    P1_WR(0x0109, P1_RD(0x0109) & 0xFE);      /* dea7 98b7: P1[0x0109] &= ~1 */
+    SB_WR(0xD8, 0x02);                         /* deaa 973d: SB[0xD8] = 0x02 */
   }
-  SB_WR(0x28, (SB_RD(0x28) & 0xBF) | 0x40);   /* 967e: SB[0x28] set bit6 */
-  SB_WR(0x28, (SB_RD(0x28) & 0x7F) | 0x80);   /* sb_rmw_set_bit7_clr_others */
-  SB_WR(0x2C, 0x04);                           /* 97e5(4): SB[0x2C]=4 */
-  SB_WR(0x01, (SB_RD(0x01) & 0xBF) | 0x40);   /* SB[0x01] set bit6 */
-  SB_WR(0x00, (SB_RD(0x00) & 0xEF) | 0x10);   /* SB[0x00] set bit4 */
-  SB_WR(0x00, SB_RD(0x00) & 0xFE);            /* SB[0x00] clr bit0 */
-  /* STOCK dea1 @CODE_BANK1::dee2-dee8 sets R5=0x15(cc13), R4=0x00(cc12), R7=0x02(subcmd) then
-   * LCALL 0x051b -> bank0 e80a (phy_cmd_cc10_and_wait): RE'd convention phy_cc10_cmd_wait(subcmd=R7,
-   * cc12=R4, cc13=R5) -> the correct command is (subcmd=2, cc12=0, cc13=0x15). (The pre-fix
-   * (0, 0x15, 2) was SCRAMBLED.) Tight-bound the poll so even a non-ack can't monopolize the ISR. */
-  phy_cc10_cmd(2, 0, 0x15);                   /* STOCK dea1 dee2-dee8: subcmd=2,cc12=0,cc13=0x15 */
+  SB_WR(0x00, (SB_RD(0x00) & 0xBF) | 0x40);   /* dead-deb6 967e/96c7: SB[0x00] set bit6 */
+  SB_WR(0x00, (SB_RD(0x00) & 0x7F) | 0x80);   /* deb9 980d: SB[0x00] set bit7 (dropped step) */
+  SB_WR(0x04, (SB_RD(0x04) & 0xFE) | 0x01);   /* debc-dec0 97e5(R1=4): SB[0x04] set bit0 */
+  SB_WR(0x01, (SB_RD(0x01) & 0xBF) | 0x40);   /* dec1-deca 0bc8/96c7(R1=1): SB[0x01] set bit6 */
+  SB_WR(0x01, (SB_RD(0x01) & 0x7F) | 0x80);   /* decd 980d: SB[0x01] set bit7 (dropped step) */
+  P1_WR(0x0100, (P1_RD(0x0100) & 0xEF) | 0x10);  /* ded0-deda (R2=1,R1=0): P1[0x0100] set bit4 */
+  P1_WR(0x0100, P1_RD(0x0100) & 0xFE);        /* dedd-dedf 0be6: P1[0x0100] clr bit0 */
+  /* STOCK dea1 @dee2-dee8 sets R5=0x15(cc13), R4=0x00(cc12), R7=0x02(subcmd) then LCALL 0x051b ->
+   * bank0 e80a (phy_cmd_cc10_and_wait): phy_cc10_cmd(subcmd=R7,cc12=R4,cc13=R5) = (2,0,0x15).
+   * Tight-bound the poll so even a non-ack can't monopolize the ISR. */
+  phy_cc10_cmd(2, 0, 0x15);                   /* dee2-dee8: subcmd=2,cc12=0,cc13=0x15 */
   { uint16_t g = 0; while (!((XDATA_REG8V(0xCC11) >> 1) & 1) && ++g < 0x0400); }
   XDATA_REG8(0xCC11) = 0x02;                   /* W1C the PHY-cmd event (e80a tail) */
-  P1_WR(0x0100, (P1_RD(0x0100) & 0xBF) | 0x40);  /* page1 0x0100 set bit6 */
+  P1_WR(0x0100, (P1_RD(0x0100) & 0xBF) | 0x40);  /* deeb-def2 9777/96c7: P1[0x0100] set bit6 */
+  P1_WR(0x0100, (P1_RD(0x0100) & 0x7F) | 0x80);  /* def5 980d: P1[0x0100] set bit7 (dropped step) */
   PR(0x06EC) = 1;                              /* *** the dropped arm: gates the per-loop cb10 *** */
   sb_db7a_route_arm();                         /* db7a: tunnel-route arm */
   /* db7a TAIL = eb62(0,3) + 98ec() (stock CODE_BANK1::db7a). Reproduce its NET XDATA effect with
@@ -312,23 +391,31 @@ static void sb_channel_connect_service(void) {
      * connect FSM (the SB[0x15]=0x83 arm above is the load-bearing W1C). */
     return;
   }
-  if (n == 6) {                                /* special (c43b) */
+  if (n == 0) {                                /* special (c43b) -- VERIFIED FIX #3: n==0 NOT n==6
+                                                * (c428-c439 running subtraction nets A=n at c439
+                                                * JNZ -> the special block at c43b runs ONLY n==0). */
     if (PR(0x06ED) == 3) {
       if (PR(0x07FF) == 0x69) return;          /* c448 */
       /* c44a LJMP 0x059d (bank0 notify stub) */
       return;
     }
-    /* 0x06ED != 3: c44d read IDATA 0x50 (== hi here). if 0 -> da9f; else SB[0x5A]=0x40 + 9a31 mailbox */
-    if (hi == 0) return;                       /* c451 -> da9f (heavy reset; left as no-op arm) */
-    SB_WR(0x5A, 0x40);                         /* 9728: SB[0x5A]=0x40 */
-    if (!(P1_RD(0x0819) & 0x01)) {             /* 9a31: read 0x0819 & 0xFD, bit0 */
-      PR(0x074E) = 0; PR(0x074F) = 0;          /* 9874: zero per-lane CL0 latches */
+    /* 0x06ED != 3: c44d reads IDATA[0x50] (computed at c40c-c416 from the LO register SB[0x20..]:
+     * IDATA[0x50] = ((SB[port_lo] & 0x20) >> 5) & 7). if 0 -> da9f; else SB[0x5A]=0x40 + 9a31 mailbox.
+     * VERIFIED FIX #3: the gate is the IDATA-0x50 value, NOT `hi`. Since c40c reads R1=port_lo
+     * (= `lo` here), use lo bit5. (lo == ~hi by the c418 validate, so bit5 of lo != bit5 of hi.) */
+    if ((((lo & 0x20) >> 5) & 7) == 0) return; /* c44d/c451 -> da9f (heavy reset; left as no-op arm) */
+    SB_WR(0x5A, 0x40);                         /* c453/9728: SB[0x5A]=0x40 */
+    /* c458 9a31: A = PR(0x0819) & 0xFD (PLAIN XDATA 0x0819, DPX=0 -- NOT page1); c45b writes it back,
+     * c45c re-reads, JNB bit0 -> 9874 zero latches; else read SB[0xA0]. */
+    PR(0x0819) = PR(0x0819) & 0xFD;
+    if (!(PR(0x0819) & 0x01)) {
+      PR(0x074E) = 0; PR(0x074F) = 0;          /* c46b 9874: zero per-lane CL0 latches */
     } else {
       (void)SB_RD(0xA0);                        /* c462: read SB[0xA0] */
     }
     return;
   }
-  /* default (n in {0,2,4,7..}) -> return (c4a9) */
+  /* default (n in {2,4,6,7..}) -> return (c4a9) */
 }
 
 /* ====================================================================================

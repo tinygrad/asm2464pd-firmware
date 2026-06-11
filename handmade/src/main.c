@@ -574,6 +574,14 @@ void main(void) {
   // 0x04 and wrongly run usb_phy_tune/pcie_power_off/pcie_power_on — which clobber tunnel/PHY
   // state the USB4 CM owns. This build always targets USB4; pd_keystone_init re-asserts 0x87.
   XDATA_REG8V(0x09F9) = 0x87;
+  // FIX #8 (cap seeds): bank0_8d77 seeds 0x09F5/0x09F6/0x09F7/0x09F8 (DROM cap bits read by
+  // sb_rom_descriptor_load) for the normal USB4 path. NOTE: 0x09F4 is DELIBERATELY NOT seeded to 3
+  // here -- in stock, 8d77's initial 0x09F4=3 is OVERWRITTEN from the negotiated DP-alt field
+  // (0x07059>>4&3); handmade never runs that negotiation, and forcing 0x09F4=3 wrongly trips the
+  // usb4_connect_u4 a434 DP-alt sub-case (-> 0x09FA route 0x07->0x06 = a route REGRESSION, observed
+  // on HW). So leave 0x09F4 at its handmade default (the USB4-tunnel route path keeps 0x09FA=0x07).
+  XDATA_REG8V(0x09F5) = 1; XDATA_REG8V(0x09F6) = 1;
+  XDATA_REG8V(0x09F7) = 3; XDATA_REG8V(0x09F8) = 1; XDATA_REG8V(0x09FB) = 3;
 
   // usb_phy_tune()/pcie_power_off()/pcie_power_on() are handmade-only additions with ZERO stock
   // boot presence. In USB4 mode they corrupt tunnel/PHY regs the CM owns (B480/B430/E764/C659...),
@@ -673,8 +681,9 @@ void main(void) {
   // crt0's stack no longer overlaps live globals on the deep INT1 connect path. XDATA is NOT cleared
   // by crt0 (which only zeroes IRAM), so seed them here explicitly. All start at 0 except the
   // [===SB Con===] print budget (=6).
-  { uint8_t z; for (z = 0; z <= (0x8814 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
+  { uint8_t z; for (z = 0; z <= (0x8815 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
   sb_con_print_budget = 6;
+  sb_eaac_print_budget = 6;   /* [EAAC] dump budget (sb_router.h @0x8815) */
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
@@ -892,8 +901,16 @@ void main(void) {
     uart_puts(" 758=");          uart_puthex(XDATA_REG8V(0x0758));   /* cm_conn_routing_setup sub-FSM */
     uart_puts(" 777=");          uart_puthex(XDATA_REG8V(0x0777));   /* host connect-descriptor confirm gate (==0x0C) */
     uart_puts(" sb18=");         uart_puthex(SB_RD(0x18));           /* host connect descriptor (cd3f) */
+    uart_puts(" sb28=");         uart_puthex(SB_RD(0x28));           /* cd3f 0x4E source; bit4 gates eaac */
     uart_puts(" cce4=");         uart_puthex(XDATA_REG8V(0xCCE4));   /* HW lane-width counter */
     uart_puts("]\n");
+    /* HOST-DRIVEN 0x0777 question: does the host post the SB-plane-2 (0x2a00) connect descriptor
+     * that eaac relays into 0x0777? Dump SB-plane-2[0x2a00..0x2a0F] + 0x0775 from the super-loop
+     * (runs regardless of whether eaac's SB[0x28].4 gate opened) to see if the host posts 0x0C. */
+    { uint8_t k; uart_puts("[P2 775="); uart_puthex(XDATA_REG8V(0x0775));
+      uart_puts(" 2a=");
+      for (k = 0; k < 0x10; k++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + k)));
+      uart_puts("]\n"); }
     /* NOTE (FIX#3): the FSM-advance block, the deferred bank0_8a89 drive, and the deferred tunnel-up
      * were HOISTED to the TOP of this loop (before the delay + the diagnostic dumps above). The
      * diagnostics above now run ONLY when 0x06EC==0 (no connect in progress) because the loop did

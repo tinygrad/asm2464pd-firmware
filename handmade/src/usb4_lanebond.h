@@ -89,9 +89,23 @@ static void u4lb_cm_conn_routing_setup(void) {
   }
 
   /* st == 0x11: the main confirm body. */
-  /* eda0(): 0x0775/0x0719 housekeeping (clears 0x0775->0x0719=0; if 0x0719==2 ->0). */
-  if (PR(0x0775) != 0) { PR(0x0775) = 0; PR(0x0719) = 0; }
-  else if (PR(0x0719) == 0x02) { PR(0x0719) = 0; }
+  /* eda0() (VERIFIED FIX #2): it is NOT void -- it returns an R7 SELECTOR that gates the rest.
+   * Verbatim from CODE_BANK1::eda0 (eda0-edbc):
+   *   if (0x0775 != 0) { 0x0775=0; 0x0719=0; r7=0; }       (eda4..edad: the EVAL path)
+   *   else if (0x0719 == 2) { 0x0719=0; r7=2; }            (edb2..edb9: the route-special path)
+   *   else r7=1;                                           (edba: the IDLE path -- leave 0x0758)
+   * The caller (a82f) then: r7==2 -> 0x0758=0x10; return;  r7!=0 (==1) -> return (idle, 0x0758
+   * UNCHANGED); r7==0 ONLY -> evaluate the 0x0777 confirm gate. The prior handmade treated eda0 as
+   * void and ALWAYS fell through to the 0x0777 gate -> on the idle (r7==1) re-entries it wrongly
+   * re-stamped 0x0758=0x10 and never let the confirm body run. */
+  { uint8_t r7;
+    if (PR(0x0775) != 0)      { PR(0x0775) = 0; PR(0x0719) = 0; r7 = 0; }
+    else if (PR(0x0719) == 0x02) { PR(0x0719) = 0; r7 = 2; }
+    else                       { r7 = 1; }
+    if (r7 == 2) { PR(0x0758) = 0x10; return; }   /* route-special re-arm */
+    if (r7 != 0) { return; }                       /* idle: leave 0x0758 unchanged */
+    /* r7 == 0 ONLY: the EVAL path -> evaluate the host connect-descriptor confirm gate. */
+  }
 
   /* DAT_INTMEM_21 = param_2 (the mode); the live AMD path enters with mode 0. We follow the mode==0
    * branch (param_2==0): gate 0x0777==0x0C else 0x0758=0x10/ret. */
