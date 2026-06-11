@@ -64,8 +64,9 @@ static void u4c_e7ae_bounded(void) {
   while (((PR(0xC00E) & 0x07) != 0x00) && ++g < 0x0800);
 }
 
-/* indicates the engine ran (instrumentation, read from the super-loop) */
-static volatile uint8_t bank0_8a89_entered = 0;
+/* indicates the engine ran (instrumentation, read from the super-loop)
+ * IRAM-HEADROOM FIX: relocated to XDATA scratch (0x8800..); seeded in main(). */
+static volatile uint8_t __xdata __at(0x8811) bank0_8a89_entered;
 
 /* ==================================================================================== */
 /* bank0_8a89 @0x8A89 — verbatim. param = USB4 link mode (0=?,1=USB3.2-tunnel,2=USB4). */

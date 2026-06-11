@@ -102,7 +102,7 @@ static void usb4_connect_u4(void) {
 
 /* Sticky bitmap of USB4 INT sources seen (printed from the super-loop, not the ISR, to keep the
  * ISR short): bit0=C80A.5 SB, bit1=C80A.4 evt, bit2=EC06.0 routerop, bit3=C80A.0-3 tunnel. */
-static volatile uint8_t usb4_int_seen = 0;
+static volatile uint8_t __xdata __at(0x8809) usb4_int_seen;   /* IRAM-HEADROOM FIX: relocated to XDATA */
 
 /* M2: the SB-router event handler (a066) is implemented in sb_router.h and W1C-acks the C80A.5
  * source, so the int1 demux no longer needs the M1 one-shot latch (it can service every ISR
@@ -111,7 +111,7 @@ static volatile uint8_t usb4_int_seen = 0;
 static void sb_router_event_handler(void);
 
 /* Sticky accumulator of every C80A value seen in the ISR (catches a transient C80A.5). */
-static volatile uint8_t c80a_acc = 0;
+static volatile uint8_t __xdata __at(0x880A) c80a_acc;   /* IRAM-HEADROOM FIX: relocated to XDATA */
 
 /* ====================================================================================
  * cm_routerop_mailbox (CODE_BANK1::c0a5) — the EC06.0 config-space router-op dispatcher (RE-AUDIT

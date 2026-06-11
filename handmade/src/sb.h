@@ -413,7 +413,7 @@ static void u4c_bcd7_tail(void) {
 /* M1' diagnostic: set once the SB assert has run, so the super-loop can switch to the post-SB
  * E302-poll diagnostic (the un-W1C'd C80A.5 SB-router source storms INT1 and starves the loop
  * until the a066/M2 handler exists; the diagnostic masks EX1 to read the trained E302). */
-static volatile uint8_t sb_asserted = 0;
+static volatile uint8_t __xdata __at(0x880B) sb_asserted;   /* IRAM-HEADROOM FIX: relocated to XDATA */
 
 /* ============================ SB-assert entry (usb4_connect_u4 tail) ============================
  * The synchronous tail reached at 0xa51b/0xa51e after the route latch, gated on 0x07BA!=0.

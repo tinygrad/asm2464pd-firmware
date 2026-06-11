@@ -23,14 +23,15 @@
 /* Volatile MMIO accessor (polling loops must not be optimised away). */
 #define PR(a) XDATA_REG8V(a)
 
-/* Set once the host actually engages PD (a PD message is received). */
-static volatile uint8_t pd_seen = 0;
+/* Set once the host actually engages PD (a PD message is received).
+ * IRAM-HEADROOM FIX: persistent state relocated to XDATA scratch (0x8800..); seeded in main(). */
+static volatile uint8_t __xdata __at(0x8805) pd_seen;
 
 /* PD message dispatcher (defined in pd_dispatch.h, #included after pd.h). */
 static void pd_rx_message_dispatch(void);
 /* Set if any CC-controller command wait timed out (the CC engine isn't responding — most
  * likely the boot-time Type-C/CC PHY setup is still missing). Surfaced on the status line. */
-static volatile uint8_t pd_cc_timeout = 0;
+static volatile uint8_t __xdata __at(0x8806) pd_cc_timeout;
 
 #define PD_WAIT_LIMIT 0x4000u
 /* Bounded poll: spin until (PR(reg) & mask) matches `set` (1=wait-for-set, 0=wait-for-clear),
@@ -322,8 +323,8 @@ static void cc_ccf9_subdemux(void) {
 /* Instrumentation (decision-rule diagnostic): tick_seen counts C806.0 timer-tick entries;
  * cc_hit is a bitmask of which CC channels ever showed bit1 (1=CC23,2=CC81,4=CC91,8=CC99,
  * 0x10=CCD9,0x20=CCF9). Surfaced on the [U ...] status line. */
-static volatile uint8_t tick_seen = 0;
-static volatile uint8_t cc_hit = 0;
+static volatile uint8_t __xdata __at(0x8807) tick_seen;   /* IRAM-HEADROOM FIX: relocated to XDATA */
+static volatile uint8_t __xdata __at(0x8808) cc_hit;
 
 static void cc_pd_timer_tick(void) {
   tick_seen++;

@@ -12,7 +12,14 @@ CFLAGS += --no-xinit-opt
 
 # Memory model settings
 LDFLAGS = --code-loc 0x0000 --code-size 0x10000
-LDFLAGS += --xram-loc 0x0000 --xram-size 0x10000
+# IRAM-HEADROOM FIX (2026-06-11): relocate SDCC's auto-XDATA segment (XSEG: library long-math PARM
+# areas + the data-plane `static __xdata` scratch we moved out of IRAM) from 0x0000 to a free XDATA
+# window at 0x8820. At 0x0000 the XSEG collided with the chip's own XDATA CM state (0x0000-0x0BFF);
+# 0x8820 sits above the 0x8000-0x83FF PCIe-read DMA buffer + our fixed __at globals (0x8800-0x8811)
+# and below DESC_BUF@0x9E00 / the 0x9xxx-0xFxxx hardware registers. This (a) fixes the latent 0x0000
+# collision and (b) lets us pull data-plane locals out of DSEG so crt0 sp can drop (= more stack for
+# the deep USB4 INT1 SB-router connect path).
+LDFLAGS += --xram-loc 0x8820 --xram-size 0x1000
 LDFLAGS += --iram-size 0x100
 
 # Directories

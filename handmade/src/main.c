@@ -44,10 +44,19 @@ static void sleep(uint16_t milliseconds) {
   { uint32_t g = 0; while (!(REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && ++g < 4000000UL); }
 }
 
-static uint8_t is_usb2;
+/* IRAM-HEADROOM FIX (2026-06-11): the firmware's persistent state flags/counters are relocated
+ * out of internal-RAM (DSEG) into a free XDATA scratch window at 0x8800.. (above the 0x8000-0x83FF
+ * PCIe-read DMA buffer, below DESC_BUF@0x9E00). This shrinks DSEG so crt0's stack (sp=0x72) no
+ * longer OVERLAPS live globals, giving the deep nested INT1 SB-router connect path (a066 +
+ * bank0_8a89 + connect tail) a much larger, collision-free stack budget. As code grew (b0b4 Round A,
+ * connect-present poll) the stack overlapped+corrupted these globals on the connect path and the
+ * host's C80A.5 SB-connect silently stopped firing (rate fell 4/8 -> 3/8 -> ~0). Moving them to
+ * XDATA both frees DSEG bytes AND removes them from the stack-corruption zone. Each is __at a fixed
+ * address (no SDCC auto-XINIT) and explicitly seeded in main()'s boot zero-init block. */
+static uint8_t __xdata __at(0x8800) is_usb2;
 
 /* Streaming PCIe state — configured via 0xF0 control message */
-static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer */
+static uint32_t __xdata __at(0x8801) dma_dwords;    /* total dwords remaining for streaming transfer */
 
 
 #include "pcie_pio.h"
@@ -75,7 +84,9 @@ typedef struct {
 } hw_status_t;
 
 static void hw_status_read(__xdata hw_status_t *s) {
-  uint16_t shunt_raw = 0, bus_raw = 0;
+  /* IRAM-HEADROOM FIX: data-plane (I2C/INA, int0 path) scratch -> XDATA, off the int1 connect path. */
+  static __xdata uint16_t shunt_raw, bus_raw;
+  shunt_raw = 0; bus_raw = 0;
   (void)ina231_read_u16(INA231_REG_SHUNT, &shunt_raw);
   (void)ina231_read_u16(INA231_REG_BUS, &bus_raw);
   s->voltage_mv = (uint16_t)(((uint32_t)bus_raw * 125) / 100);               /* 1.25 mV/LSB */
@@ -648,6 +659,14 @@ void main(void) {
   // and clear it). It is uninitialised XDATA in handmade, so the FIRST connect can take the
   // suppress branch and never run the SB assert. Stock has it clear on the happy path -> force 0.
   XDATA_REG8V(0x07ED) = 0;
+
+  // IRAM-HEADROOM FIX (2026-06-11): the firmware's persistent state flags/counters were moved out
+  // of internal-RAM (DSEG) to XDATA scratch at 0x8800.. (see the declarations) to shrink DSEG so
+  // crt0's stack no longer overlaps live globals on the deep INT1 connect path. XDATA is NOT cleared
+  // by crt0 (which only zeroes IRAM), so seed them here explicitly. All start at 0 except the
+  // [===SB Con===] print budget (=6).
+  { uint8_t z; for (z = 0; z <= (0x8811 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
+  sb_con_print_budget = 6;
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;

@@ -36,7 +36,7 @@ static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
 
 /* Print budget for the [===SB Con===] edge so the C80A.5 re-assert can't saturate the UART and
  * starve the super-loop diagnostics. The functional W1C/consequence still runs every edge. */
-static volatile uint8_t sb_con_print_budget = 6;
+static volatile uint8_t __xdata __at(0x880C) sb_con_print_budget;   /* IRAM-HEADROOM FIX: relocated to XDATA; seeded =6 in main() */
 
 /* RE-AUDIT chicken-and-egg fix: the Intel MTL TB4 host raises C80A.5 (SB-router connect) but NEVER
  * drives the INT0 link-events (0x9101/0x91D1/0x9302), so c9a8 -> bank0_8a89 (the USB4 lane-MODE
@@ -44,8 +44,8 @@ static volatile uint8_t sb_con_print_budget = 6;
  * the SB-router CONNECT itself. So on [===SB Con===] we set this flag and the super-loop runs
  * bank0_c9a8(0) (gate now fully open: 0x09FA.2/0x0AF1.0/0x07E8 all set) to drive bank0_8a89 ONCE.
  * Deferred to the super-loop because 8a89 runs long PHY-lock waits unsafe inside the INT1 ISR. */
-static volatile uint8_t sb_run_8a89_pending = 0;
-static volatile uint8_t sb_8a89_done = 0;     /* set by the super-loop after the one-shot 8a89 run */
+static volatile uint8_t __xdata __at(0x880D) sb_run_8a89_pending;   /* IRAM-HEADROOM FIX: relocated to XDATA */
+static volatile uint8_t __xdata __at(0x880E) sb_8a89_done;     /* set by the super-loop after the one-shot 8a89 run */
 
 /* sb_write_c9_ack (0x9a5a): SB[0xC9] = (1 << pos) — W1C one connect bit. (a09c-a0a7 builds 1<<idx
  * via RLC then 0x9a5a writes it to SB[0xC9].) */
@@ -212,7 +212,7 @@ static void sb_lane_bonded_consequence(void) {
  * eb0a; if 0x09FA.1: (0x0B41 gate) pcie_downstream_link_bringup(0x0AEF); CA60 &= ~0x08; if 0x0AF1.0 04f3.
  * The downstream link bring-up == handmade pcie_power_on(). pcie_power_on() uses sleep()/long polls,
  * so we DEFER it to the super-loop (set sb_tunnel_up_pending) rather than run it inside the INT1 ISR. */
-static volatile uint8_t sb_tunnel_up_pending = 0;
+static volatile uint8_t __xdata __at(0x880F) sb_tunnel_up_pending;   /* IRAM-HEADROOM FIX: relocated to XDATA */
 static void sb_lane_bond_complete_tunnel_up(void) {
   sb_rom_descriptor_load();                  /* b7a4: re-seed the router DROM tables */
   if (PR(0x09FA) & 0x02) {                    /* 0x09FA.1 tunnel route */
@@ -432,7 +432,7 @@ static void sb_router_event_handler(void) {
  * [0xA1] read 0x07 (NOT CL0=2) and never change, and 0x072B/0x072C are seeded 0x07, so this advance
  * is a correct NO-OP here — the host stalls at SB-connect and the lanes never reach CL0. It is wired
  * faithfully so that IF a host ever drives the lanes to CL0, the advance fires. ==================*/
-static volatile uint8_t cb10_seen = 0;     /* sticky: did SB[0xA0]/[0xA1] ever change from the latch */
+static volatile uint8_t __xdata __at(0x8810) cb10_seen;     /* IRAM-HEADROOM FIX: relocated to XDATA; sticky: did SB[0xA0]/[0xA1] ever change */
 static void sb_cb10_lane_advance(void) {
   uint8_t a5b, lat;
   /* lane A: SB[0xA0] low nibble vs 0x072B */
