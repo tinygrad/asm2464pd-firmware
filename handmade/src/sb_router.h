@@ -89,8 +89,15 @@ static void sb_write_c9_ack(uint8_t pos) {
  * [EAAC] dump below. ==================================================================================== */
 
 /* SBP2: SB-PLANE-2 read at page-1 (DPX=1) 0x2a00+off (port0) / 0x2b00+off (port1). The plane is
- * DPX=1 (R3=2) like SB_RD's 0x2800 base, just a different page byte. */
+ * DPX=1 (R3=2) like SB_RD's 0x2800 base, just a different page byte. This is the SB-transport RX
+ * descriptor plane: HW-DMA-filled by the SB sideband engine from the host's connect descriptor.
+ * (Confirmed: NO firmware instruction writes R2=#0x2a -- the 0x2a00 plane is HW-latched only.) */
 #define SBP2_RD(base, off)   P1_REG8_rd((uint16_t)((base) + (off)))
+
+/* SB-PLANE "2" TX/response plane = page-1 (DPX=1) 0x2900 (af38 dest, R2=#0x29 in stock). This is
+ * the SB-transport TX descriptor plane the device builds to answer the host's connect descriptor. */
+#define SBTX_RD(off)         P1_REG8_rd((uint16_t)(0x2900u + (off)))
+#define SBTX_WR(off, v)      P1_REG8_wr((uint16_t)(0x2900u + (off)), (uint8_t)(v))
 
 /* Print budget for the [EAAC] dump so the super-loop poll can't saturate the UART. Seeded =6 in
  * main()'s 0x8800.. zero-init window (extended below). */
@@ -119,6 +126,140 @@ static void sb_eaac_populate_0777(void) {
     uart_puts(" 775="); uart_puthex(PR(0x0775));
     uart_puts(" 758="); uart_puthex(PR(0x0758));
     uart_puts(" 6ed="); uart_puthex(PR(0x06ED));
+    uart_puts("]\r\n");
+  }
+}
+
+/* ====================================================================================
+ * af38 (CODE_BANK1::af38) — THE DROPPED THIRD cd3f BRANCH: the device-side connect-descriptor
+ * RESPONSE builder + SB-transport TX trigger. Reached from cd3f when (0x0752&1)!=0 (and either
+ * (0x0752&0x40)==0 or ((0x0752>>1)&0xF)==0). Was entirely MISSING from handmade.
+ *
+ * WHAT IT DOES (verified byte-exact from the raw CODE_BANK1::af38 disasm af38-b0b3, with every
+ * forced-R3/R2/R1 paged accessor (0x0bc8 read / 0x0be6 write, R3=2 -> DPX=1) resolved to its
+ * explicit page-1 address; the small bank1 helper bodies were each disassembled at the BANK1
+ * overlay address (they shadow the bank0 bodies), NOT the bank0 listing the decompiler shows):
+ *
+ *   SRC plane (the 0x0755 tuple, loaded by cd3f from ROM 0x212d {2a 00,2b 00}+plane2): port0 =
+ *     page-1 0x2a00, port1 = 0x2b00 = SBP2_RD(base,off). This is the SAME plane eaac reads. It is
+ *     HW-DMA-filled by the SB sideband from the host descriptor (no firmware writes 0x2a00).
+ *   DST plane: page-1 0x2900 (R2=#0x29) = SBTX_RD/SBTX_WR(off). The SB-transport TX descriptor.
+ *   WORK buffer: plain XDATA 0x0800.. (DPX=0) = PR(0x0800+i). A scratch staging area.
+ *   ROM table: 0x06f2+DAT50 (976e: XDATA[0x0600 + (0xf2+A)]) = PR(0x06F2 + DAT50) (a length/width LUT).
+ *   ROM 0x21a1[DAT50] = a per-descriptor-type constant (DAT53).
+ *   SB[0x15] = the SB-transport TX COMMAND register (page-1 0x2815) -> SB_WR(0x15,..).
+ *   d5da(0) = the SB-transport TX TRIGGER (writes 0x0AAC=0, SB[0x04]=1, SB[0x10]=1, then a HW poll
+ *     on SB[0x2C].2). We reproduce its load-bearing arm + BOUND the HW poll (super-loop safety).
+ *
+ * NET EFFECT: af38 reads the host's connect descriptor (SRC[0]=DAT50 type, SRC[1]=DAT51/DAT52),
+ * echoes/transforms it into the 0x2900 TX plane (per-byte windowed copy between 0x2900 and 0x0800),
+ * writes the SB[0x15] TX command (= 0x0753 = the descriptor with bits 0,5 cleared), and TRIGGERS
+ * the SB-transport TX. This device->host SB response is what makes the host ADVANCE the connect
+ * handshake so the SB-transport HW then fills the 0x2a00 RX plane with the routing descriptor
+ * (0x0C) that eaac copies into 0x0777 -> [ConnRout] confirm passes.
+ *
+ * NOTE on the task's plane reconciliation: the unblock spec assumed "af38 WRITES the 0x2a00 plane
+ * eaac reads". The raw asm proves otherwise: af38 reads 0x2a00 (same as eaac) and writes the 0x2900
+ * TX plane + triggers the SB transport. So af38 feeds eaac INDIRECTLY (device->host TX -> host posts
+ * the routing descriptor into the HW-latched 0x2a00 RX -> eaac copies it), not by a direct plane
+ * write. This is the faithful behavior.
+ *
+ * STACK: like cd3f/eaac, this MUST run in the SUPER-LOOP, never the a066/INT1 ISR (the documented
+ * sp=0x6B stack cliff). It is called from sb_cd3f_dispatch which sb_connect_present_poll runs in
+ * the super-loop.  ==================================================================================== */
+
+/* ROM table CODE 0x21a1[0x12] (read_memory byte-exact) — the per-descriptor-type DAT53 base offset
+ * into the 0x0800 work buffer. Indices 0..0x11; 0xff = invalid type. */
+static __code const uint8_t sb_af38_rom21a1[0x12] = {
+  0x00,0x04,0xFF,0x08,0x0C,0xFF,0xFF,0xFF, 0x10,0x14,0x18,0xFF,0x19,0x1C,0xFF,0x20, 0xFF,0xFF
+};
+
+/* IRAM scratch the stock af38 uses (IDATA 0x4e-0x53). Use locals + a couple of statics to mirror
+ * exactly. DAT50=descriptor type byte, DAT51/52 = second byte split, DAT53 = ROM 0x21a1 const. */
+static volatile uint8_t __xdata __at(0x8816) sb_af38_print_budget;   /* seeded =6 in main() */
+static volatile uint8_t __xdata __at(0x8817) sb_af38_force_budget;   /* PROBE: forced-af38 one-shots (=8) */
+
+static void sb_af38_descriptor_response(void) {
+  uint16_t src = (PR(0x06F0) == 0) ? 0x2a00u : 0x2b00u;   /* 0x0755 tuple: port0=0x2a00, port1=0x2b00 */
+  uint8_t  dat50, dat51, dat52, dat53 = 0, r7, i;
+  uint8_t  desc752 = PR(0x0752);
+
+  /* af38-af3f: 0x0753 = 0x0752 & 0xDE (clear bits 0,5 -> the descriptor written to SB[0x15] TX cmd) */
+  PR(0x0753) = (uint8_t)(desc752 & 0xDE);
+
+  /* af40-af5a: read the host descriptor's first 2 bytes from the RX plane (HW-latched) */
+  dat50 = SBP2_RD(src, 0);                    /* DAT_50 = SRC[0] = descriptor type/len */
+  r7    = SBP2_RD(src, 1);                    /* SRC[1] */
+  dat51 = (uint8_t)(r7 & 0x7F);               /* DAT_51 */
+  dat52 = (uint8_t)(r7 & 0x80);               /* DAT_52 = the "direction" bit */
+
+  /* af5c-af6c: echo into the 0x2900 TX plane: DST[0]=DAT50, DST[1]=DAT52 */
+  SBTX_WR(0, dat50);
+  SBTX_WR(1, dat52);
+
+  /* af6d-af89: if DAT50 < 0x12: DST[1] |= ROM-LUT(0x06f2+DAT50); DAT53 = ROM_21a1[DAT50] */
+  if (dat50 < 0x12) {
+    uint8_t lut = PR((uint16_t)(0x06F2u + dat50));     /* 976e: XDATA[0x0600 + (0xf2+A)] */
+    SBTX_WR(1, (uint8_t)(SBTX_RD(1) | lut));
+    dat53 = sb_af38_rom21a1[dat50];                    /* ROM 0x21a1 (movc), embedded below */
+  }
+
+  if (dat52 == 0) {
+    /* ---- BRANCH A (afed-b017): RX-plane (0x2a00 SRC) -> 0x0800 work buffer ----
+     * af92: 0x0754 = 1. afed-b017: for i in [0..DAT51): R7 = SRC[2+i] (0x2a00 plane, reloaded via
+     * 9a38 each iter); work[0x0800 + DAT53 + i] = R7 (98fe = DPTR 0x0800+A). The af98-afe0 block
+     * computes a tighter cap (LUT/99b5 bounds) but on the happy path the loop bound is DAT51. */
+    PR(0x0754) = 1;
+    {
+      uint8_t n = dat51; if (n > 0x40) n = 0x40;
+      for (i = 0; i < n; i++) {
+        PR((uint16_t)(0x0800u + (uint8_t)(dat53 + i))) = SBP2_RD(src, (uint8_t)(2 + i));
+      }
+    }
+  } else {
+    /* ---- BRANCH B (b024-b094): 0x0800 work buffer -> RX/DST plane (the response payload) ----
+     * b024: 0x0754 = DAT51. b076-b094: for i in [0..DAT51): R7 = work[0x0800 + DAT53 + i];
+     * DST[2+i] (0x2900 plane via 99e7 = 0x2900 + (i+2)) = R7. (b01f d283 only if DAT50==8 -- a
+     * rare lane-bond sub-path; reproduced as the bounded copy, d283 itself is the [SB P03] helper
+     * gated on DAT50==8 which the routing descriptor is not.) */
+    PR(0x0754) = dat51;
+    {
+      uint8_t n = dat51; if (n > 0x40) n = 0x40;
+      for (i = 0; i < n; i++) {
+        SBTX_WR((uint8_t)(2 + i), PR((uint16_t)(0x0800u + (uint8_t)(dat53 + i))));
+      }
+    }
+  }
+
+  /* ---- b096 TAIL (the load-bearing TX trigger) ----
+   * b096-b0a5: SB[0x0D|0x0E] = (0x0754 + 8) | (SB[0x0C] & 0x80) -- a status/length byte on the SB
+   *   block (R2=0x28 in BOTH branches: A uses afaf R2=0x28 / afa8 DEC 0x29->0x28; B uses b030 R2=0x28).
+   *   The offset is port-selected: port0 -> SB[0x0D], port!=0 -> SB[0x0E] (b02d/b034 R1=0x0d/0x0e). */
+  {
+    uint8_t status = (uint8_t)((PR(0x0754) + 8) | (SB_RD(0x0C) & 0x80));
+    uint8_t soff   = (PR(0x06F0) == 0) ? 0x0D : 0x0E;   /* b02d: port0->0x0d else 0x0e */
+    SB_WR(soff, status);                       /* b09c-b0a3: status/length byte (TX ready) */
+    /* b0a6-b0ac: SB[0x15] = 0x0753 = THE SB-TRANSPORT TX COMMAND (descriptor w/ bits 0,5 cleared) */
+    SB_WR(0x15, PR(0x0753));
+  }
+
+  /* b0af-b0b1: d5da(0) = SB-transport TX trigger. Reproduce its load-bearing arm + bounded poll
+   * (the stock d5da busy-polls SB[0x2C].2 forever; bound it so the super-loop can't hang). */
+  PR(0x0AAC) = 0;                              /* d5da head: 0x0AAC = R7(=0) */
+  { uint8_t t = SB_RD(0x00); SB_WR(0x00, (uint8_t)(t & 0xFE)); }   /* d5ea 9777/&0xfe writeback */
+  SB_WR(0x04, 0x01);                           /* d5f2-d5f6: SB[0x04] = 1 */
+  SB_WR(0x10, 0x01);                           /* d5f9-d5fd: SB[0x10] = 1 (TX go) */
+  { uint16_t g = 0; while (((SB_RD(0x2C) >> 2) & 0x3F) == 0 && ++g < 0x0400) { } }  /* d600 bounded */
+
+  if (sb_af38_print_budget) {
+    sb_af38_print_budget--;
+    uart_puts("\r\n[AF38 752="); uart_puthex(desc752);
+    uart_puts(" 50="); uart_puthex(dat50);
+    uart_puts(" 51="); uart_puthex(dat51);
+    uart_puts(" 52="); uart_puthex(dat52);
+    uart_puts(" tx="); for (i = 0; i < 0x08; i++) uart_puthex(SBTX_RD(i));
+    uart_puts(" sb15="); uart_puthex(SB_RD(0x15));
+    uart_puts(" sb2c="); uart_puthex(SB_RD(0x2C));
     uart_puts("]\r\n");
   }
 }
@@ -156,27 +297,44 @@ static void sb_set_connect_present_ebb5(void) {
  * dispatch -> ebb5 (0x0765=1) when the host presents connect. No stack locals beyond the scratch
  * XDATA so it adds ~nothing to main's overlay. Called from the super-loop gated post-connect. */
 static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
-  PR(0x0753) = SB_RD(desc4e_off);            /* cd42-cd55: 0x4E = SB[0x28+port] */
+  uint8_t desc4e = SB_RD(desc4e_off);        /* cd42-cd55: 0x4E (IRAM scratch) = SB[0x28+port] */
+  uint8_t d752;
   PR(0x0752) = SB_RD(desc752_off);           /* cd57-cd6a: 0x752 = SB[0x18+port] */
+  d752 = PR(0x0752);
   /* ---- dispatch (cd86-cdf4) ---- */
-  if (PR(0x0765) != 0 && (PR(0x0752) & 0x60) == 0x60) return;  /* cd86-cd94: already present */
-  if (!(PR(0x0753) & 0x10)) return;          /* cd96-cd9a: need 0x4E.4 (descriptor valid) */
-  if ((PR(0x0752) & 0xC0) != 0x40) {         /* cd9b-cda4 */
-    if (!(PR(0x0752) & 0x04)) return;        /* cda6-cda9: need 0x752.2 */
-    if (PR(0x0752) & 0x10) return;           /* cdb3-cdb9 (port 0/1): 0x752.4 set -> no connect */
+  if (PR(0x0765) != 0 && (d752 & 0x60) == 0x60) return;  /* cd86-cd94: already present */
+  if (!(desc4e & 0x10)) return;              /* cd96-cd9a: need 0x4E.4 (descriptor valid) */
+  if ((d752 & 0xC0) != 0x40) {               /* cd9b-cda4 */
+    if (!(d752 & 0x04)) return;              /* cda6-cda9: need 0x752.2 */
+    if (d752 & 0x10) return;                 /* cdb3-cdb9 (port 0/1): 0x752.4 set -> no connect */
   }
-  /* cdce-cdf1 dispatch tail: (0x752&0x60)==0x60 -> ebb5 (0x0765=1); else if (0x752&1)==0 -> eaac
-   * (0x0777-populate, VERIFIED FIX #1). The two are mutually exclusive. */
-  if ((PR(0x0752) & 0x60) == 0x60) {
-    sb_set_connect_present_ebb5();         /* cdce-cdd9: LJMP ebb5 */
-  } else if ((PR(0x0752) & 0x01) == 0) {   /* cddc: JNB 0x752.0 -> cdf1 LCALL eaac */
-    sb_eaac_populate_0777();               /* eaac: populate 0x0777..0x07B6 from SB-plane-2 */
+  /* cdce-cdf4 dispatch tail (BYTE-EXACT from the raw cd3f disasm, the FAITHFUL 3-WAY):
+   *   (0x752 & 0x60)==0x60                    -> ebb5  (0x0765=1)                 [cdd6/cdd9]
+   *   else if (0x752 & 1)==0                  -> eaac  (0x0777 block-copy)         [cddd/cdf1]
+   *   else (0x752 & 1)!=0:                                                          [cde0..]
+   *     if (0x752 & 0x40)==0                  -> af38  (descriptor TX response)     [cde5 JNB.6]
+   *     else if ((0x752>>1)&0xF)==0           -> af38                              [cde8-cdec]
+   *     else                                  -> return                            [cdec JNZ]
+   * Handmade PREVIOUSLY dropped the af38 branch entirely (only ebb5 + eaac). This restores it. */
+  if ((d752 & 0x60) == 0x60) {
+    sb_set_connect_present_ebb5();           /* cdce-cdd9: LJMP ebb5 */
+  } else if ((d752 & 0x01) == 0) {           /* cddd: JNB 0x752.0 -> cdf1 LCALL eaac */
+    sb_eaac_populate_0777();                 /* eaac: populate 0x0777..0x07B6 from SB-plane-2 */
+  } else {                                   /* cde0: (0x752 & 1) != 0 */
+    if (((d752 & 0x40) == 0) || (((d752 >> 1) & 0x0F) == 0)) {  /* cde5 JNB.6 / cde8-cdec */
+      sb_af38_descriptor_response();         /* cdee: LJMP af38 (the dropped third branch) */
+    }
   }
 }
 static void sb_connect_present_poll(void) {
-  if (PR(0x0765)) return;                     /* already latched -> nothing to do */
+  /* RUN cd3f EVERY super-loop iteration while the connect is in progress (NOT one-shot gated on
+   * 0x0765). Stock's cd3f reads the host descriptor ~290x as SB[0x18] climbs 00->05->0x63; each
+   * read dispatches to ebb5 / eaac / af38 as the descriptor bits evolve. af38 (the SB-transport
+   * descriptor TX response) and eaac (the 0x0777 block-copy) must KEEP firing so the device->host
+   * handshake advances and the HW fills the 0x2a00 RX plane that eaac relays into 0x0777. Re-running
+   * is harmless once latched (the cd3f gates re-guard each branch). Stop only once state-3 confirms
+   * (0x06ED!=3, i.e. cm_conn_routing_setup passed -> the engine moved to b0b4). */
   sb_cd3f_dispatch(0x28, 0x18);              /* L0 (port 0): 0x4E=SB[0x28], 0x752=SB[0x18] */
-  if (PR(0x0765)) return;
   sb_cd3f_dispatch(0x2A, 0x19);              /* L1 (port 1): 0x4E=SB[0x2A] (FIX #9: ROM 0x2135
                                               * {28 28, 28 2a} -> port1=SB[0x2a] NOT SB[0x29]),
                                               * 0x752=SB[0x19] (ROM 0x2125 {28 18, 28 19}) */
@@ -192,6 +350,22 @@ static void sb_connect_present_poll(void) {
   if (PR(0x06EC)) {                            /* the SB-router connect consequence has run */
     PR(0x0752) = SB_RD(0x18);                  /* ebb5's gate input = the host SB[0x18] descriptor */
     sb_set_connect_present_ebb5();             /* ebb5: SB[0x57]/[0x61]|=8 if (0x752>>1)&0xF; 0x765=1 */
+  }
+
+  /* PROBE (task Q4 -- the chicken-and-egg test, HW-ANSWERED 2026-06-11): on this Intel MTL TB4 host
+   * SB[0x18]/[0x28] stay 00 after [===SB Con===], so cd3f's valid gate (SB[0x28].4) never opens and
+   * af38 never runs via the faithful dispatch. The forced-af38 experiment below tested whether af38's
+   * SB-transport TX response ELICITS the host to begin posting SB[0x18]. RESULT (captured): af38 runs
+   * (reads SB[0x18]=00 / 0x2a00=all-zero, TXes an all-zero descriptor, writes SB[0x15]=0, d5da sees
+   * SB[0x2C]=03) but the host STILL posts NOTHING -- SB[0x18] stays 00, 0x2a00 stays all-zero, 0x0777
+   * stays 0x55. So the host descriptor IS host-elicited by something upstream of af38 (NOT a missing
+   * device-side write). The probe is kept (budget=8, off by default-seed 0 in main()) as a documented
+   * one-shot test, NOT a fix -- it must NOT TX a garbage all-zero descriptor on the live path. */
+  if (sb_af38_force_budget && PR(0x06EC) && PR(0x06ED) == 3 && PR(0x0777) != 0x0C) {
+    sb_af38_force_budget--;
+    PR(0x06F0) = 0;                            /* port 0 */
+    PR(0x0752) = SB_RD(0x18);                  /* feed af38 the (currently 00) host descriptor */
+    sb_af38_descriptor_response();             /* send the device's SB-transport connect response */
   }
 }
 

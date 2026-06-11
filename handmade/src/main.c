@@ -681,9 +681,12 @@ void main(void) {
   // crt0's stack no longer overlaps live globals on the deep INT1 connect path. XDATA is NOT cleared
   // by crt0 (which only zeroes IRAM), so seed them here explicitly. All start at 0 except the
   // [===SB Con===] print budget (=6).
-  { uint8_t z; for (z = 0; z <= (0x8815 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
+  { uint8_t z; for (z = 0; z <= (0x8817 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
   sb_con_print_budget = 6;
   sb_eaac_print_budget = 6;   /* [EAAC] dump budget (sb_router.h @0x8815) */
+  sb_af38_print_budget = 6;   /* [AF38] dump budget (sb_router.h @0x8816) */
+  sb_af38_force_budget = 0;   /* PROBE off by default (HW-answered: host doesn't respond to af38 TX);
+                               * set =8 to re-run the chicken-and-egg test (sb_router.h @0x8817) */
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
@@ -908,8 +911,12 @@ void main(void) {
      * that eaac relays into 0x0777? Dump SB-plane-2[0x2a00..0x2a0F] + 0x0775 from the super-loop
      * (runs regardless of whether eaac's SB[0x28].4 gate opened) to see if the host posts 0x0C. */
     { uint8_t k; uart_puts("[P2 775="); uart_puthex(XDATA_REG8V(0x0775));
-      uart_puts(" 2a=");
+      uart_puts(" 752="); uart_puthex(XDATA_REG8V(0x0752));   /* host descriptor (cd3f read SB[0x18]) */
+      uart_puts(" sb19="); uart_puthex(SB_RD(0x19));          /* L1 host descriptor */
+      uart_puts(" 2a="); /* SB-PLANE-2 RX (HW-latched, eaac source) */
       for (k = 0; k < 0x10; k++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + k)));
+      uart_puts(" 29="); /* SB-PLANE 0x2900 TX (af38 dest/response) */
+      for (k = 0; k < 0x10; k++) uart_puthex(P1_REG8_rd((uint16_t)(0x2900u + k)));
       uart_puts("]\n"); }
     /* NOTE (FIX#3): the FSM-advance block, the deferred bank0_8a89 drive, and the deferred tunnel-up
      * were HOISTED to the TOP of this loop (before the delay + the diagnostic dumps above). The
