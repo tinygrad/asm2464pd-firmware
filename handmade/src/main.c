@@ -58,6 +58,14 @@ static uint8_t __xdata __at(0x8800) is_usb2;
 /* Streaming PCIe state — configured via 0xF0 control message */
 static uint32_t __xdata __at(0x8801) dma_dwords;    /* total dwords remaining for streaming transfer */
 
+/* FIX#4 (GOFWD): super-loop FSM-stall counter (XDATA, off the IRAM stack). bank0_8a89 is reached in
+ * STOCK ONLY from INT0 link-events (c9a8 via e94d/e952), NEVER from the C80A.5/a066 SB-router path;
+ * the host never raises INT0 for handmade, so driving 8a89 from the connect path is a handmade hack
+ * that STARVES the lane-bond FSM and masks EX1 during the host's post-connect window. Defer it: only
+ * after the FSM has stalled (no 0x06ED progress) for several iterations with SB[0xA0]/[0xA1] not at
+ * CL0. Seeded 0 in the boot zero-init loop (extended to 0x8812). */
+static volatile uint8_t __xdata __at(0x8812) fsm_stall;
+
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
@@ -665,7 +673,7 @@ void main(void) {
   // crt0's stack no longer overlaps live globals on the deep INT1 connect path. XDATA is NOT cleared
   // by crt0 (which only zeroes IRAM), so seed them here explicitly. All start at 0 except the
   // [===SB Con===] print budget (=6).
-  { uint8_t z; for (z = 0; z <= (0x8811 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
+  { uint8_t z; for (z = 0; z <= (0x8812 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
   sb_con_print_budget = 6;
 
   // enable interrupts (EX1 = PD/USB4 INT1)
@@ -679,9 +687,86 @@ void main(void) {
   uint8_t kicks = 0;
   uint8_t sb_diag_count = 0;
   while (1) {
-    /* R-timer hazard: sleep() drives the CC10-CC13 mailbox shared with the PHY/PD command path.
-     * After the SB assert the mailbox may be left in a state where the timer never expires and
-     * sleep() hangs. Once sb_asserted, use a busy-NOP delay instead so the diagnostic always runs. */
+    /* ===== FIX#3 (GOFWD): FSM-advance HOISTED to the TOP of the loop, before any delay/prints =====
+     * Stock's super-loop (main_boot_and_superloop@0x2FB4) runs `if((0x09F9&0x83)&&0x06EC){EA=0;cb10();
+     * ...EA=1;}` FIRST, delay-free and UART-free, so cb10->e672->[ConnRout]->b0b4 runs within us of the
+     * C80A.5 connect edge. handmade had buried this under a 60000-NOP delay + ~70 UART field-prints +
+     * the EX1-masked 8a89 drive, so it was mid-diagnostic-dump when the host's CM timer expired and the
+     * host HARD_RESET. Hoisting + gating the diagnostics off the connect path (0x06EC!=0) reproduces
+     * stock's tight cadence. The FSM bodies (e672/cm_conn_routing_setup/b0b4) print their own markers
+     * ([SB P0x]/[ConnRout]/[b4:A-D]) so we still SEE the FSM walk. */
+    if ((XDATA_REG8V(0x09F9) & 0x83) && XDATA_REG8V(0x06EC)) {
+      uint8_t fsm_before = XDATA_REG8V(0x06ED);
+      IE &= (uint8_t)~IE_EA;
+      sb_cb10_lane_advance();                     /* the SB[0xA0]/[0xA1] readout + latch compare */
+      /* GAP2: super-loop cd3f reproduction -> ebb5 sets 0x0765=1 from the host SB[0x18]/[0x19]
+       * connect descriptor. Done HERE (not the a066/INT1 ISR) to keep the C80A.5 stack path intact. */
+      sb_connect_present_poll();
+      if (XDATA_REG8V(0x06ED) == 0) {             /* db7a effect: first-arm the FSM -> [SB P03] */
+        uart_puts("[LB arm]");
+        u4lb_eb62(0, 3);
+        u4lb_98ec();   /* GAP1: stock db7a TAIL is eb62(0,3);98ec() -> snapshot CCE4:CCE5 lane-width
+                        * into 0x768:0x769 so b0b4's width gate (b10f) diffs a real value, not 0x55 */
+      }
+      /* Pump e672 up to 4x per iteration so the FSM walks 3(ConnRout)->4(b0b4)->5 back-to-back inside
+       * the connect window. Each e672 call runs exactly ONE faithful state body; break when 0x06ED
+       * stops advancing. */
+      { uint8_t pmp, prev; for (pmp = 0; pmp < 4; pmp++) {
+          prev = XDATA_REG8V(0x06ED);
+          u4lb_e672();
+          if (XDATA_REG8V(0x06ED) == prev) break;
+      } }
+      IE |= IE_EA;
+      /* FIX#4 stall tracking: if the FSM made no 0x06ED progress this iteration, count toward the
+       * 8a89-fallback threshold; reset the counter as soon as it advances. */
+      if (XDATA_REG8V(0x06ED) == fsm_before) { if (fsm_stall < 0xFF) fsm_stall++; }
+      else                                   { fsm_stall = 0; }
+    }
+
+    /* FIX#4 (GOFWD): bank0_8a89 drive DEFERRED off the connect critical path. In STOCK 8a89 is reached
+     * ONLY from INT0 link-events (which the host never raises for handmade), so this drive is a hack
+     * that starves the FSM and (worse) masks EX1, blocking C80A.5 servicing during the host's window.
+     * Run it at most once, and ONLY after the FSM has stalled for several iterations with the lanes not
+     * yet at CL0 -- i.e. after the host window has clearly passed without the FSM making progress. Do
+     * NOT mask EX1 on the first post-connect iterations (it only runs once fsm_stall is high). */
+    if (sb_run_8a89_pending && !sb_8a89_done &&
+        fsm_stall >= 6 &&
+        !((SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02)) {
+      sb_run_8a89_pending = 0;
+      sb_8a89_done = 1;
+      uart_puts("[SBcon->8a89 (deferred)]\n");
+      IE &= (uint8_t)~IE_EX1;
+      bank0_c9a8(0);
+      IE |= IE_EX1;
+      uart_puts("[8a89 ret e764=");  uart_puthex(XDATA_REG8V(0xE764));
+      uart_puts(" e751=");           uart_puthex(XDATA_REG8V(0xE751));
+      uart_puts(" e302=");           uart_puthex(XDATA_REG8V(0xE302));
+      uart_puts(" c80a=");           uart_puthex(XDATA_REG8V(0xC80A));
+      uart_puts(" ec06=");           uart_puthex(XDATA_REG8V(0xEC06)); uart_puts("]\n");
+    }
+
+    /* Deferred tunnel-up: the SB-router ISR (e52d) sets sb_tunnel_up_pending on lane-bond-complete;
+     * run the downstream PCIe bring-up here (it uses sleep()/long polls, unsafe inside the ISR).
+     * Success axis = per-lane CL state SB[0xA0]/[0xA1] reaching CL0=0x02 (stock reaches GPU at E302
+     * mode0, so E302-mode is NOT the gate). */
+    if (sb_tunnel_up_pending) {
+      sb_tunnel_up_pending = 0;
+      if ((SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02) {  /* both lanes CL0 */
+        uart_puts("[TunnelUp->pcie_on]\n");
+        pcie_power_on();
+      } else {
+        uart_puts("[TunnelUp deferred: lanes not CL0]\n");
+      }
+    }
+
+    /* FIX#3: while a connect is IN PROGRESS (0x06EC!=0) keep the loop TIGHT -- no delay, no diagnostic
+     * prints -- so the next e672 dispatch lands within us of the connect edge (like stock). The heavy
+     * diagnostics below are gated on 0x06EC==0 for the same reason. Only delay when idle.
+     * R-timer hazard: after the SB assert sleep() can hang (CC10-CC13 mailbox shared w/ PHY/PD); use a
+     * busy-NOP delay once sb_asserted. */
+    if (XDATA_REG8V(0x06EC)) {
+      continue;   /* connect in progress: skip delay + diagnostics, pump the FSM again immediately */
+    }
     if (sb_asserted) { uint32_t b; for (b = 0; b < 60000UL; b++) { __asm nop __endasm; } }
     else             { sleep(500); }
     /* E302 diagnostic: poll E302 in a bounded window to read whether the upstream USB4 PHY trained
@@ -787,86 +872,12 @@ void main(void) {
     uart_puts(" sb18=");         uart_puthex(SB_RD(0x18));           /* host connect descriptor (cd3f) */
     uart_puts(" cce4=");         uart_puthex(XDATA_REG8V(0xCCE4));   /* HW lane-width counter */
     uart_puts("]\n");
-    /* LANE-BOND FSM (this session): the stock lane-bond engine runs from the SUPER-LOOP via cb10's
-     * tail -> e672, dispatched by the 0x06ED state. Stock trace: [===SB Con===] -> [SB P03]
-     * (db7a->eb62(0,3)) -> cb10->e672 state3 ([ConnRout]) -> [SB P04] -> state4 (PcieTunnel-PwrOn/
-     * lane-bond) -> [SB P05] -> state5 (Trig/CL0) -> [SB P00]. handmade's cb10 omitted e672 and its
-     * db7a omitted eb62(0,3), so 0x06ED was never armed and the FSM never ran. Wire both:
-     *   (1) ARM: stock db7a (from sb_con_consequence/dea1 on [===SB Con===]) does eb62(0,3). handmade's
-     *       db7a (sb_router.h) is included before usb4_lanebond.h so it can't call eb62; first-arm it
-     *       here once the connect consequence ran (0x06EC==1) and 0x06ED is still 0.
-     *   (2) DISPATCH: run e672 (gated 0x06ED!=0) as cb10's tail, every iteration, EA=0. */
-    if ((XDATA_REG8V(0x09F9) & 0x83) && XDATA_REG8V(0x06EC)) {
-      IE &= (uint8_t)~IE_EA;
-      sb_cb10_lane_advance();                     /* the SB[0xA0]/[0xA1] readout + latch compare */
-      /* GAP2: super-loop cd3f reproduction -> ebb5 sets 0x0765=1 from the host SB[0x18]/[0x19]
-       * connect descriptor. Done HERE (not the a066/INT1 ISR) to keep the C80A.5 stack path intact. */
-      sb_connect_present_poll();
-      if (XDATA_REG8V(0x06ED) == 0) {             /* db7a effect: first-arm the FSM -> [SB P03] */
-        uart_puts("[LB arm]");
-        u4lb_eb62(0, 3);
-        u4lb_98ec();   /* GAP1: stock db7a TAIL is eb62(0,3);98ec() -> snapshot CCE4:CCE5 lane-width
-                        * into 0x768:0x769 so b0b4's width gate (b10f) diffs a real value, not 0x55 */
-      }
-      /* INSTR: the TB4 host tears the transient connect down within ~ms, so the one-e672-per-loop
-       * cadence never reaches state-4 (b0b4) before teardown. Pump e672 up to 4x per iteration so the
-       * FSM walks 3(ConnRout)->4(b0b4)->5 back-to-back inside the connect window. Each e672 call still
-       * runs exactly ONE faithful state body; breaks when 0x06ED stops advancing. */
-      { uint8_t pmp, prev; for (pmp = 0; pmp < 4; pmp++) {
-          prev = XDATA_REG8V(0x06ED);
-          u4lb_e672();
-          if (XDATA_REG8V(0x06ED) == prev) break;
-      } }
-      IE |= IE_EA;
-    }
-    /* RE-AUDIT chicken-and-egg driver: the host raises C80A.5 (SB-router connect) but never the
-     * INT0 link-events, so bank0_8a89 (E764.4/E751 link-MODE engine) is never driven via INT0.
-     * Drive it ONCE from here when the SB-router connect fired (sb_run_8a89_pending), via c9a8 with
-     * its gate now fully open (0x09FA.2/0x0AF1.0/0x07E8). 8a89 runs long PHY waits -> super-loop. */
-    if (sb_run_8a89_pending && !sb_8a89_done) {
-      sb_run_8a89_pending = 0;
-      sb_8a89_done = 1;
-      uart_puts("[SBcon->8a89]\n");
-      /* Mask EX1 across the 8a89 run so the C80A.5 SB-router storm can't preempt the long PHY-lock
-       * waits (it re-runs sb_con_consequence reentrantly otherwise). Re-enabled right after. */
-      IE &= (uint8_t)~IE_EX1;
-      bank0_c9a8(0);
-      IE |= IE_EX1;
-      uart_puts("[8a89 ret e764=");  uart_puthex(XDATA_REG8V(0xE764));
-      uart_puts(" e751=");           uart_puthex(XDATA_REG8V(0xE751));
-      uart_puts(" e302=");           uart_puthex(XDATA_REG8V(0xE302));
-      uart_puts(" c80a=");           uart_puthex(XDATA_REG8V(0xC80A));
-      uart_puts(" ec06=");           uart_puthex(XDATA_REG8V(0xEC06)); uart_puts("]\n");
-      /* STEP 0 ROP BURST (decisive de-risk): sample the host-query mailboxes after the connect engine
-       * ran, to answer: does the host CM post ANYTHING to CE88/EA80/EA90/EC06 after [===SB Con===]?
-       * Settled across prior sessions: flat-zero -> host is NOT querying.
-       * NOTE: the old 10x ROPB burst (1.2M-nop delay) consumed the entire transient connect window
-       * and prevented b0b4 (state-4, next super-loop iteration) from EVER running before the host
-       * tore the connect down. Per memory the host posts NOTHING here (flat-zero, settled). Reduced
-       * to a single quick sample (no delay) so the FSM can advance to state-4 within the connect. */
-      IE &= (uint8_t)~IE_EX1;
-      uart_puts("[ROPB ce88="); uart_puthex(XDATA_REG8V(0xCE88));
-      uart_puts(" ea80=");       uart_puthex(XDATA_REG8V(0xEA80));
-      uart_puts(" ea90=");       uart_puthex(XDATA_REG8V(0xEA90));
-      uart_puts(" ec06=");       uart_puthex(XDATA_REG8V(0xEC06));
-      uart_puts(" c80a=");       uart_puthex(XDATA_REG8V(0xC80A));
-      uart_puts("]\n");
-      IE |= IE_EX1;
-    }
-    /* Deferred tunnel-up: the SB-router ISR (e52d) sets sb_tunnel_up_pending on lane-bond-complete;
-     * run the downstream PCIe bring-up here (it uses sleep()/long polls, unsafe inside the ISR).
-     * GATE FIX (this session): the OLD gate ((E302>>4)&3 >= 2 "E302 trained") was WRONG -- the stock
-     * lanetrace proves stock reaches the GPU with E302 at mode0 the WHOLE run. The REAL success axis
-     * is the per-lane CL state SB[0xA0]/[0xA1] reaching CL0=0x02. Gate on that instead. */
-    if (sb_tunnel_up_pending) {
-      sb_tunnel_up_pending = 0;
-      if ((SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02) {  /* both lanes CL0 */
-        uart_puts("[TunnelUp->pcie_on]\n");
-        pcie_power_on();
-      } else {
-        uart_puts("[TunnelUp deferred: lanes not CL0]\n");
-      }
-    }
+    /* NOTE (FIX#3): the FSM-advance block, the deferred bank0_8a89 drive, and the deferred tunnel-up
+     * were HOISTED to the TOP of this loop (before the delay + the diagnostic dumps above). The
+     * diagnostics above now run ONLY when 0x06EC==0 (no connect in progress) because the loop did
+     * `continue` while a connect is in progress -- so they never sit between the connect edge and
+     * [ConnRout], matching stock's tight cadence. The lane-bond FSM (e672/cm_conn_routing_setup/b0b4)
+     * prints its own [SB P0x]/[ConnRout]/[b4:A-D] markers, so the FSM walk is still visible. */
     if (!pd_seen && kicks < 60) {
       pd_drive_hard_reset();
       kicks++;

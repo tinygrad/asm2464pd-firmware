@@ -138,13 +138,17 @@ static void vdm_build_discover_id(void) {
 }
 
 /* ---------- Discover_SVIDs responder @0xDDAD ----------
- * Only ACKs when the received SVID is the 0xFFFF terminator and 0x09F9 bit7 (USB4 enabled).
+ * Only ACKs when the received SVID is the PD SID 0xFF00 terminator and 0x09F9 bit7 (USB4 enabled).
+ * The host's post-[SB Con] Discover_SVIDs carries SVID 0xFF00 (the PD-defined SID terminator:
+ * hi byte 0xFF, lo byte 0x00); stock vdm_build_discover_sids_resp@0xDDAD ACKs exactly that.
  * Advertises ONE SVID: 0x8087 (Intel TBT) in the low half, 0x0000 terminator in the high half.
  *   E426/E427 = 0/0 (terminator hi half), E428/E429 = 0x87/0x80 (SVID 0x8087)
  *   0x07C4 = 0x0A (2 VDOs). Else NAK. */
 static void vdm_build_discover_sids(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
-  /* 96ae compares received SVID against 0xFFFF (CPL A; ORL A,R2; JZ). */
-  if (rx_svid_lo == 0xFF && rx_svid_hi == 0xFF && (PR(0x09F9) & 0x80)) {
+  /* Stock @0xddb0-ddb8: 96ae loads A=IRAM[0x07] (hi, =rx_svid_hi @0xAA7) / R2=IRAM[0x06]
+   * (lo, =rx_svid_lo @0xAA6); guard = CPL A; ORL A,R2; JNZ NAK -> ACK iff (~hi | lo)==0,
+   * i.e. hi==0xFF AND lo==0x00 (PD SID 0xFF00), AND 0x09F9.7 (USB4-cap, the 2nd ACK gate). */
+  if (((uint8_t)~rx_svid_hi | rx_svid_lo) == 0 && (PR(0x09F9) & 0x80)) {
     pd_tx_set_sop_header(2, 0x0F);   /* 9730: 2 VDOs, MsgType 0x0F */
     pd_vdm_hdr_build(1, 2);          /* ACK, Discover_SVIDs */
     PR(0xE426) = 0x00;               /* SVID-list VDO: hi half terminator */
