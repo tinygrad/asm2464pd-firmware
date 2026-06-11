@@ -300,6 +300,26 @@ static void u4lb_ec51(void) {
 /* ---- b226 settle: phy_cc10_cmd_wait(2,0,0xc8). Verbatim CODE_BANK1::b226. */
 static void u4lb_b226(void) { phy_cc10_cmd_wait(2, 0, 0xC8); }
 
+/* ---- ee57: (if CCE1.0 && CCE1.1 -> ec51 Trig-arm); then the caller snapshots CCE4:CCE5. Verbatim
+ * CODE_BANK1::ee57. CCE4/CCE5 is a read-only HW lane-width/train counter (every firmware access
+ * image-wide -- 981b/b10f/b20f/ee65 -- is a READ; nothing writes it). ---- */
+static void u4lb_ee57(void) {
+  if ((PR(0xCCE1) & 0x01) && (PR(0xCCE1) & 0x02)) u4lb_ec51();  /* ee5a-ee62 */
+  /* ee65-ee6d: returns R6=CCE4, R7=CCE5 to the caller (98ec consumes them). */
+}
+
+/* ---- 98ec(): 0x758=0x10; ee57(); 0x768=CCE4; 0x769=CCE5. The lane-width SNAPSHOT producer (GAP-1).
+ * Verbatim CODE_BANK1::98ec. Stock db7a's TAIL is `eb62(0,3); 98ec()` but handmade dropped 98ec, so
+ * 0x768/0x769 read uninit 0x55 and b0b4's width gate (b10f-b12d) diffed garbage. (The R6/R7 db7a
+ * passes to 98ec are DEAD -- ee57 overwrites them with CCE4/CCE5.) 0x758=0x10 also re-arms the
+ * cm_conn_routing_setup state, consistent with the state-3 entry. ---- */
+static void u4lb_98ec(void) {
+  PR(0x0758) = 0x10;                 /* 98ec-98f1: 0x758 = 0x10 (cm_conn_routing_setup state arm) */
+  u4lb_ee57();                       /* 98f2: ee57 (Trig-arm gate + CCE4/CCE5 read) */
+  PR(0x0768) = PR(0xCCE4);           /* 98f5-98f9: 0x768 = CCE4 (R6) */
+  PR(0x0769) = PR(0xCCE5);           /* 98fa-98fc: 0x769 = CCE5 (R7) */
+}
+
 /* ====================================================================================
  * b0b4 body (CODE_BANK1::b0b4 @ file 0x130b4) — state-4 assembled per the plan's dependency order.
  * ==================================================================================== */

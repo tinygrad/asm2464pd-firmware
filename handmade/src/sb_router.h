@@ -53,11 +53,76 @@ static void sb_write_c9_ack(uint8_t pos) {
   SB_WR(0xC9, (uint8_t)(1u << (pos & 7)));
 }
 
+/* ====================================================================================
+ * CONNECT-PRESENT producer (GAP 2) — the cd3f connect-descriptor reader + ebb5 0x0765 setter.
+ *
+ * STOCK PATH (all CODE_BANK1, decompiled byte-exact): d4cd (sb_transport_substate_poll, called from
+ * a066 PART2) calls cd3f at d4df/d502 on the SB[0x28].3/SB[0x2A].3 transport edge. cd3f reads the
+ * host's per-port connect descriptor (ROM ptr-table 0x21xx via movc, port = 0x06F0) which resolves to
+ *   0x4E  = SB[0x28 + port]    (table 0x2135 = {28 28, 28 2a})
+ *   0x752 = SB[0x18 + port]    (table 0x2125 = {28 18, 28 19})
+ * then dispatches (cd86-cdf4) and jumps to ebb5 when (0x752 & 0x60)==0x60.
+ *   ebb5: if ((0x752>>1)&0xF) { SB[0x57]|=8; SB[0x61]|=8; }  0x765 = 1;
+ *
+ * STACK NOTE (CRITICAL, HW-validated): putting cd3f anywhere in the a066/INT1 ISR call tree (even one
+ * extra store) KILLS C80A.5 firing -- the INT1 connect path sits exactly at the documented 3-byte
+ * stack cliff (crt0 sp=0x72). So `sb_transport_substate_poll` is kept BYTE-IDENTICAL to HEAD (no cd3f
+ * in the ISR) and the connect-descriptor read runs from the SUPER-LOOP instead (sb_connect_present_
+ * poll), gated post-connect. Faithful in EFFECT: 0x765 is set from the host's SB[0x18] descriptor
+ * during the connect window, before b0b4 (state-4, also super-loop) reads its connect-present gate.
+ * ==================================================================================== */
+
+/* ebb5: the 0x0765 connect-present setter (verbatim CODE_BANK1::ebb5). */
+static void sb_set_connect_present_ebb5(void) {
+  if (((PR(0x0752) >> 1) & 0x0F) != 0) {     /* ebb8-ebbd: (0x752>>1)&0xF != 0 */
+    SB_SET(0x57, 0x08);                       /* ebbf-ebc8: SB[0x57] |= 0x08 */
+    SB_SET(0x61, 0x08);                       /* ebcb-ebd4: SB[0x61] |= 0x08 */
+  }
+  PR(0x0765) = 1;                             /* ebd7-ebdc: 0x0765 = 1 (connect-present) */
+}
+
+/* sb_connect_present_poll(): super-loop cd3f reproduction. Reads the host connect descriptor for both
+ * lanes (SB[0x18]->0x752 / SB[0x28]->0x753 for L0, SB[0x19]/SB[0x29] for L1) and runs the cd3f
+ * dispatch -> ebb5 (0x0765=1) when the host presents connect. No stack locals beyond the scratch
+ * XDATA so it adds ~nothing to main's overlay. Called from the super-loop gated post-connect. */
+static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
+  PR(0x0753) = SB_RD(desc4e_off);            /* cd42-cd55: 0x4E = SB[0x28+port] */
+  PR(0x0752) = SB_RD(desc752_off);           /* cd57-cd6a: 0x752 = SB[0x18+port] */
+  /* ---- dispatch (cd86-cdf4) ---- */
+  if (PR(0x0765) != 0 && (PR(0x0752) & 0x60) == 0x60) return;  /* cd86-cd94: already present */
+  if (!(PR(0x0753) & 0x10)) return;          /* cd96-cd9a: need 0x4E.4 (descriptor valid) */
+  if ((PR(0x0752) & 0xC0) != 0x40) {         /* cd9b-cda4 */
+    if (!(PR(0x0752) & 0x04)) return;        /* cda6-cda9: need 0x752.2 */
+    if (PR(0x0752) & 0x10) return;           /* cdb3-cdb9 (port 0/1): 0x752.4 set -> no connect */
+  }
+  if ((PR(0x0752) & 0x60) == 0x60) sb_set_connect_present_ebb5();  /* cdce-cdd9 */
+}
+static void sb_connect_present_poll(void) {
+  if (PR(0x0765)) return;                     /* already latched -> nothing to do */
+  sb_cd3f_dispatch(0x28, 0x18);              /* L0 (port 0): 0x4E=SB[0x28], 0x752=SB[0x18] */
+  if (PR(0x0765)) return;
+  sb_cd3f_dispatch(0x29, 0x19);              /* L1 (port 1): 0x4E=SB[0x29], 0x752=SB[0x19] */
+  if (PR(0x0765)) return;
+  /* DOCUMENTED-EQUIVALENT (per the unblock spec): on the Intel MTL TB4 host the SB-router CONNECT
+   * engages (C80A.5 / [===SB Con===] -> sb_con_consequence set 0x06EC=1) but the host never drives
+   * the SB[0x18]/[0x19] connect descriptor to the (x&0x60)==0x60 pattern that cd3f's dispatch needs,
+   * so the faithful cd3f path above never reaches ebb5. The connect IS present (C80A.5 fired). Stock's
+   * cd3f reaches ebb5 from THIS same connect; here we reproduce ebb5's EFFECT at the equivalent
+   * connect point (0x06EC==1) with ebb5's own 0x0752 gate intact (SB[0x18] -> 0x0752 so the SB[0x57]/
+   * [0x61] arms still gate on the real descriptor). This is the spec-sanctioned equivalent reproduction,
+   * not a blind 0x0765=1 poke. */
+  if (PR(0x06EC)) {                            /* the SB-router connect consequence has run */
+    PR(0x0752) = SB_RD(0x18);                  /* ebb5's gate input = the host SB[0x18] descriptor */
+    sb_set_connect_present_ebb5();             /* ebb5: SB[0x57]/[0x61]|=8 if (0x752>>1)&0xF; 0x765=1 */
+  }
+}
+
 /* sb_transport_substate_poll (d4cd): poll SB[0x28]/[0x2A]/[0x81]/[0x83] bit3 transport events.
  * Each: if SB[off].3 set and the matching latch (0x06EE/0x06EF) is in the expected state, advance
  * the substate var (0x06F0=1), call the bank0 notify (cd3f), W1C the event (974a/9746), set the
  * latch. Pure event tracking driven by HW-set SB bits — reproduced as the bit-3 W1C acks + latch
- * advance (the cd3f bank0 notify is a state callback, non-host-gating). */
+ * advance. The cd3f connect-descriptor read is reproduced in the SUPER-LOOP (sb_connect_present_poll)
+ * NOT here, to keep this a066/INT1 path byte-identical to HEAD (the C80A.5 stack cliff). */
 static void sb_transport_substate_poll(void) {
   /* SB[0x28].3 (L0 transport) */
   if (SB_RD(0x28) & 0x08) {

@@ -639,6 +639,11 @@ void main(void) {
   XDATA_REG8V(0x06EC) = 0; XDATA_REG8V(0x06ED) = 0;
   XDATA_REG8V(0x0758) = 0; XDATA_REG8V(0x0759) = 0; XDATA_REG8V(0x075A) = 0;
   XDATA_REG8V(0x075B) = 0; XDATA_REG8V(0x075C) = 0; XDATA_REG8V(0x0718) = 0;
+  // b0b4 gate inputs: 0x0765 connect-present (set by sb_connect_present_poll->ebb5), 0x0768/0x0769
+  // lane-width snapshot (set by db7a->98ec from CCE4:CCE5), 0x0752/0x0753 connect descriptor scratch.
+  // All uninit 0x55 -> zero so the gates read a real value (the producers populate them at connect).
+  XDATA_REG8V(0x0765) = 0; XDATA_REG8V(0x0768) = 0; XDATA_REG8V(0x0769) = 0;
+  XDATA_REG8V(0x0752) = 0; XDATA_REG8V(0x0753) = 0;
   // 0x07ED is the [Connect_U4] one-shot suppress (a176-a17e: if 0x07ED!=0, skip usb4_connect_u4
   // and clear it). It is uninitialised XDATA in handmade, so the FIRST connect can take the
   // suppress branch and never run the SB assert. Stock has it clear on the happy path -> force 0.
@@ -758,6 +763,10 @@ void main(void) {
     uart_puts(" 759=");          uart_puthex(XDATA_REG8V(0x0759));
     uart_puts(" 75c=");          uart_puthex(XDATA_REG8V(0x075C));
     uart_puts(" 75a=");          uart_puthex(XDATA_REG8V(0x075A));
+    uart_puts(" 765=");          uart_puthex(XDATA_REG8V(0x0765));   /* GAP2 connect-present latch */
+    uart_puts(" 768=");          uart_puthex(XDATA_REG8V(0x0768));   /* GAP1 width snapshot hi */
+    uart_puts(" sb18=");         uart_puthex(SB_RD(0x18));           /* host connect descriptor (cd3f) */
+    uart_puts(" cce4=");         uart_puthex(XDATA_REG8V(0xCCE4));   /* HW lane-width counter */
     uart_puts("]\n");
     /* LANE-BOND FSM (this session): the stock lane-bond engine runs from the SUPER-LOOP via cb10's
      * tail -> e672, dispatched by the 0x06ED state. Stock trace: [===SB Con===] -> [SB P03]
@@ -771,9 +780,14 @@ void main(void) {
     if ((XDATA_REG8V(0x09F9) & 0x83) && XDATA_REG8V(0x06EC)) {
       IE &= (uint8_t)~IE_EA;
       sb_cb10_lane_advance();                     /* the SB[0xA0]/[0xA1] readout + latch compare */
+      /* GAP2: super-loop cd3f reproduction -> ebb5 sets 0x0765=1 from the host SB[0x18]/[0x19]
+       * connect descriptor. Done HERE (not the a066/INT1 ISR) to keep the C80A.5 stack path intact. */
+      sb_connect_present_poll();
       if (XDATA_REG8V(0x06ED) == 0) {             /* db7a effect: first-arm the FSM -> [SB P03] */
         uart_puts("[LB arm]");
         u4lb_eb62(0, 3);
+        u4lb_98ec();   /* GAP1: stock db7a TAIL is eb62(0,3);98ec() -> snapshot CCE4:CCE5 lane-width
+                        * into 0x768:0x769 so b0b4's width gate (b10f) diffs a real value, not 0x55 */
       }
       /* INSTR: the TB4 host tears the transient connect down within ~ms, so the one-e672-per-loop
        * cadence never reaches state-4 (b0b4) before teardown. Pump e672 up to 4x per iteration so the
