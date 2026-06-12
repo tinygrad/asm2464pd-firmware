@@ -471,6 +471,230 @@ static void u4lb_98ec(void) {
 }
 
 /* ====================================================================================
+ * STATE-4 PCIe-TUNNEL POWER/PHY BRING-UP (e305 -> ee29 -> ed44 -> df61 / a840 / c593 / b8db).
+ * Byte-faithful transcription from fw_tinygrad ghidra (e305 @50982, ee29 @52581, ed44 @52415,
+ * df61 @50562, a840 @CODE:a840, c593 @CODE:c593, b8db @CODE_BANK1::b8db) + disassemble_bytes.
+ *
+ * PLANE-2 r3 accessors: every 0x1xxx/0x4xxx/0x5xxx/0x6xxx/0x7xxx address below is a PLANE-2
+ * r3_write/read (R3=2 -> DPX=1 -> physical 0x010000|addr). P1_RD/P1_WR already do exactly that
+ * (DPX=1; XDATA[off]; DPX=0). bank0 CA06/CA81/C659/B40x/B43x/CCxx/E764 are PLAIN XDATA via PR().
+ * ==================================================================================== */
+
+/* ---- d195: P1[0x7104] = (P1[0x7104] & 0xBF) | 0x40 (plane-2). Verbatim CODE_BANK1::d195. ---- */
+static void u4lb_d195(void) {
+  P1_WR(0x7104, (uint8_t)((P1_RD(0x7104) & 0xBF) | 0x40));
+}
+
+/* ---- d1d3(hi): returns (P1[hi:0x8D] & 0xF3) | 8 (plane-2). The high byte is the R2 carried from
+ * the prior df61 access (0x50 for the 0x508D read; 0x40 for the 0x408D read after dfb8 MOV R2,#0x40). ---- */
+static uint8_t u4lb_d1d3(uint16_t base_hi) {
+  return (uint8_t)((P1_RD((uint16_t)((base_hi & 0xFF00) | 0x8D)) & 0xF3) | 0x08);
+}
+
+/* ---- df61: the plane-2 PHY lane-block program. Verbatim CODE_BANK1::df61 (50562). d1b1(2) is a
+ * dead plane-2 read of 0x7041 (value discarded). The 0x1835 value computed at the top is REUSED
+ * for the |0x40 write (decompiler bVar3 carry); both forms net the same byte. ---- */
+static void u4lb_df61(void) {
+  uint8_t v;
+  u4lb_d195();                                      /* df61: d195 */
+  P1_WR(0x1808, 0x00);                              /* df66: r3_write 0x1808 = 0 */
+  v = (uint8_t)((P1_RD(0x1835) & 0xFE) | 0x01);     /* df6e: v = (0x1835 & 0xFE)|1 */
+  P1_WR(0x1835, v);
+  (void)P1_RD(0x7041);                              /* d1b1(2): dead plane-2 read 0x7041 -> leaves R2:R1=0x7041 */
+  P1_WR(0x7041, (uint8_t)(v | 0x40));               /* df7d: write target 0x7041 (R2:R1 from d1b1), NOT 0x1835 -- decompile mismodeled the clobber */
+  P1_WR(0x6043, 0x70);                              /* df80: 0x6043 = 0x70 */
+  P1_WR(0x6025, (uint8_t)((P1_RD(0x6025) & 0x7F) | 0x80));  /* df88: 0x6025 = (x&0x7f)|0x80 */
+  P1_WR(0x508F, 0x01);                              /* df96: 0x508F = 1 */
+  P1_WR(0x508D, u4lb_d1d3(0x5000));                 /* dfa1: write target 0x508D (d1d3 clobbers R1->0x8D), NOT 0x508F */
+  P1_WR(0x5204, (uint8_t)(P1_RD(0x5204) & 0xFE));   /* dfa4: 0x5204 &= ~1 */
+  P1_WR(0x5204, (uint8_t)(P1_RD(0x5204) & 0xFD));   /* dfae: 0x5204 &= ~2 */
+  P1_WR(0x408D, u4lb_d1d3(0x4000));                 /* dfbd: R2=0x40 (dfb8) + R1=0x8D (d1d3) -> reads AND writes 0x408D; NOT 0x5204/0x4204/0x4004 */
+}
+
+/* ---- ed44: B401/B402 tunnel-link strobe -> df61. Verbatim CODE_BANK1::ed44 (52415). ---- */
+static void u4lb_ed44(void) {
+  PR(0xB401) = (uint8_t)((PR(0xB401) & 0xFE) | 0x01);   /* d1a5: B401 = (B401&0xFE)|1 */
+  PR(0xB401) = (uint8_t)((PR(0xB401) & 0xFD) | 0x02);   /* d1a5: B401 = (B401&0xFD)|2 */
+  PR(0xB401) &= 0xFE;                                   /* B401 &= ~1 */
+  PR(0xB401) &= 0xFD;                                   /* B401 &= ~2 */
+  PR(0xB402) = (uint8_t)((PR(0xB402) & 0xF7) | 0x08);   /* B402 = (B402&0xF7)|8 */
+  PR(0xB402) &= 0xFD;                                   /* B402 &= ~2 */
+  u4lb_df61();                                          /* df61 */
+}
+
+/* ---- e74e: 0x0B1B=0; CCF8 &= 0xEF; CCF9=4; CCF9=2. Verbatim CODE:e74e (35176). ee29 calls e74e
+ * (CPU_EXT_CTRL/CPU_EXT_STATUS), NOT e72e. ---- */
+static void u4lb_e74e(void) {
+  PR(0x0B1B) = 0;
+  REG_CPU_EXT_CTRL &= 0xEF;                             /* CCF8 &= ~0x10 */
+  REG_CPU_EXT_STATUS = 0x04;                            /* CCF9 = 4 */
+  REG_CPU_EXT_STATUS = 0x02;                            /* CCF9 = 2 */
+}
+
+/* ---- ee29: C659&=~1 (e8a9(0xf)); CA06 = (B402&0xFE) (d185); ed44; e74e; 0x0B42=0; 0x0B43=0.
+ * Verbatim CODE_BANK1::ee29 (52581). ---- */
+static void u4lb_ee29(void) {
+  REG_PCIE_LANE_CTRL_C659 &= 0xFE;                      /* e8a9(0xf): (0xf&1) -> C659 &= ~1 */
+  REG_CPU_MODE_NEXT = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);  /* d185: CA06 = B402 & 0xFE */
+  u4lb_ed44();
+  u4lb_e74e();
+  PR(0x0B42) = 0;
+  PR(0x0B43) = 0;
+}
+
+/* ---- d436: PCIe-tunnel link-width config. Direct register effects of CODE:d436
+ * (pcie_tunnel_link_width_config_b434_b436, 32247). The multi-round downstream B434 lane RAMP
+ * (c089 + d702/cc-cluster + e84d/e85c clock-gate bracket) is the PCIe-to-GPU side, NOT the upstream
+ * USB4 bond, so it is transcribed as its net B434 write. The load-bearing direct effects -- B401.0
+ * clear (mask!=0xF), B436 low nibble (mask&0xE) and B436 HIGH nibble from B404 -- are faithful. ---- */
+static void u4lb_d436(uint8_t mask) {
+  PR(0xB434) = (uint8_t)((mask & 0x0F) | (PR(0xB434) & 0xF0));   /* c089 net: B434 = mask | (B434&0xF0) */
+  if (mask != 0x0F) PR(0xB401) &= 0xFE;                         /* mask!=0xF -> clear B401.0 */
+  PR(0xB436) = (uint8_t)((PR(0xB436) & 0xF0) | (mask & 0x0E));   /* B436 low nibble = mask&0xE */
+  PR(0xB436) = (uint8_t)((PR(0xB436) & 0x0F) | (uint8_t)(((PR(0xB404) & 0x0F) ^ 0x0F) << 4));  /* B436 high nibble from B404 */
+}
+
+/* ---- a840 gen->speed table (CODE:38cc, resolved via read_memory). Indexed by 0x0A5D (gen):
+ * R7=table38cc[a5d*2], R6=table38cc[a5d*2+1], valid a5d in [0..3]. ---- */
+static __code const uint8_t u4lb_a840_speed_38cc[8] = { 0x02,0x01,0x03,0x01,0x03,0x01,0x03,0x02 };
+
+/* ---- a840: PCIe link-speed/width config (B403/B431 + d436 width). Verbatim CODE:a840 structural
+ * path. R7=gen(0x0AEC), R6=lane(0x0AED). The (gen==3 && lane==3) table-remap branch uses the
+ * 0x38cc speed table (USB4 live, (0x09FA&0x81)!=0) or the 0x5d24/0x5d29 tables (PCIe direct). ---- */
+static void u4lb_a840(uint8_t param) {
+  uint8_t r7 = PR(0x0AEC);                              /* a840: R7 = 0x0AEC (gen) */
+  uint8_t r6 = PR(0x0AED);                              /* a845: R6 = 0x0AED (lane) */
+  uint8_t r5;
+  uint8_t a5c;
+  REG_CPU_CTRL_CA81 &= 0xFE;                            /* a84a: CA81 &= ~1 */
+  if (r7 == 3 && r6 == 3) {
+    if ((PR(0x09FA) & 0x81) != 0) {
+      /* a863 e2c9 path (USB4 live): index 0x38cc speed table by 0x0A5D=gen. */
+      uint8_t idx;
+      /* FUN_CODE_e2c9() deep helper OMITTED (only reached at full gen3/lane3 re-train); the
+       * load-bearing effect here is the gen->speed table remap of R7/R6. */
+      PR(0x0A5D) = r7; idx = (uint8_t)(PR(0x0A5D) & 0x03);
+      r7 = u4lb_a840_speed_38cc[(uint8_t)(idx << 1)];
+      r6 = u4lb_a840_speed_38cc[(uint8_t)((idx << 1) + 1)];
+      if (PR(0x07B9) != 0) r6 = 1;                      /* a88a: 0x07B9 -> R6 = 1 */
+    } else {
+      /* a89b ced1 path (PCIe direct, (0x09FA&0x81)==0): 0x5d24/0x5d29 gen->(speed,lane) tables.
+       * ced1() body is gating-only (not transcribed); this branch is the non-USB4 path. */
+      static __code const uint8_t t5d24[5] = { 0x00, 0x00, 0x02, 0x02, 0x02 };
+      static __code const uint8_t t5d29[5] = { 0x01, 0x00, 0x00, 0x01, 0x02 };
+      PR(0x0A5D) = r7;
+      r7 = t5d24[PR(0x0A5D)]; r6 = t5d29[PR(0x0A5D)];   /* a89e-a8af remap (gen==3 -> 0x02,0x01) */
+    }
+  }
+  r5 = (uint8_t)(PR(0x09FA) & 0x81);                    /* a8b0: R5 = 0x09FA & 0x81 */
+  /* a8b7..a8de: CA06 12V/lane gating. */
+  if (r5 == 0) {
+    if (r7 >= 3) {                                      /* a8c2: R7>=3 -> a8d7 CA06 &= 0x1F */
+      REG_CPU_MODE_NEXT &= 0x1F;
+    } else if (r6 < 2) {                                /* a8c8: R6<2 -> CA06 = (&0x1F)|0x20 */
+      REG_CPU_MODE_NEXT = (uint8_t)((REG_CPU_MODE_NEXT & 0x1F) | 0x20);
+    } else {                                            /* a8db: R7<3 && R6>=2 -> CA06 &= 0x1F */
+      REG_CPU_MODE_NEXT &= 0x1F;
+    }
+  } else {
+    if (r7 == 3) {                                      /* a8b9: R7==3 -> a8d7 CA06 &= 0x1F */
+      REG_CPU_MODE_NEXT &= 0x1F;
+    }
+    /* else R7!=3 -> a8de (no CA06 write) */
+  }
+  /* a8de-a8fc: B403 is a TWO-stage op. 9a46 inner = the FLAT B403 write; 9a46 then returns the
+   * PLANE-2 0x40B0 high nibble, and the final r3_write at a8fc lands on PLANE-2 0x40B0 (NOT flat B403). */
+  if (r7 < 3) {
+    PR(0xB403) = (uint8_t)((PR(0xB403) & 0xFE) | 0x01);                              /* 9a46 inner: flat B403 */
+    P1_WR(0x40B0, (uint8_t)((uint8_t)(r7 + 1) | (uint8_t)(P1_RD(0x40B0) & 0xF0)));   /* a8fc: plane-2 0x40B0 = (gen+1)|hi */
+  } else {
+    PR(0xB403) &= 0xFE;                                                              /* 9a46 inner: flat B403 */
+    P1_WR(0x40B0, (uint8_t)((P1_RD(0x40B0) & 0xF0) | 0x04));                         /* a8fc: plane-2 0x40B0 = hi|4 */
+  }
+  /* a8ff..a91e: 0x0A5C width-code from lane (R6): R6==1 -> 0xC, R6==0 -> 0xE, else 0. */
+  a5c = 0;
+  if (r6 < 3) {
+    if (r6 == 1) a5c = 0x0C;
+    else if (r6 == 0) a5c = 0x0E;
+  }
+  PR(0x0A5C) = a5c;
+  /* a91f..a92d: B431 = (B431 & 0xF0) | 0x0A5C. */
+  PR(0xB431) = (uint8_t)((PR(0xB431) & 0xF0) | a5c);
+  /* a92e-a934: d436(0x0A5C) width config, then on the USB4 path (R5!=0) LJMP 0x054d -> bank1 ed44
+   * (re-strobe B401/B402 + df61 PHY seeds). */
+  u4lb_d436(a5c);                                       /* d436(0x0A5C) */
+  if ((uint8_t)(PR(0x09FA) & 0x81) != 0) u4lb_ed44();   /* a92e R5!=0 (USB4): ed44 re-strobe tail */
+  (void)param;
+}
+
+/* ---- e305: state-4 PcieTunnel power-on prologue. Verbatim CODE_BANK1::e305 (50982). Gated by
+ * (0x09FA & 0x81) (d17e). Does the conditional CA06 mode-next select, ee29, B402 &= ~2, a840, then
+ * e26a(1,1) = the cdc6 E764 train (kept in b0b4) + the HDDPC|0x20 strobe. ---- */
+static void u4lb_e305(uint8_t param) {
+  if ((PR(0x09FA) & 0x81) == 0) return;                 /* d17e gate */
+  /* e305 prologue: conditional CA06 mode-next select. */
+  if ((PR(0x0AEC) == 3) ||
+      (((PR(0x0750) != 2) || (PR(0x0751) != 0)) && (PR(0x0750) != 1))) {
+    REG_CPU_MODE_NEXT &= 0x1F;
+  } else {
+    REG_CPU_MODE_NEXT = (uint8_t)((REG_CPU_MODE_NEXT & 0x1F) | 0x20);
+  }
+  u4lb_ee29();                                          /* ee29(0xca06, param) */
+  REG_PCIE_CTRL_B402 &= 0xFD;                           /* B402 &= ~2 */
+  u4lb_a840(param);                                     /* a840(param) */
+  /* e26a(1,1) follows: its cdc6 E764 0x14->0x19 train is emitted inline in b0b4 (KEPT), then the
+   * HDDPC|0x20 strobe is added there. */
+}
+
+/* ---- c593: bank0 tunnel/PHY commit. Verbatim CODE:c593 (30237). e916/e914 are plane-2 reads of
+ * 0x2805 whose RETURN seeds the following 0x1335 RMW (NOT a re-read of 0x1335). ---- */
+static uint8_t u4lb_e916(void) { return P1_RD(0x2805); }   /* e914/e916: r3_read 0x2805 plane-2 */
+static void u4lb_c593(void) {
+  uint8_t v;
+  PR(0xCCB0) = (uint8_t)((PR(0xCCB0) & 0xF8) | 0x05);   /* CCB0 = (CCB0&0xF8)|5 */
+  PR(0xCCB2) = 0x00;                                    /* CCB2 = 0 */
+  PR(0xCCB3) = 0xC8;                                    /* CCB3 = 0xC8 (200) */
+  P1_WR(0x134D, 0x04);                                  /* 0x134D = 4 */
+  P1_WR(0x1334, 0x02);                                  /* 0x1334 = 2 */
+  P1_WR(0x1335, 0x02);                                  /* 0x1335 = 2 */
+  v = u4lb_e916();                                      /* e916: A = read 0x2805 */
+  P1_WR(0x1335, (uint8_t)((v & 0xFE) | 0x01));          /* 0x1335 = (A&0xFE)|1 */
+  if (PR(0x072D) == 0) {
+    v = u4lb_e916();                                    /* e914: A = read 0x2805 */
+    P1_WR(0x1335, (uint8_t)(v & 0xFD));                 /* 0x1335 = A & 0xFD */
+  } else {
+    P1_WR(0x1335, (uint8_t)((P1_RD(0x1335) & 0xFD) | 0x02));  /* 0x1335 = (0x1335&0xFD)|2 */
+  }
+  v = u4lb_e916();                                      /* e914: A = read 0x2805 */
+  P1_WR(0x1335, (uint8_t)((v & 0xFB) | 0x04));          /* 0x1335 = (A&0xFB)|4 */
+  P1_WR(0x1334, (uint8_t)((P1_RD(0x1334) & 0x7F) | 0x80)); /* 0x1334 |= 0x80 */
+  P1_WR(0x1285, (uint8_t)((P1_RD(0x1285) & 0x0F) | 0x30)); /* 0x1285 = (0x1285&0x0F)|0x30 */
+}
+
+/* ---- b8db: CDR/PLL validate loop. CODE_BANK1::b8db (45152). Disasm-verified: a PROLOGUE picks an
+ * early-return (stock does NOTHING -- no loop, no e9e7) in three cases, else a bounded retry loop that
+ * polls the PLL-lock bit (c3a8 = bit6/0x40, NOT bit5) and fires e9e7 (RxPLL reset) on a miss. Caller
+ * DISCARDS the return; the only hardware effect is the e9e7 set, so the early-returns matter (they stop
+ * a spurious RxPLL reset right after the PHY trained). The per-iteration CDR-margin SUBB compare is
+ * read-only and only gates loop-exit timing -- omitted here; we exit on PLL-lock. ---- */
+static void u4lb_b8db(void) {
+  uint8_t iter;
+  if ((P1_RD(0x0000) & 0x02) == 0) {                    /* b8e4: plane-2 reg0.1 clear */
+    if ((PR(0x92F8) & 0x0C) == 0) return;              /* b953-b95f: nothing to validate */
+  } else if (PR(0x0750) == 1) {                         /* b8e7 */
+    if (PR(0xC297) & 0x20) return;                     /* b8ef-b8fc: already locked */
+  } else {
+    if (PR(0xC2A7) & 0x20) return;                     /* b91b-b928: already locked */
+  }
+  for (iter = 0; iter < 10; iter++) {
+    (void)(PR(0xC2D2) & 0x3F); (void)PR(0xC2D9); (void)PR(0xC2DA);   /* b977-b987: CDR shadow (read-only) */
+    (void)(PR(0xC352) & 0x3F); (void)PR(0xC359); (void)PR(0xC35A);   /* b989-b999 */
+    if ((PR(0xC2D0) & 0x40) && (PR(0xC350) & 0x40)) break;           /* c3a8: bit6 PLL lock */
+    u4lb_e9e7();                                                     /* b9f3: RxPLL reset on miss */
+  }
+}
+
+/* ====================================================================================
  * b0b4 body (CODE_BANK1::b0b4 @ file 0x130b4) — state-4 assembled per the plan's dependency order.
  * ==================================================================================== */
 static void u4lb_state4_b0b4(void) {
@@ -517,7 +741,8 @@ static void u4lb_state4_b0b4(void) {
   if (PR(0x0AF1) & 0x01) {
     REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;               /* b147 9790: E716=(E716&0xFC)|3 */
     phy_cc10_cmd_wait(2, 0, 0x28);                         /* b14a-b150 051b: R7=2,R4=0,R5=0x28 */
-    REG_LINK_STATUS_E716 &= 0xFC;                        /* b153 9789: E716 &= ~3 */
+    REG_LINK_STATUS_E716 &= 0xFC;                        /* b153 9789 (write1): E716 &= ~3 */
+    REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;  /* 9789 falls through into 9790 (write2): restore PHY link-mode 3 */
     REG_CPU_CTRL_CA81 &= 0xFE;                        /* b156 9908: CA81 &= ~1 */
     REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;               /* b159-b15b: CA06=(CA06&0x1F)|0x60 */
   }
@@ -528,7 +753,10 @@ static void u4lb_state4_b0b4(void) {
    * lanes SB[0xA0]/[0xA1] 07->01->02. e305 -> e26a(1,1) -> cdc6(1). The CA06 mode-next select (e305 prologue)
    * is kept; the e57d reset is replaced with the real e7d4 + cdc6 train. (verbatim CODE:cdc6/e7d4/cc8b). */
   uart_puts("[PcieTunnel-PwrOn]");
-  REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x20;          /* e305 prologue: CA06 mode-next select */
+  /* e305(1): conditional CA06 mode-next select + ee29 (C659/CA06/ed44->df61/e74e) + B402&=~2 + a840
+   * (B403/B431/d436 width). e26a's cdc6 E764 0x14->0x19 train follows inline below (KEPT), then the
+   * HDDPC|0x20 strobe (e26a tail). */
+  u4lb_e305(1);
   if (PR(0x09FA) & 0x81) {                            /* d17e gate (e305/e26a passed it; param hardcoded 1) */
     REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xF7) | 0x08;  /* e7d4: set bit3 */
     REG_PHY_TIMER_CTRL_E764 &= 0xFB;            /* e7d4: clr bit2 */
@@ -546,6 +774,8 @@ static void u4lb_state4_b0b4(void) {
       REG_PHY_TIMER_CTRL_E764 &= 0xFD;
       PR(0x06E9) = 1;
     }
+    /* e26a(1,1) tail (inside the d17e gate, per stock): HDDPC = (HDDPC & 0xDF) | 0x20. */
+    REG_HDDPC_CTRL = (uint8_t)((REG_HDDPC_CTRL & 0xDF) | 0x20);
   }
 
   /* --- L0 OS-arm (b15f-b176), gated 0x0819.0 --- */
@@ -569,15 +799,15 @@ static void u4lb_state4_b0b4(void) {
   u4lb_e9e7();                                      /* b19d: RstRxpll */
   REG_CPU_CTRL_CC37 &= 0xFB;                   /* b1a0-b1a3 984d: CC37 &= ~0x04 */
 
-  /* --- b8db: [CDRV ok] (ROUND B placeholder) (b1a4) --- */
+  /* --- b8db: [CDRV ok] CDR/PLL validate loop (b1a4) --- */
   uart_puts("[CDRV ok]");
-  /* ROUND B: real b8db CDR/margining compare body TBD (under-mapped). */
+  u4lb_b8db();   /* read-only CDR/PLL validate; caller discards return (harmless, bounded). */
 
   /* --- CA60.3 set (b1a7-b1af) --- */
   REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0xF7) | 0x08;          /* CA60 bit3 = tunnel-adapter enable */
 
-  /* --- c593 bank0 stub (b1b0): tunnel/PHY commit -- ROUND B placeholder (LCALL 0x05c0 -> bank0). --- */
-  /* (No standalone observable XDATA effect mapped; left as a documented Round-B node.) */
+  /* --- c593 (b1b0): bank0 tunnel/PHY commit (CCB0/CCB2/CCB3 + plane-2 0x1334/0x1335/0x1285). --- */
+  u4lb_c593();
 
   /* --- L0 OS1 trigger (b1b3-b1de), gated 0x0819.0 --- */
   if (PR(0x0819) & 0x01) {
