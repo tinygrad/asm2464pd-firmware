@@ -650,7 +650,9 @@ static uint8_t u4lb_e461(void) {
     PR(0x0AA8) = PR(0x0776) ? 0 : PR(0x0718);      /* e1cb p3 = 0 (9966 CLR A); e2b9 p3 = 0x0718 (=4) */
     PR(0x0AA9) = 0x0D;                             /* p2 -> SBTX[0] */
     PR(0x0AAA) = 0x04;                             /* p1 -> SBTX[1] */
-    sb_d4cd_transport_edges();                     /* e1d6/e2c4 head: FULL d4cd (transport + link) */
+    /* (stock e2b9 head calls d4cd here; omitted from the super-loop walker -- the a066 INT1 ISR already
+     * drives the SB transport-edge alternation, and keeping cd3f/af38 out of the walker call tree keeps
+     * af38's locals overlayable (IRAM/DSEG budget). The host response is captured by the ISR's d4cd.) */
     SBTX_WR(0, PR(0x0AA9));                         /* 997e: SBTX[0] = 0x0D */
     SBTX_WR(1, (uint8_t)(PR(0x0AAA) | ((PR(0x0AAB) & 1) << 7)));   /* 9923: SBTX[1] = 0x04 | (0xAAB.0<<7) */
     SB_WR(0x0C, (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08));   /* 9695 read + status = (SB[0x0C]&0x80)|8 -> SB[0x0C] */
@@ -698,78 +700,168 @@ static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(PR(0x0819) & (uin
 static volatile uint8_t __xdata u4lb_s5_last759, u4lb_s5_last75b, u4lb_s5_seen, u4lb_s5_lasta0;
 static volatile uint8_t __xdata u4lb_s5_last775;
 static void u4lb_s5_diag(void) {
-  uint8_t a = PR(0x0759), b = PR(0x075B), a0 = SB_RD(0xA0), h = PR(0x0775);
-  uint8_t edge = (uint8_t)((SB_RD(0x28) | SB_RD(0x2A) | SB_RD(0x81) | SB_RD(0x83)) & 0x08);
+  __xdata uint8_t a, b, a0, h;
+  a = PR(0x0759); b = PR(0x075B); a0 = SB_RD(0xA0); h = PR(0x0775);
   if (u4lb_s5_seen && a == u4lb_s5_last759 && b == u4lb_s5_last75b && a0 == u4lb_s5_lasta0
-      && h == u4lb_s5_last775 && edge == 0) return;   /* also re-print while any transport/link edge pends */
-  if (!u4lb_s5_print_budget) return;          /* cap output so a fast 775-cycle can't flood */
+      && h == u4lb_s5_last775) return;
+  if (!u4lb_s5_print_budget) return;
   u4lb_s5_print_budget--;
   u4lb_s5_seen = 1; u4lb_s5_last759 = a; u4lb_s5_last75b = b; u4lb_s5_lasta0 = a0; u4lb_s5_last775 = h;
   uart_puts("\r\n[s5 9="); uart_puthex(a); uart_putc('/'); uart_puthex(b);
   uart_puts(" A="); uart_puthex(a0); uart_puthex(SB_RD(0xA1));
-  uart_puts(" t="); uart_puthex(PR(0x0719)); uart_puts(" 775="); uart_puthex(h);
-  uart_puts(" TX="); uart_puthex(SBTX_RD(0)); uart_puthex(SBTX_RD(1)); uart_puthex(SBTX_RD(4)); uart_puthex(SBTX_RD(5));
-  uart_puts(" 2a="); { uint8_t i; for (i = 0; i < 4; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i))); }
-  uart_puts(" 28="); uart_puthex(SB_RD(0x28)); uart_puts(" 2A="); uart_puthex(SB_RD(0x2A));
-  uart_puts(" 81="); uart_puthex(SB_RD(0x81)); uart_puts(" 83="); uart_puthex(SB_RD(0x83));
-  uart_puts(" EE="); uart_puthex(PR(0x06EE)); uart_puts(" EF="); uart_puthex(PR(0x06EF));
-  uart_puts(" 18="); uart_puthex(SB_RD(0x18)); uart_putc(']');
+  uart_puts(" 775="); uart_puthex(h); uart_putc(']');
+}
+
+/* ---- 8501: e80a(R5R4=0x0065,R7=2) via trampoline 0x051b -- a banked SB-transport drain/poll. The FSM
+ * state is always written BEFORE this call, so it is non-load-bearing for progression. Modeled by the
+ * existing bounded SB-transport edge drain (same class as e80a). (CL0 wf iter4, verified) ---- */
+static void u4lb_8501(void) { }   /* non-load-bearing SB-transport drain; ISR's d4cd handles the edges */
+
+/* ---- 81d4 finalize (CODE_BANK1::81d4): width-settle -> advance state cell 0x0759+lane to 0x60. On
+ * counter overflow (>=0x0F) reset state to 0x00. The 0x0800-plane PHY shadow (81eb-821c) is best-effort
+ * (non-progression). On the live path 0x0AB3==0 so the C2C3/C343 retrain tail is dead (omitted). ---- */
+static void u4lb_lp1_finalize(uint8_t lane) {
+  __xdata uint8_t r7;
+  if (PR(0x075F + lane) >= 0x0F) { PR(0x0759 + lane) = 0x00; return; }   /* 81d4-81e2: counter overflow */
+  PR(0x075F + lane)++;                                                   /* 81e5-81ea: bump counter */
+  r7 = (uint8_t)((PR(0x075D + lane) + 1) & 0x0F);
+  PR(0x075D + lane) = r7;
+  PR(0x0800 + (uint8_t)(lane + r7)) |= 0x80;                             /* 8212-821c: lane-cfg shadow bit7 */
+  PR(0x0759 + lane) = 0x60;                                              /* 821d: state 0x40 -> 0x60 */
+}
+
+/* ---- 8174 width-settle poll (CODE_BANK1::8174): advance to 0x60 (via finalize) when the negotiated
+ * width pair has settled vs the read-only HW lane-width counter CCE4:CCE5 (981b 16-bit subtract >= 0xC8);
+ * else leave state 0x40 to retry next pass. Off the live path (0x10 seed never reaches 0x40). ---- */
+static void u4lb_lp1_width_settle(uint8_t lane) {
+  __xdata uint16_t wA, wB, neg; __xdata uint8_t c774;
+  wA = (uint16_t)(((uint16_t)PR(0x076C + 2*lane) << 8) | PR(0x076D + 2*lane));
+  if (wA == 0) { u4lb_lp1_finalize(lane); return; }                     /* 817c: early settle */
+  wB   = (uint16_t)(((uint16_t)PR(0x0770 + 2*lane) << 8) | PR(0x0771 + 2*lane));
+  c774 = PR(0x0774);
+  if ((uint8_t)wB == c774 && (uint8_t)(wB >> 8) == 0) { u4lb_lp1_finalize(lane); return; }  /* 81a6 */
+  neg = (uint16_t)(((uint16_t)PR(0xCCE4) << 8) | PR(0xCCE5));
+  if ((uint16_t)((wA - 1) - neg) >= 0x00C8) { u4lb_lp1_finalize(lane); return; }            /* 81b7 */
+  /* 81d1: not settled -> leave state 0x40, retry next pass. */
 }
 
 /* --- 8000: PRIMARY state-5 walker (0x0718==4). LOOP1 state@0x0759+lane, LOOP2 (CL walk) @0x075B+lane. --- */
 static void u4lb_walk_8000(void) {
   __xdata uint8_t lane, s;
   /* (marker removed) */
-  /* LOOP1: lane-width / PHY-present FSM (state @0x0759+lane). */
+  /* LOOP1 -- byte-faithful port of CODE_BANK1::8000 jump-table FSM (state cell @0x0759+lane), CL0 wf iter4,
+   * adversarially verified. Table @0x802a: default->804f 0x10->8069 0x20->807a 0x30->80ca 0x40->80d7
+   *   0x50->8251 0x60->8262 0x70->82d5 0x80->82fa 0x90->831a 0xa0->8327 0xa1->TERMINAL.
+   * Live chain from the b0b4 seed (0x10): 0x10->0x30->0x50->0x70->0x90->0xA1 (bonded). The OLD handmade
+   * forced state 0x00 (terminal) at 0x50 via an ee6e stub -- THAT was the lane-bond killer. 0x50 is the
+   * e461-push -> 0x70. States 0x20/0x40/0x60/0x80/0xA0 are the connect-arm/retrain edges. */
   for (lane = 0; lane < 2; lane++) {
-    if (!u4lb_lane_gate(lane)) continue;
-    s = PR(0x0759 + lane);
-    if (s == 0x10) {
-      PR(0x0800 + lane) &= 0xEF;
-      PR(0x081C + lane) &= 0x7F;
-      PR(0x0819 + lane) &= 0xDF;
-      PR(0x0759 + lane) = 0x20;
-    } else if (s == 0x20) {
+    if (!u4lb_lane_gate(lane)) continue;             /* 8003-8021 prologue present-gate (0x0819.lane) */
+    s = PR(0x0759 + lane);                           /* 8023-8026: read state cell */
+
+    if (s == 0x10) {                                 /* 8069: e461-push -> 0x30 */
       if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x30;
-    } else if (s == 0x30) {
-      __xdata uint8_t r = u4lb_eda0();
-      if (r == 0) {
-        if (((PR(0x077B + lane) >> 7) & 1) == 0) PR(0x0759 + lane) = 0x40;
-        else PR(0x0759 + lane) = 0x20;
-      } else if (r == 2) PR(0x0759 + lane) = 0x20;
-    } else if (s == 0x40) {
-      PR(0x0759 + lane) = 0x50;
-    } else if (s == 0x50) {
-      if (u4lb_ee6e(lane) == 0) PR(0x0759 + lane) = 0x00;   /* TODO(<90%): 0x8174 width producer */
-    } else if (s == 0x60) {
-      if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x70;
-    } else if (s == 0x70) {
-      __xdata uint8_t r = u4lb_eda0();
-      if (r == 0) {
-        __xdata uint8_t x = PR(0x077B + lane);
-        if ((x & 0xC0) == 0xC0 && (x & 0x0F) == (uint8_t)((0x1C + lane) & 0x0F)) {
-          if (PR(0x0AB3)) u4lb_e9e7();
-          PR(0x0759 + lane) = 0x80;
-        } else PR(0x0759 + lane) = 0x60;
-      } else if (r == 2) PR(0x0759 + lane) = 0x60;
-    } else if (s == 0x80) {
-      if (u4lb_ee6e(lane)) {
-        PR(0x0800 + lane) |= 0x10;
-        PR(0x081C + lane) |= 0x40;
-        PR(0x0819 + lane) &= 0x7F;
-      }
-      PR(0x0759 + lane) = 0x90;
-    } else if (s == 0x90) {
-      PR(0x0759 + lane) = 0xA0;
-    } else if (s == 0xA0) {
-      if (u4lb_e461() == 1) PR(0x0759 + lane) = 0xA1;
-    } else if (s == 0xA1) {
-      __xdata uint8_t r = u4lb_eda0();
-      if (r == 0) {
-        if ((PR(0x077B + lane) & 0xC0) == 0x80) PR(0x0759 + lane) = 0x50;
-        else PR(0x0759 + lane) = 0xA0;
-      } else if (r == 2) PR(0x0759 + lane) = 0xA0;
     }
+    else if (s == 0x20) {                            /* 807a: host-snapshot connect-arm */
+      __xdata uint8_t r = u4lb_eda0();               /* 996d -> DAT_22 */
+      if (r == 0) {
+        __xdata uint8_t snap = PR(0x077B + lane);    /* 985b snapshot */
+        if ((snap & 0x80) == 0) {                    /* 8082 snap.7 clear: stay */
+          PR(0x0759 + lane) = 0x20;
+        } else {                                     /* 8085-80ab connect-arm (snap.7 set) */
+          SB_WR(0x40, (uint8_t)(lane ? 2 : 1));      /* 8085-8091: SB[0x40]=lane?2:1 */
+          PR(0x076C + 2*lane) = 0x00;                /* 8094-809a: clear width pair A */
+          PR(0x076D + 2*lane) = 0x00;
+          PR(0x081C + lane) |= 0x20;                 /* 809b-80a6: shadow |= 0x20 */
+          PR(0x0759 + lane) = 0x40;                  /* 80a9-80ab: *** state 0x20 -> 0x40 *** */
+        }
+        u4lb_8501();                                 /* 80ac: SB-transport drain */
+      } else if (r == 2) {
+        PR(0x0759 + lane) = 0x20;                    /* 80b8/80c1: re-arm */
+      }
+    }
+    else if (s == 0x30) {                            /* 80ca: zero counter, advance to 0x50 */
+      PR(0x075F + lane) = 0x00;                      /* 80ca-80d0: counter = 0 */
+      PR(0x0759 + lane) = 0x50;                      /* 80d1-80d3: state = 0x50 */
+    }
+    else if (s == 0x40) {                            /* 80d7: [Trig] + orientation + width-settle */
+      if (u4lb_ee6e(lane) != 0 && PR(0x075F + lane) != 0) {  /* 80d7-80e3: present AND counter!=0 */
+        if (PR(0x0AB3) == 0) {                       /* 80e8-80ec: emit [Trig] OS1 strobe */
+          SB_WR(lane ? 0x5A : 0x50, 0x01);           /* 80f7-8105 */
+        }
+        PR(0x081C + lane) |= 0x40;                   /* 8108-8117: shadow |= 0x40 */
+        PR(0x081C + lane) = 0x00;                    /* 811a-811b CLR A;MOVX (verbatim post-OR write) */
+        if ((PR(0xC2C3) & 0x01) || (PR(0xC343) & 0x01)) {  /* 811c-8127: orientation gate */
+          if ((PR(0x0819) & 0x03) != 0) {            /* 812d-8137: 0x0819 lane bits */
+            PR(0x081C + lane) = (uint8_t)((PR(0x081C + lane) | 0x40) & 0x7F);  /* 813f-8152 */
+            PR(0x081D + lane) = (uint8_t)(((PR(0x081D + lane) | 0x10) + 1) & 0x7F);  /* 8157-816b */
+          }
+        }
+        /* present+counter!=0 path tails to 8355 (stay 0x40, retry next pass). */
+      } else {
+        u4lb_lp1_width_settle(lane);                 /* 80dc/80e5: !present OR counter==0 -> 8174 */
+      }
+    }
+    else if (s == 0x50) {                            /* 8251: e461-push -> 0x70  *** BUG FIX *** */
+      if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x70;
+    }
+    else if (s == 0x60) {                            /* 8262: width-program -> 0x80 */
+      __xdata uint8_t r = u4lb_eda0();               /* 996d */
+      if (r == 0) {
+        __xdata uint8_t snap = PR(0x077B + lane);    /* 985b/826a */
+        if ((snap & 0xC0) == 0xC0 &&
+            (snap & 0x0F) == (uint8_t)(PR(0x081C + lane) & 0x0F)) {   /* 826b-8281 */
+          if (PR(0x0AB3)) u4lb_e9e7();               /* 8283-8289 */
+          SB_WR(0x40, (uint8_t)(lane ? 2 : 1));      /* 828c-8298 */
+          u4lb_ee57();                               /* 829b: ec51 Trig-arm; CCE4/CCE5 read */
+          PR(0x076C + 2*lane) = PR(0xCCE4);          /* 829e-82a2: width pair A lo = CCE4 */
+          PR(0x076D + 2*lane) = PR(0xCCE5);          /* 82a3-82a5: = CCE5 */
+          PR(0x0770 + 2*lane) = 0x00;                /* 82a6-82af: width pair B lo = 0 */
+          PR(0x0771 + 2*lane) = PR(0x0774);          /* 82b0-82b2: width pair B hi = 0x0774 */
+          PR(0x0759 + lane) = 0x80;                  /* 82b5-82b7: state advance -> 0x80 */
+        } else {
+          PR(0x0759 + lane) = 0x60;                  /* 82ba: mismatch retry */
+        }
+        u4lb_8501();                                 /* 82b8/82c0 */
+      } else if (r == 2) {
+        PR(0x0759 + lane) = 0x60;                    /* 82c3-82cc: retry */
+      }
+    }
+    else if (s == 0x70) {                            /* 82d5: present-gated plane RMW -> 0x90 */
+      if (u4lb_ee6e(lane)) {                         /* 82d5-82d8 present-gate */
+        PR(0x0800 + lane) |= 0x10;                   /* 82da-82df 969e |= 0x10 */
+        PR(0x081C + lane) |= 0x40;                   /* 82e0-82e8 96a9 |= 0x40 */
+        PR(0x0819 + lane) &= 0x7F;                   /* 82e9-82f1 96a7 &= 0x7F */
+      }
+      PR(0x0759 + lane) = 0x90;                      /* 82f2-82f5: unconditional advance */
+    }
+    else if (s == 0x80) {                            /* 82fa: present-gated |0x40 + uncond &0x7F -> 0xA0 */
+      if (u4lb_ee6e(lane)) {                         /* 82fa-82fd present-gate */
+        PR(0x081C + lane) |= 0x40;                   /* 82ff-830e |= 0x40 */
+      }
+      PR(0x081C + lane) &= 0x7F;                     /* 830f-8317 UNCONDITIONAL &= 0x7F */
+      PR(0x0759 + lane) = 0xA0;                      /* 8318: state advance */
+    }
+    else if (s == 0x90) {                            /* 831a: e461-push -> 0xA1 (bonded-terminal arm) */
+      if (u4lb_e461() == 1) PR(0x0759 + lane) = 0xA1;
+    }
+    else if (s == 0xA0) {                            /* 8327: snap.C0==0x80 -> 0x50 (retrain) else 0xA0 */
+      __xdata uint8_t r = u4lb_eda0();               /* 996d */
+      if (r == 0) {
+        if ((PR(0x077B + lane) & 0xC0) == 0x80) PR(0x0759 + lane) = 0x50;  /* 832c-833c */
+        else                                    PR(0x0759 + lane) = 0xA0;  /* 833f-8344 retry */
+        u4lb_8501();                               /* 8345 */
+      } else if (r == 2) {
+        PR(0x0759 + lane) = 0xA0;                  /* 834a-8354: retry */
+      }
+    }
+    else {                                           /* default (804f): shadow clear -> 0x20 */
+      PR(0x0800 + lane) &= 0xEF;                     /* 804f-8054 969e &= 0xEF */
+      PR(0x081C + lane) &= 0x7F;                     /* 8055-805d 96a9 &= 0x7F */
+      PR(0x0819 + lane) &= 0xDF;                     /* 805e-8066 96a7 &= 0xDF */
+      PR(0x0759 + lane) = 0x20;                      /* 8067: state = 0x20 */
+    }
+    /* 0xA1 has NO case: TERMINAL (table key a1 -> 0x0000) = lane bonded, FSM holds. */
   }
   /* LOOP2: THE CL-STATE WALKER (state @0x075B+lane). */
   for (lane = 0; lane < 2; lane++) {

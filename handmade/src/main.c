@@ -831,7 +831,8 @@ void main(void) {
      * SB-router handler can preempt this poll to advance the connect handshake — that is wanted.) */
     if (sb_asserted && sb_diag_count < 8) {
       sb_diag_count++;
-      { uint32_t p; uint8_t e302 = 0, best = 0;
+      { static __xdata uint32_t p; static __xdata uint8_t e302; static __xdata uint8_t best;
+        e302 = 0; best = 0;                   /* XDATA: keep these diag locals out of the full IRAM/DSEG */
         for (p = 0; p < 2000000UL; p++) {     /* bounded ~100ms+ poll window for HW to train */
           e302 = XDATA_REG8V(0xE302);
           if (((e302 >> 4) & 3) > ((best >> 4) & 3)) best = e302;
