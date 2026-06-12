@@ -72,7 +72,7 @@ static __code const uint8_t sb_flip_rom_21b4[0x10] = {
  * SB[0xd1].4=1, SB[0x49]=0xA0, XDATA(0x06EC)=0. Then the b307-b39e tail (SB-PHY-RX descriptor +
  * C801.4/C809.3 UNMASK + CCD mailbox strobe). Verbatim per §2 + RE-AUDIT breakthrough A. */
 static void sb_lane_flip_init(void) {
-  uint8_t flip = PR(0xC6DB) & 0x01;
+  uint8_t flip = REG_PHY_VENDOR_CTRL_C6DB & 0x01;
   uart_puts("[flp=");
   uart_puthex(flip);
   uart_puts("]");
@@ -106,11 +106,11 @@ static void sb_lane_flip_init(void) {
     P1_WR(0x0101, (P1_RD(0x0101) & 0xEF) | 0x10);   /* 0x9685+0x96b7: set b4, clr b5 */
     P1_CLR(0x0101, 0x20);                            /* 0x96b7: clr b5 */
     P1_SET(0x0101, 0x80);                            /* 0x980d: set b7 */
-    PR(0xE7FC) = PR(0xE7FC) & ~0x03;                /* connect -> clear bond gate */
+    REG_LINK_MODE_CTRL = REG_LINK_MODE_CTRL & ~0x03;                /* connect -> clear bond gate */
   } else {
     P1_CLR(0x0101, 0x10);                            /* 0x96b2: clr b4 */
     P1_CLR(0x0101, 0x80);                            /* clr b7 */
-    PR(0xE7FC) = PR(0xE7FC) | 0x03;                 /* no connect -> set bond gate */
+    REG_LINK_MODE_CTRL = REG_LINK_MODE_CTRL | 0x03;                 /* no connect -> set bond gate */
   }
 
   SB_WR(0xD1, (SB_RD(0xD1) & 0xEF) | 0x10);     /* b4=1 */
@@ -126,19 +126,19 @@ static void sb_lane_flip_init(void) {
   SB_WR(0x94, 0x02); SB_WR(0x95, 0x71); SB_WR(0x96, 0x00);
   /* SB 0x98/0x99 PHY-RX descriptor (0c7a A=0x3e B=0x80 -> stock SB[0x98]=3E SB[0x99]=80) */
   SB_WR(0x98, 0x3E); SB_WR(0x99, 0x80);
-  PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02;          /* 97ef: CCD9 mailbox strobe (4 then 2) */
-  PR(0xCCD8) = PR(0xCCD8) & 0xEF;                /* CCD8 &= ~0x10 */
-  PR(0xC801) = (PR(0xC801) & 0xEF) | 0x10;       /* *** C801.4 SET (SB-PHY RX unmask) *** */
-  PR(0xCCD8) = (PR(0xCCD8) & 0xF8) | 0x04;       /* CCD8 bits2:0 = 4 */
-  PR(0xCCDA) = 0x00;
-  PR(0xCCDB) = 200;                              /* 0xC8 */
+  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;          /* 97ef: CCD9 mailbox strobe (4 then 2) */
+  REG_XFER2_DMA_CTRL = REG_XFER2_DMA_CTRL & 0xEF;                /* CCD8 &= ~0x10 */
+  REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x10;       /* *** C801.4 SET (SB-PHY RX unmask) *** */
+  REG_XFER2_DMA_CTRL = (REG_XFER2_DMA_CTRL & 0xF8) | 0x04;       /* CCD8 bits2:0 = 4 */
+  REG_XFER2_DMA_ADDR_LO = 0x00;
+  REG_XFER2_DMA_ADDR_HI = 200;                              /* 0xC8 */
   SB_CLR(0xCF, 0x01);                            /* 98b7(0xCF): SB[0xCF] &= ~1 */
   SB_WR(0x53, 0xFF);                             /* SB[0x53]=0xFF */
   SB_WR(0x5D, 0xFF);                             /* SB[0x5D]=0xFF */
   SB_CLR(0x27, 0x01);                            /* 98b7(0x27): SB[0x27] &= ~1 */
   SB_WR(0x2D, (SB_RD(0x2D) & 0xFD) | 0x02);      /* 9958(0x2D)+97fc: SB[0x2D] b1 set */
   SB_CLR(0x2C, 0x01);                            /* 9945(0x2C): SB[0x2C] &= ~1 */
-  PR(0xC809) = (PR(0xC809) & 0xF7) | 0x08;       /* *** C809.3 SET (SB-PHY RX/INT unmask) *** */
+  REG_INT_CTRL = (REG_INT_CTRL & 0xF7) | 0x08;       /* *** C809.3 SET (SB-PHY RX/INT unmask) *** */
   SB_CLR(0x67, 0x40);                            /* SB[0x67] &= ~0x40 */
   PR(0x072B) = 0x07; PR(0x072C) = 0x07;          /* lane-state latches */
   /* if C8FF==4 (lane-rate gate): ROM-copy CODE 0x21b4[0x10] -> XDATA 0x073E..0x074D.
@@ -211,7 +211,7 @@ static void sb_rom_descriptor_load(void) {
   PR(0x06EE) = SB_RD(0x24) & 0x01;               /* 0x6EE = SB[0x24].0 */
   PR(0x06EF) = SB_RD(0x80) & 0x01;               /* 0x6EF = SB[0x80].0 */
   PR(0x0719) = 0;
-  PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02;          /* 97ef: CCD9 strobe */
+  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;          /* 97ef: CCD9 strobe */
   PR(0x074E) = 0; PR(0x074F) = 0;                /* 9874: zero per-lane CL0 latches */
   SB_CLR(0xD4, 0x20);                            /* SB[0xD4] &= ~0x20 */
   SB_WR(0x8F, (SB_RD(0x8F) & 0xEF) | 0x10);      /* SB[0x8F] = (&0xEF)|0x10 */
@@ -230,7 +230,7 @@ static void sb_block_init(void) {
    * disasm CODE_BANK1::e0d9 e11d branch) = c306(0xC20E) zeroes C20E/C20F/C210 + c307(0,0xC214) zeroes
    * C214/C215/C216; C211/C212/C217 are NOT written (left at default). Handmade had hardcoded the e0d9(4)
    * RXPLL variant (C20E=0x3E,C20F=8,C210=8,C211=0x2E,C212=0x3E,C215=0x20,C217=0x3F) = WRONG PHY seed. */
-  PR(0xC20E) = 0; PR(0xC20F) = 0; PR(0xC210) = 0;   /* c306(0xC20E) */
+  REG_PHY_RXPLL_RESET = 0; REG_PHY_CTRL_C20F = 0; PR(0xC210) = 0;   /* c306(0xC20E) */
   PR(0xC214) = 0; PR(0xC215) = 0; PR(0xC216) = 0;   /* c307(0, 0xC214) */
 
   /* page-1 0x010100 head: clear bits 0,4,6,7 (net &= ~0xD1) */
@@ -270,7 +270,7 @@ static void sb_block_init(void) {
   SB_CLR(0x27, 0x14);                             /* clr bits 2,4 */
 
   /* --- PHY bank0 RMW (DPX=0) --- */
-  PR(0xC233) = PR(0xC233) & ~0x08;
+  REG_PHY_CONFIG = REG_PHY_CONFIG & ~0x08;
   PR(0xC2C4) = (PR(0xC2C4) & 0xBF) | 0x40;
   PR(0xC2DC) = PR(0xC2DC) & 0xC0;
   PR(0xC344) = (PR(0xC344) & 0xBF) | 0x40;
@@ -284,13 +284,13 @@ static void sb_block_init(void) {
   PR(0xC2C3) = (PR(0xC2C3) & 0xC3) | 0x1C; PR(0xC2C3) = PR(0xC2C3) & 0xBF;
   PR(0xC2CB) = PR(0xC2CB) & 0xFB;                 /* e35f C2CB &= ~0x04 */
   /* b70d(C343) */
-  PR(0xC343) = PR(0xC343) & 0xFE; PR(0xC343) = PR(0xC343) & 0xFD;
-  PR(0xC343) = (PR(0xC343) & 0xC3) | 0x1C; PR(0xC343) = PR(0xC343) & 0xBF;
+  REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0xFE; REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0xFD;
+  REG_VENDOR_CTRL_C343 = (REG_VENDOR_CTRL_C343 & 0xC3) | 0x1C; REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0xBF;
   PR(0xC34B) = PR(0xC34B) & 0xFB;                 /* e36c C34B &= ~0x04 */
   PR(0xC21C) = (PR(0xC21C) & 0xBF) | 0x40;        /* e373 b796(C21C) */
-  PR(0xC208) = PR(0xC208) & 0xBF;                 /* e379 C208 &= ~0x40 */
+  REG_PHY_LINK_CTRL_C208 = REG_PHY_LINK_CTRL_C208 & 0xBF;                 /* e379 C208 &= ~0x40 */
   PR(0xC2C3) = PR(0xC2C3) & 0x7F;                 /* e380 b73b: C2C3 &= 0x7F */
-  PR(0xC343) = PR(0xC343) & 0x7F;                 /* e380 b73b: C343 &= 0x7F */
+  REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0x7F;                 /* e380 b73b: C343 &= 0x7F */
   SB_CLR(0x1D, 0x02);                             /* e387 SB[0x1D] &= ~0x02 (DPX=1) */
 
   /* --- bb45 tail (bc45..bc5d): the truncated SB[0xBA]/[0xBD] + 0x09F7 sub-block --- */
@@ -466,15 +466,15 @@ static void u4c_bcd7_tail(void) {
   /* bcc4: r3_read(0x1504) & 0xF3, then r3_write |= 2 -> this is an SB[0x04]-region descriptor RMW.
    * Resolved net: the descriptor commit handled by the engine; the load-bearing XDATA writes follow. */
   if (PR(0x09FA) & 0x81) {              /* a48f: bcd7() != 0  (0x09FA & 0x81) */
-    PR(0xCA06) = PR(0xCA06) & 0xEF;     /* a4a6: CA06 &= ~0x10 */
+    REG_CPU_MODE_NEXT = REG_CPU_MODE_NEXT & 0xEF;     /* a4a6: CA06 &= ~0x10 */
     sb_pcie_width_ramp(0x0F);           /* a4ac: pcie_tunnel_link_width_config_b434_b436(0xF) = d436 */
     if (PR(0x0AF1) & 0x10) {            /* a4cd: JNB 0x0AF1.4 -> skip e7ae block */
       uint16_t g = 0;
       while (((PR(0xC006) & 0x1F) != 0x10) && ++g < 0x0800);   /* bank0_e7ae C006 lock (bounded) */
       g = 0;
       while (((PR(0xC00E) & 0x07) != 0x00) && ++g < 0x0800);   /* bank0_e7ae C00E lock (bounded) */
-      PR(0xCC30) = PR(0xCC30) & 0xFE;                            /* CC30 &= ~1 */
-      PR(0xE710) = (PR(0xE710) & 0xE0) | 0x1F;                   /* E710 rate latch low5 = 0x1F */
+      REG_CPU_MODE = REG_CPU_MODE & 0xFE;                            /* CC30 &= ~1 */
+      REG_LINK_WIDTH_E710 = (REG_LINK_WIDTH_E710 & 0xE0) | 0x1F;                   /* E710 rate latch low5 = 0x1F */
     }
     PR(0xB430) = (PR(0xB430) & 0xFE) | 0x01;   /* ee82: B430 |= 1 (tunnel link-up bit) */
   }
@@ -522,7 +522,7 @@ static void sb_assert(void) {
   /* Immediate (ISR-context, single-read) E302 marker so we capture the post-SB link mode even if
    * the super-loop's sleep() hangs on the shared CC10 timer mailbox (R-timer hazard). */
   uart_puts("[SBdone e302=");
-  uart_puthex(PR(0xE302));
+  uart_puthex(REG_PHY_MODE_E302);
   /* SB write-landed self-readback (diagnostic): the page-1 0x2800 alias for the SB block is
    * RE-asserted, not HW-confirmed. Read back the keystone bits we just wrote: SB[0x81]==0x08,
    * SB[0x66]==0x20, SB[0x9E]==0x20, SB[0x01] bits6,7 set, SB[0xC9] (host connect bits). */
@@ -540,9 +540,9 @@ static void sb_assert(void) {
    * full 256-byte SB page-1 block SB[0x00..0xFF] (DPX=1 paged XDATA at 0x2800+off). Taken right
    * after our SB-assert (the logical equivalent of stock's [===SB Con===] transition). */
   uart_puts("[HMSB:");
-  uart_puthex(PR(0x0AF1)); uart_puthex(PR(0xC80A)); uart_puthex(PR(0xE302));
-  uart_puthex(PR(0x09F9)); uart_puthex(PR(0x09FA)); uart_puthex(PR(0xEC06));
-  uart_puthex(PR(0x91C0)); uart_puthex(PR(0xE318));
+  uart_puthex(PR(0x0AF1)); uart_puthex(REG_INT_PCIE_NVME); uart_puthex(REG_PHY_MODE_E302);
+  uart_puthex(PR(0x09F9)); uart_puthex(PR(0x09FA)); uart_puthex(REG_NVME_EVENT_STATUS);
+  uart_puthex(REG_USB_PHY_CTRL_91C0); uart_puthex(REG_PHY_COMPLETION_E318);
   uart_putc('|');
   { uint16_t off; for (off = 0; off < 0x100; off++) uart_puthex(SB_RD(off)); }
   uart_puts("]\n");

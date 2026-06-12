@@ -67,8 +67,8 @@ static void pd_wait(uint16_t reg, uint8_t mask, uint8_t set) {
 
 /* da51: RDO/CRC timing constants for the PD engine. */
 static void pd_da51(void) {
-  PR(0xE40B) = (PR(0xE40B) & 0x7F) | 0x80;
-  if (PR(0xE40B) & 0x80) {
+  REG_CMD_CONFIG = (REG_CMD_CONFIG & 0x7F) | 0x80;
+  if (REG_CMD_CONFIG & 0x80) {
     PR(0xE401) = (PR(0xE401) & 0xF8) | 0x04;
     PR(0xE401) = (PR(0xE401) & 0x07) | 0xB0;   /* -> 0xB4 */
     PR(0xE406) = (PR(0xE406) & 0xF0) | 0x06;
@@ -81,55 +81,55 @@ static void pd_da51(void) {
 /* cc_pd_phy_term_init @0xAE87 — program CC Rp/Rd termination + arm the PD command/RX engine.
  * This is what makes the host see a PD-capable Type-C sink attach and lets the device RX. */
 static void cc_pd_phy_term_init(void) {
-  PR(0xE40B) = (PR(0xE40B) & 0xBF) | 0x40;
-  PR(0xE40A) = 0x0F;
-  PR(0xE413) &= 0xFE;
-  PR(0xE413) &= 0xFD;
-  PR(0xE400) &= 0x7F;                         /* engine off during reconfig */
+  REG_CMD_CONFIG = (REG_CMD_CONFIG & 0xBF) | 0x40;
+  REG_CMD_CFG_E40A = 0x0F;
+  REG_CMD_CFG_E413 &= 0xFE;
+  REG_CMD_CFG_E413 &= 0xFD;
+  REG_CMD_CTRL_E400 &= 0x7F;                         /* engine off during reconfig */
   /* CC cmd: opcode 0, CC8A=0, CC8B=0x0A, go/wait/ack */
-  PR(0xCC88) &= 0xF8; PR(0xCC8A) = 0;
-  PR(0xCC8B) = 0x0A; PR(0xCC89) = 0x01;
+  REG_XFER_DMA_CTRL &= 0xF8; REG_XFER_DMA_ADDR_LO = 0;
+  REG_XFER_DMA_ADDR_HI = 0x0A; REG_XFER_DMA_CMD = 0x01;
   pd_wait(0xCC89, 0x02, 1);
-  PR(0xCC89) = 0x02;
-  PR(0xE40B) = (PR(0xE40B) & 0xFE) | 0x01;
+  REG_XFER_DMA_CMD = 0x02;
+  REG_CMD_CONFIG = (REG_CMD_CONFIG & 0xFE) | 0x01;
   /* CC cmd: opcode 0, CC8A=0, CC8B=0x3C, go/wait/ack */
-  PR(0xCC88) &= 0xF8; PR(0xCC8A) = 0;
-  PR(0xCC8B) = 0x3C; PR(0xCC89) = 0x01;
+  REG_XFER_DMA_CTRL &= 0xF8; REG_XFER_DMA_ADDR_LO = 0;
+  REG_XFER_DMA_ADDR_HI = 0x3C; REG_XFER_DMA_CMD = 0x01;
   pd_wait(0xCC89, 0x02, 1);
-  PR(0xCC89) = 0x02;
+  REG_XFER_DMA_CMD = 0x02;
   pd_wait(0xE402, 0x08, 0);                   /* wait engine idle */
-  PR(0xE409) &= 0xFE;
-  PR(0xE409) = (PR(0xE409) & 0xBF) | 0x40;
-  PR(0xE420) = 0x40;                          /* 9713(0x40): seed TX buf[0] */
-  PR(0xE409) = (PR(0xE409) & 0xF1) | 0x06;
-  PR(0xE400) = (PR(0xE400) & 0xBF) | 0x40;    /* CC orientation bit6 */
-  PR(0xE411) = 0xA1;                          /* Rp/Rd comparator thresholds (REQUIRED) */
-  PR(0xE412) = 0x79;
-  PR(0xE400) = (PR(0xE400) & 0xC3) | 0x3C;    /* enable CC drive/termination (host sees attach) */
-  PR(0xE409) &= 0x7F;
-  PR(0xC809) = (PR(0xC809) & 0xDF) | 0x20;    /* enable PD interrupt source (REQUIRED) */
+  REG_CMD_CTRL_E409 &= 0xFE;
+  REG_CMD_CTRL_E409 = (REG_CMD_CTRL_E409 & 0xBF) | 0x40;
+  REG_CMD_TRIGGER = 0x40;                          /* 9713(0x40): seed TX buf[0] */
+  REG_CMD_CTRL_E409 = (REG_CMD_CTRL_E409 & 0xF1) | 0x06;
+  REG_CMD_CTRL_E400 = (REG_CMD_CTRL_E400 & 0xBF) | 0x40;    /* CC orientation bit6 */
+  REG_CMD_CFG_E411 = 0xA1;                          /* Rp/Rd comparator thresholds (REQUIRED) */
+  REG_CMD_CFG_E412 = 0x79;
+  REG_CMD_CTRL_E400 = (REG_CMD_CTRL_E400 & 0xC3) | 0x3C;    /* enable CC drive/termination (host sees attach) */
+  REG_CMD_CTRL_E409 &= 0x7F;
+  REG_INT_CTRL = (REG_INT_CTRL & 0xDF) | 0x20;    /* enable PD interrupt source (REQUIRED) */
   pd_da51();
-  PR(0xE40E) = 0x8A;
-  PR(0xE400) = (PR(0xE400) & 0x7F) | 0x80;    /* PD engine enable (REQUIRED) */
-  PR(0xE40B) &= 0xFE;
-  PR(0xE66A) &= 0xEF;
-  PR(0xE40D) = 0x28;
-  PR(0xE413) = (PR(0xE413) & 0x8F) | 0x60;    /* RX+TX enable (REQUIRED) */
+  REG_CMD_CFG_E40E = 0x8A;
+  REG_CMD_CTRL_E400 = (REG_CMD_CTRL_E400 & 0x7F) | 0x80;    /* PD engine enable (REQUIRED) */
+  REG_CMD_CONFIG &= 0xFE;
+  REG_PD_CTRL_E66A &= 0xEF;
+  REG_CMD_CFG_E40D = 0x28;
+  REG_CMD_CFG_E413 = (REG_CMD_CFG_E413 & 0x8F) | 0x60;    /* RX+TX enable (REQUIRED) */
   PR(0xCAC4) &= 0xFE;
-  PR(0xE40B) &= 0xDF;
+  REG_CMD_CONFIG &= 0xDF;
   PR(0xC698) &= 0xDF;
 }
 
 /* cc_ctrl_enable_cc81_cc98_events @0xE330 — clear + enable the CC attach/role event sources. */
 static void cc_ctrl_enable_events(void) {
-  PR(0xCC81) = 0x04; PR(0xCC81) = 0x02;
-  PR(0xC801) = (PR(0xC801) & 0xEF) | 0x10;
-  PR(0xCC80) &= 0xEF;
-  PR(0xCC80) = (PR(0xCC80) & 0xF8) | 0x03;
-  PR(0xCC99) = 0x04; PR(0xCC99) = 0x02;
-  PR(0xC801) = (PR(0xC801) & 0xEF) | 0x10;
-  PR(0xCC98) &= 0xEF;
-  PR(0xCC98) = (PR(0xCC98) & 0xF8) | 0x04;
+  REG_CPU_INT_CTRL = 0x04; REG_CPU_INT_CTRL = 0x02;
+  REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x10;
+  REG_CPU_CTRL_CC80 &= 0xEF;
+  REG_CPU_CTRL_CC80 = (REG_CPU_CTRL_CC80 & 0xF8) | 0x03;
+  REG_XFER_DMA_CFG = 0x04; REG_XFER_DMA_CFG = 0x02;
+  REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x10;
+  REG_CPU_DMA_READY &= 0xEF;
+  REG_CPU_DMA_READY = (REG_CPU_DMA_READY & 0xF8) | 0x04;
 }
 
 /* pd_internal_state_init / InternalPD_StateInit @0xB8C3 — reset the PD policy-engine state
@@ -144,7 +144,7 @@ static void pd_internal_state_init(void) {
   PR(0x07C1) = 0;
   PR(0x07E3) = 0;
   PR(0x07BD) = 1;
-  PR(0x07D5) = (PR(0xE400) & 0x40) ? 0x10 : 0x01;
+  PR(0x07D5) = (REG_CMD_CTRL_E400 & 0x40) ? 0x10 : 0x01;
   if (PR(0x07DE) == 0) PR(0x07CA) = 2;
   PR(0x07DE) = 0; PR(0x07DF) = 0;
   PR(0x07B9) = 0; PR(0x07BA) = 0;
@@ -164,7 +164,7 @@ static void pd_internal_state_init(void) {
  * force the host to drop its PD contract and re-send Source_Cap. No-op (print only) once USB4
  * is already established ((E302>>4)&3 == 3). */
 static void pd_drive_hard_reset(void) {
-  uint8_t lm = (PR(0xE302) & 0x30) >> 4;
+  uint8_t lm = (REG_PHY_MODE_E302 & 0x30) >> 4;
   uint16_t g;
   uart_puts("[CC_state=");
   uart_puthex(lm);
@@ -176,35 +176,35 @@ static void pd_drive_hard_reset(void) {
   { uint8_t i; for (i = 0; i < 0x20; i++) PR(0xE420 + i) = 0; }   /* e73a: clear TX buf */
   pd_internal_state_init();                                       /* b8c3 */
   /* 9536: arm CC-controller HARD-RESET-TX opcode */
-  PR(0xE40F) = 0xFF; PR(0xE410) = 0xFF;
-  PR(0xE40B) &= ~0x0E;
-  PR(0xCC88) = (PR(0xCC88) & 0xF8) | 0x02;
-  PR(0xCC8A) = 0; PR(0xCC8B) = 0xC7; PR(0xCC89) = 0x01;
+  REG_PHY_EVENT_E40F = 0xFF; REG_PHY_INT_STATUS_E410 = 0xFF;
+  REG_CMD_CONFIG &= ~0x0E;
+  REG_XFER_DMA_CTRL = (REG_XFER_DMA_CTRL & 0xF8) | 0x02;
+  REG_XFER_DMA_ADDR_LO = 0; REG_XFER_DMA_ADDR_HI = 0xC7; REG_XFER_DMA_CMD = 0x01;
   pd_wait(0xCC89, 0x02, 1);
   /* 9584: ack + re-enable PD events */
-  PR(0xCC89) = 0x02;
-  PR(0xE40B) |= 0x0E;
+  REG_XFER_DMA_CMD = 0x02;
+  REG_CMD_CONFIG |= 0x0E;
   /* build + start the PD TX command */
-  PR(0xE403) = 0x00; PR(0xE404) = 0x40;
-  PR(0xE405) = (PR(0xE405) & 0xF8) | 0x05;
-  PR(0xE402) = (PR(0xE402) & 0x1F) | 0x20;
+  REG_CMD_CTRL_E403 = 0x00; REG_CMD_CFG_E404 = 0x40;
+  REG_CMD_CFG_E405 = (REG_CMD_CFG_E405 & 0xF8) | 0x05;
+  REG_CMD_STATUS_E402 = (REG_CMD_STATUS_E402 & 0x1F) | 0x20;
   /* e09a: wait engine idle (bounded) */
-  for (g = 0; ((PR(0xE402) & 0x0E) || (PR(0xE41C) & 0x01)) && g < 0x4000; g++);
+  for (g = 0; ((REG_CMD_STATUS_E402 & 0x0E) || (REG_CMD_BUSY_STATUS & 0x01)) && g < 0x4000; g++);
   /* 9605: trigger TX */
-  PR(0xE41C) |= 0x01;
+  REG_CMD_BUSY_STATUS |= 0x01;
   /* wait TX accepted (HW clears E41C bit0), bounded */
-  for (g = 0; (PR(0xE41C) & 0x01) && g < 0x4000; g++);
+  for (g = 0; (REG_CMD_BUSY_STATUS & 0x01) && g < 0x4000; g++);
   PR(0x07DF) = 1;
 }
 
 /* init_sys_flags @0x4BE6 (subset) — route the C806/C80A PD/system interrupt aggregate to the
  * 8051 EX1 line so INT1 actually fires. Without this the PD-RX ISR never runs. */
 static void pd_int1_enable_group(void) {
-  PR(0xC801) = (PR(0xC801) & 0xEF) | 0x10;
-  PR(0xC800) = (PR(0xC800) & 0xFB) | 0x04;
-  PR(0xCA60) = (PR(0xCA60) & 0xF8) | 0x06;
-  PR(0xCA60) = (PR(0xCA60) & 0xF7) | 0x08;
-  PR(0xC800) |= 0x01;
+  REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x10;
+  REG_INT_STATUS_C800 = (REG_INT_STATUS_C800 & 0xFB) | 0x04;
+  REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0xF8) | 0x06;
+  REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0xF7) | 0x08;
+  REG_INT_STATUS_C800 |= 0x01;
 }
 
 /* Top-level keystone bring-up. Mirrors pd_cc_attach_term_setup @0xBAA0 (minus the boot
@@ -226,32 +226,32 @@ static void pd_keystone_init(void) {
  * secondary PD engine events. Ends by servicing the E314 PHY-completion bit.
  * (Full PD message decode + power contract — the 0x83d6 dispatcher — is the next milestone.) */
 static void pd_rx_isr(void) {
-  uint8_t e40f = PR(0xE40F);
+  uint8_t e40f = REG_PHY_EVENT_E40F;
   uart_puts("\n[PD_int:");
   uart_puthex(e40f);
   uart_putc(':');
-  uart_puthex(PR(0xE410));
+  uart_puthex(REG_PHY_INT_STATUS_E410);
   uart_putc(']');
   if (e40f & 0x80) {                 /* Soft_Rst_Int (dfdc) */
     uart_puts("[Soft_Rst_Int]");
-    PR(0xE40F) = 0x80;
+    REG_PHY_EVENT_E40F = 0x80;
   } else if (e40f & 0x01) {          /* message received */
-    PR(0xE40F) = 0x01;
+    REG_PHY_EVENT_E40F = 0x01;
     pd_seen = 1;                     /* host is doing PD — the keystone is cracked */
     pd_rx_message_dispatch();        /* @0x83d6 — Source_Cap -> Request -> power contract */
   } else if (e40f & 0x20) {          /* Hard_Rst_Int (e419) */
-    PR(0xE40F) = 0x20;
+    REG_PHY_EVENT_E40F = 0x20;
     uart_puts("[Hard_Rst_Int]");
   } else {
-    uint8_t e410 = PR(0xE410);
-    if      (e410 & 0x01) PR(0xE410) = 0x01;
-    else if (e410 & 0x08) PR(0xE410) = 0x08;
-    else if (e410 & 0x10) PR(0xE410) = 0x10;
-    else if (e410 & 0x20) PR(0xE410) = 0x20;   /* e876 */
-    else if (e410 & 0x40) PR(0xE410) = 0x40;   /* e439 */
-    else if (e410 & 0x80) PR(0xE410) = 0x80;
+    uint8_t e410 = REG_PHY_INT_STATUS_E410;
+    if      (e410 & 0x01) REG_PHY_INT_STATUS_E410 = 0x01;
+    else if (e410 & 0x08) REG_PHY_INT_STATUS_E410 = 0x08;
+    else if (e410 & 0x10) REG_PHY_INT_STATUS_E410 = 0x10;
+    else if (e410 & 0x20) REG_PHY_INT_STATUS_E410 = 0x20;   /* e876 */
+    else if (e410 & 0x40) REG_PHY_INT_STATUS_E410 = 0x40;   /* e439 */
+    else if (e410 & 0x80) REG_PHY_INT_STATUS_E410 = 0x80;
   }
-  if (PR(0xE314) & 0x01) PR(0xE314) = 0x01;    /* E314 PHY-completion W1C */
+  if (REG_DEBUG_STATUS_E314 & 0x01) REG_DEBUG_STATUS_E314 = 0x01;    /* E314 PHY-completion W1C */
 }
 
 /* ====================================================================================
@@ -282,7 +282,7 @@ static void cc_state_full_reset(void) {
 
 /* pd_cc81_hard_reset_4 @0xE90B — CC81 |= 4 then pd_drive_hard_reset (LJMP 0xBE8B). Verbatim. */
 static void pd_cc81_hard_reset_4(void) {
-  PR(0xCC81) = 0x04;                                  /* e910 (MOV #4, not RMW per disasm) */
+  REG_CPU_INT_CTRL = 0x04;                                  /* e910 (MOV #4, not RMW per disasm) */
   pd_drive_hard_reset();                              /* e911 LJMP 0xBE8B */
 }
 
@@ -294,7 +294,7 @@ static void pd_cc81_hard_reset_4(void) {
  * hard/full reset) do not depend on this deep path; e529 is reached only when 0x07BC!=0. */
 static void pd_queue_ctrl_msg(uint8_t code) {
   PR(0x0AA3) = code;                                  /* e52d: record ctrl-msg code */
-  PR(0xE7E3) = 0x00;                                  /* e530: dd42(0) with param 0 -> E7E3=0 */
+  REG_PHY_LINK_CTRL = 0x00;                                  /* e530: dd42(0) with param 0 -> E7E3=0 */
   /* NOTE: stock e533 e6d2()/e541 e478() PD-TX mailbox send not transcribed (deep banked). */
 }
 
@@ -328,46 +328,46 @@ static volatile uint8_t __xdata __at(0x0B48) cc_hit;
 
 static void cc_pd_timer_tick(void) {
   tick_seen++;
-  if (PR(0xCC23) & 0x02) cc_hit |= 0x01;
-  if (PR(0xCC81) & 0x02) cc_hit |= 0x02;
-  if (PR(0xCC91) & 0x02) cc_hit |= 0x04;
-  if (PR(0xCC99) & 0x02) cc_hit |= 0x08;
-  if (PR(0xCCD9) & 0x02) cc_hit |= 0x10;
-  if (PR(0xCCF9) & 0x02) cc_hit |= 0x20;
-  if (PR(0xCC23) & 0x02) {                 /* CC23.1: re-init / SB-reconnect */
+  if (REG_TIMER3_CSR & 0x02) cc_hit |= 0x01;
+  if (REG_CPU_INT_CTRL & 0x02) cc_hit |= 0x02;
+  if (REG_CPU_DMA_INT & 0x02) cc_hit |= 0x04;
+  if (REG_XFER_DMA_CFG & 0x02) cc_hit |= 0x08;
+  if (REG_XFER2_DMA_STATUS & 0x02) cc_hit |= 0x10;
+  if (REG_CPU_EXT_STATUS & 0x02) cc_hit |= 0x20;
+  if (REG_TIMER3_CSR & 0x02) {                 /* CC23.1: re-init / SB-reconnect */
     cc_cc23_reinit_event();                /* 0xE3D8 */
-    PR(0xCC23) = 0x02;
+    REG_TIMER3_CSR = 0x02;
   }
-  if (PR(0xCC81) & 0x02) {                 /* CC81.1: CC attach/detach, branch on substate 0x07BD */
+  if (REG_CPU_INT_CTRL & 0x02) {                 /* CC81.1: CC attach/detach, branch on substate 0x07BD */
     uint8_t sub = PR(0x07BD);
     if (sub == 0x0E || sub == 0x0D) {      /* Data_Reset / Enter_USB pending */
-      PR(0xCC81) = 0x02;
+      REG_CPU_INT_CTRL = 0x02;
       if (PR(0x07BC) != 0) pd_queue_ctrl_msg(0x3B);   /* 0xE529 queue Data_Reset */
       cc_state_full_reset();               /* 0xD676 Type-C error recovery / full reset */
     } else {
       pd_cc81_hard_reset_4();              /* 0xE90B: CC81|=4 then pd_drive_hard_reset() */
-      PR(0xCC81) = 0x02;
+      REG_CPU_INT_CTRL = 0x02;
     }
   }
-  if (PR(0xCC91) & 0x02) {                 /* CC91.1: 1s sender-response timeout -> COMMIT USB4 mode */
-    PR(0xCC91) = 0x02;
+  if (REG_CPU_DMA_INT & 0x02) {                 /* CC91.1: 1s sender-response timeout -> COMMIT USB4 mode */
+    REG_CPU_DMA_INT = 0x02;
     uart_puts("[1 sec time out]\n");       /* stock string @0x53F8 */
     PR(0x07BB) = 0x01;
     PR(0x09FA) = 0x04;
     PR(0x0AE2) = usb4_mode_entry_commit(); /* 0xD78A returns mode in R7 */
   }
-  if (PR(0xCC99) & 0x02) {                 /* CC99.1: role-dependent reset */
+  if (REG_XFER_DMA_CFG & 0x02) {                 /* CC99.1: role-dependent reset */
     uint8_t role = PR(0x07BC);
     if (role == 0x02) { pd_queue_ctrl_msg(0x3C); pd_drive_hard_reset(); }   /* 0xBE8B */
     else if (role == 0x03) { pd_queue_ctrl_msg(0xFF); }
-    else { cc_cc99_default_event(); PR(0xCC99) = 0x02; }                    /* 0xE883 */
+    else { cc_cc99_default_event(); REG_XFER_DMA_CFG = 0x02; }                    /* 0xE883 */
   }
-  if (PR(0xCCD9) & 0x02) {                 /* CCD9.1 */
-    PR(0xCCD9) = 0x02;
+  if (REG_XFER2_DMA_STATUS & 0x02) {                 /* CCD9.1 */
+    REG_XFER2_DMA_STATUS = 0x02;
     PR(0x0719) = 0x02;                     /* disasm: 0x0719 = A (=2) */
   }
-  if (PR(0xCCF9) & 0x02) {                 /* CCF9.1 */
-    PR(0xCCF9) = 0x02;
+  if (REG_CPU_EXT_STATUS & 0x02) {                 /* CCF9.1 */
+    REG_CPU_EXT_STATUS = 0x02;
     cc_ccf9_subdemux();                    /* 0xDF79 */
   }
 }

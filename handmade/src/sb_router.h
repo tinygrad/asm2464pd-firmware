@@ -113,7 +113,7 @@ static void sb_eaac_populate_0777(void) {
     PR(0x0777 + i) = SBP2_RD(base, i);
   }
   /* ead7 97ef: CCD9 mailbox strobe (4 then 2) */
-  PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02;
+  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;
 
   /* INSTRUMENT (the host-driven question): after the eaac copy, dump 0x0777, SB-plane-2
    * [0x2a00..0x2a0F], 0x0775, 0x0758, 0x06ED. This tells us whether the Intel host posts a 0x0C
@@ -330,8 +330,8 @@ static void sb_edd9_receive_ack(void) {
   if (P1_RD(0x0109) & 0x01) {                  /* 9779(9): page1 0x0109 bit0 host-request gate */
     P1_WR(0x0109, P1_RD(0x0109) & 0xFE);       /* 98b7: ACK/clear the request bit */
     SB_WR(0xD8, 0x02);                         /* 973d: SB[0xD8] (page1 0x28D8) = 2 (receipt strobe) */
-    PR(0xE716) = PR(0xE716) & 0xFC;            /* 9789: E716 PHY link reset */
-    PR(0xE716) = (PR(0xE716) & 0xFC) | 0x03;   /* 9789: restart to mode 3 */
+    REG_LINK_STATUS_E716 = REG_LINK_STATUS_E716 & 0xFC;            /* 9789: E716 PHY link reset */
+    REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;   /* 9789: restart to mode 3 */
     uart_puts("\r\n[edd9]");                    /* DIAG: edd9 fired (host had set P1[0x0109].0) */
   }
 }
@@ -491,20 +491,20 @@ static void sb_chan_prelude(void) {
  * (0=Connect_U4 normal path; !=0=EnterMode-TBT). Verbatim from CODE_BANK1::db7a. ---- */
 static void sb_db7a_route_arm(void) {
   if (PR(0x07B9) == 0) {
-    PR(0xCA60) = PR(0xCA60) & 0xF7;            /* CA60 &= ~0x08 */
+    REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60 & 0xF7;            /* CA60 &= ~0x08 */
     /* 98de() returns a CA60-derived value; reproduced as the masked self (no host-gating side fx) */
-    PR(0xCA60) = PR(0xCA60);
-    PR(0xE7FA) = PR(0xE7FA) & 0xEF;            /* E7FA &= ~0x10 */
+    REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60;
+    REG_PHY_LINK_TRIGGER = REG_PHY_LINK_TRIGGER & 0xEF;            /* E7FA &= ~0x10 */
     /* 975e(CA60 & 0x8F | 0x50): PHY-route write; reproduced as the CA60 RMW */
-    PR(0xCA60) = (PR(0xCA60) & 0x8F) | 0x50;
+    REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0x8F) | 0x50;
   } else {
-    PR(0xCA60) = PR(0xCA60) & 0xF7;
-    PR(0xCA60) = PR(0xCA60) | 0x04;
-    PR(0xC20F) = 0xFF;
-    PR(0xCA70) = (PR(0xCA70) & 0xFC) | 0x02 | 0x04;
-    PR(0xE7FA) = PR(0xE7FA) | 0x10;
-    PR(0xCA60) = (PR(0xCA60) & 0x8F) | 0x60;
-    PR(0xC20F) = 0x00;
+    REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60 & 0xF7;
+    REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60 | 0x04;
+    REG_PHY_CTRL_C20F = 0xFF;
+    REG_CPU_CTRL_CA70 = (REG_CPU_CTRL_CA70 & 0xFC) | 0x02 | 0x04;
+    REG_PHY_LINK_TRIGGER = REG_PHY_LINK_TRIGGER | 0x10;
+    REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0x8F) | 0x60;
+    REG_PHY_CTRL_C20F = 0x00;
   }
   /* eb62(0,3) + 98ec() are deeper PHY/transport arms (banked); the CA60/E7FA route arm above is the
    * load-bearing tunnel-route enable the host's CM needs after connect. */
@@ -561,8 +561,8 @@ static void sb_con_consequence(void) {
    * bank0 e80a (phy_cmd_cc10_and_wait): phy_cc10_cmd(subcmd=R7,cc12=R4,cc13=R5) = (2,0,0x15).
    * Tight-bound the poll so even a non-ack can't monopolize the ISR. */
   phy_cc10_cmd(2, 0, 0x15);                   /* dee2-dee8: subcmd=2,cc12=0,cc13=0x15 */
-  { uint16_t g = 0; while (!((XDATA_REG8V(0xCC11) >> 1) & 1) && ++g < 0x0400); }
-  XDATA_REG8(0xCC11) = 0x02;                   /* W1C the PHY-cmd event (e80a tail) */
+  { uint16_t g = 0; while (!((REG_TIMER0_CSR >> 1) & 1) && ++g < 0x0400); }
+  REG_TIMER0_CSR = 0x02;                   /* W1C the PHY-cmd event (e80a tail) */
   P1_WR(0x0100, (P1_RD(0x0100) & 0xBF) | 0x40);  /* deeb-def2 9777/96c7: P1[0x0100] set bit6 */
   P1_WR(0x0100, (P1_RD(0x0100) & 0x7F) | 0x80);  /* def5 980d: P1[0x0100] set bit7 (dropped step) */
   PR(0x06EC) = 1;                              /* *** the dropped arm: gates the per-loop cb10 *** */
@@ -620,7 +620,7 @@ static void sb_lane_bond_complete_tunnel_up(void) {
   if (PR(0x09FA) & 0x02) {                    /* 0x09FA.1 tunnel route */
     sb_tunnel_up_pending = 1;                 /* 3578: defer downstream PCIe bring-up to super-loop */
   }
-  PR(0xCA60) = PR(0xCA60) & 0xF7;            /* clear clock/power bit3 */
+  REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60 & 0xF7;            /* clear clock/power bit3 */
 }
 
 /* ====================================================================================

@@ -32,7 +32,7 @@
  * c307 read a fused PHY trim — read it back live). */
 static void u4c_e0d9(uint8_t param) {
   if (param == 4) {
-    PR(0xC20E) = 0x3E; PR(0xC20F) = 0x08; PR(0xC210) = 0x08; PR(0xC211) = 0x2E; PR(0xC212) = 0x3E;
+    REG_PHY_RXPLL_RESET = 0x3E; REG_PHY_CTRL_C20F = 0x08; PR(0xC210) = 0x08; PR(0xC211) = 0x2E; PR(0xC212) = 0x3E;
     PR(0xC214) = 0x00; PR(0xC215) = 0x20; PR(0xC216) = 0x00; PR(0xC217) = 0x3F;
   }
   /* param 0 (route): the (param&3)==0 branch -> C206-region descriptor via c306/c307. Left to the
@@ -41,8 +41,8 @@ static void u4c_e0d9(uint8_t param) {
 
 /* e7c1 (bank0 @0xe7c1): param 1 -> bd14 (CC3A&=~2; CC38&=~2); else if 0x0AF1.4 -> bcf2. */
 static void u4c_e7c1(uint8_t param) {
-  if (param == 1) { PR(0xCC3A) &= 0xFD; PR(0xCC38) &= 0xFD; }       /* bd14 */
-  else if (PR(0x0AF1) & 0x10) { PR(0xCC3A) = (PR(0xCC3A) & 0xFD) | 0x02; PR(0xCC38) = (PR(0xCC38) & 0xFD) | 0x02; }  /* bcf2 */
+  if (param == 1) { REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0xFD; }       /* bd14 */
+  else if (PR(0x0AF1) & 0x10) { REG_TIMER_ENABLE_B = (REG_TIMER_ENABLE_B & 0xFD) | 0x02; REG_TIMER_ENABLE_A = (REG_TIMER_ENABLE_A & 0xFD) | 0x02; }  /* bcf2 */
 }
 
 /* usb4_connect_u4 @0xA3F5 — FULL faithful transcription (head + a415 pre-gate + a48c-a516 tail).
@@ -57,9 +57,9 @@ static void usb4_connect_u4(void) {
   PR(0x0AF1) = PR(0x0AF1) | 0x01;
   /* a3f5: gated on 0x0AF1.0 — link/route control RMW (direct bank0 XDATA, high confidence). */
   if (PR(0x0AF1) & 0x01) {
-    PR(0xE716) = (PR(0xE716) & 0xFC) | 0x03;     /* a3fc */
-    PR(0xCA81) = PR(0xCA81) & 0xFE;              /* a405 */
-    PR(0xCA06) = (PR(0xCA06) & 0x1F) | 0x60;     /* a40c */
+    REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;     /* a3fc */
+    REG_CPU_CTRL_CA81 = REG_CPU_CTRL_CA81 & 0xFE;              /* a405 */
+    REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;     /* a40c */
   }
   /* a415 UNCONDITIONAL pre-gate (the PHY-descriptor seed the host CM reads): dd42(0)/e7c1(1)/e0d9(0). */
   boot_phy_dd42(0);                              /* a415: dd42(0) -> E7E3=0 */
@@ -81,8 +81,8 @@ static void usb4_connect_u4(void) {
       else                 { PR(0x09FA) = (PR(0x09FA) & 0x04) | 1; PR(0x09FB) = 2; }
     }
     if (PR(0x09FA) & 0x02) {                     /* a45a: 0x09FA.1 lane-1 route mode */
-      PR(0xE716) = PR(0xE716) & 0xFC;
-      PR(0xE716) = (PR(0xE716) & 0xFC) | 0x03;
+      REG_LINK_STATUS_E716 = REG_LINK_STATUS_E716 & 0xFC;
+      REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
       SB_WR(0xD8, 0x02);                          /* SB[0xD8]=2 (page1 0x128D8) */
     }
   }
@@ -133,7 +133,7 @@ static volatile uint8_t __xdata __at(0x0B4A) c80a_acc;   /* IRAM-HEADROOM FIX: r
  * The full dispatch bodies are intentionally not fabricated (no host posts them to validate against).
  * ==================================================================================== */
 static void cm_routerop_mailbox(void) {
-  if (PR(0xEA90) != 0x5A) return;            /* c0a5 gate: host must have posted a 0x5A router-op */
+  if (REG_SYS_CTRL_EA90 != 0x5A) return;            /* c0a5 gate: host must have posted a 0x5A router-op */
   {
     uint8_t state = PR(0x0B02);
     if (state == 0) {
@@ -149,7 +149,7 @@ static void cm_routerop_mailbox(void) {
       if (PR(0x0B03) == 0xE2) {               /* read-resp pending */
         /* cm_routerop_send_read_resp() + addr-in-bounds check; banked. */
         PR(0x0B02) = 0;
-        PR(0xEA90) = 0xA5;                     /* ack */
+        REG_SYS_CTRL_EA90 = 0xA5;                     /* ack */
         return;
       }
       PR(0x0B02) = 0;
@@ -157,7 +157,7 @@ static void cm_routerop_mailbox(void) {
       if (PR(0x0B03) == 0xE3) {               /* write-resp pending */
         /* cm_routerop_send_write_resp() + addr-in-bounds check; banked. */
         PR(0x0B02) = 0;
-        PR(0xEA90) = 0xA5;                     /* ack */
+        REG_SYS_CTRL_EA90 = 0xA5;                     /* ack */
         return;
       }
       PR(0x0B02) = 0;
@@ -167,23 +167,23 @@ static void cm_routerop_mailbox(void) {
 
 /* Called from int1_isr after PD-RX, gated by (0x09F9 & 0x83). Reactive W1C-ack + forward. */
 static void usb4_int_demux(void) {
-  uint8_t c80a = PR(0xC80A);
+  uint8_t c80a = REG_INT_PCIE_NVME;
   c80a_acc |= c80a;
   if (c80a & 0x20) {                         /* C80A.5 -> SB router/connect (bank1 0xA066) */
     usb4_int_seen |= 0x01;
     sb_router_event_handler();               /* M2: a066 — per-channel connect + lane-bond + W1C */
   }
   if (c80a & 0x10) usb4_int_seen |= 0x02;   /* C80A.4 -> USB4 adapter/link event (bank0 0xC105) */
-  if (PR(0xEC06) & 0x01) {                   /* EC06.0 -> router-op mailbox (bank1 0xC0A5) */
+  if (REG_NVME_EVENT_STATUS & 0x01) {                   /* EC06.0 -> router-op mailbox (bank1 0xC0A5) */
     usb4_int_seen |= 0x04;
-    PR(0xEC04) = 1;                          /* documented ack (orchestrator @0x4486) */
+    REG_NVME_EVENT_ACK = 1;                          /* documented ack (orchestrator @0x4486) */
     cm_routerop_mailbox();                    /* RE-AUDIT #7c: c0a5 config-space router-op dispatch */
   }
   if (c80a & 0x0F) {                         /* C80A.0-3 -> PCIe-tunnel link events (bank1 0xE911) */
     usb4_int_seen |= 0x08;
-    { uint8_t e763 = PR(0xE763);             /* documented W1C: bit2->0x04, bit3->0x08 */
-      if (e763 & 0x04) PR(0xE763) = 0x04;
-      if (e763 & 0x08) PR(0xE763) = 0x08; }
+    { uint8_t e763 = REG_PHY_RXPLL_TRIGGER;             /* documented W1C: bit2->0x04, bit3->0x08 */
+      if (e763 & 0x04) REG_PHY_RXPLL_TRIGGER = 0x04;
+      if (e763 & 0x08) REG_PHY_RXPLL_TRIGGER = 0x08; }
   }
 }
 

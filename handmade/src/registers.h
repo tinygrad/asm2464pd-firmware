@@ -331,10 +331,10 @@
 #define REG_USB_EP_BUF_LO       XDATA_REG8(0x905C)
 #define REG_USB_EP_CTRL_905D    XDATA_REG8(0x905D)  /* USB endpoint control 1 */
 #define REG_USB_EP_MGMT         XDATA_REG8(0x905E)
-#define REG_USB_EP_CTRL_905F    XDATA_REG8(0x905F)  /* USB endpoint control 2 */
+#define REG_USB_EP_CTRL_905F    XDATA_REG8V(0x905F)  /* USB endpoint control 2 */
 #define   USB_EP_CTRL_905F_BIT3   0x08  // Bit 3: Endpoint enable flag
 #define   USB_EP_CTRL_905F_BIT4   0x10  // Bit 4: Endpoint control flag
-#define REG_USB_INT_MASK_9090   XDATA_REG8(0x9090)  /* USB interrupt mask */
+#define REG_USB_INT_MASK_9090   XDATA_REG8V(0x9090)  /* USB interrupt mask */
 #define   USB_INT_MASK_GLOBAL     0x80  // Bit 7: Global interrupt mask
 
 /*
@@ -377,7 +377,7 @@
  *
  * Init: hw_init writes 0x1F (all bits set = clear all pending).
  */
-#define REG_USB_CTRL_PHASE      XDATA_REG8(0x9091)
+#define REG_USB_CTRL_PHASE      XDATA_REG8V(0x9091)
 #define   USB_CTRL_PHASE_SETUP    0x01  // Bit 0: Setup packet received
 #define   USB_CTRL_PHASE_STAT_OUT 0x02  // Bit 1: Status phase (OUT/host-to-device)
 #define   USB_CTRL_PHASE_DATA_OUT 0x04  // Bit 2: OUT data received from host
@@ -596,7 +596,7 @@
  *   0x20 = Bulk EP completion (IN transfer done)
  *   0x40 = CBW received (bulk OUT, SCSI command ready at 0x912A+)
  */
-#define REG_USB_PERIPH_STATUS   XDATA_REG8(0x9101)
+#define REG_USB_PERIPH_STATUS   XDATA_REG8V(0x9101)
 #define   USB_PERIPH_91D1_EVENT   0x01  // Bit 0: 91D1 event pending (link train, power mgmt, flag, reset)
 #define   USB_PERIPH_BUS_RESET    USB_PERIPH_91D1_EVENT  // Legacy alias
 #define   USB_PERIPH_CONTROL      0x02  // Bit 1: Setup/control packet (EP0)
@@ -720,11 +720,11 @@
  *   Bit 1: Link up indicator. Checked during 91D1 bit 0 recovery handler
  *          at 0xc465. If clear → link is down → writes E710 and clears CC3B bit 1.
  */
-#define REG_USB_PHY_CTRL_91C0   XDATA_REG8(0x91C0)
+#define REG_USB_PHY_CTRL_91C0   XDATA_REG8V(0x91C0)
 #define   USB_PHY_91C0_LINK_UP    0x02  // Bit 1: SS link up (checked in 91D1 bit 0 handler)
 #define REG_USB_PHY_CTRL_91C1   XDATA_REG8(0x91C1)
 #define REG_USB_PHY_CTRL_91C3   XDATA_REG8(0x91C3)
-#define REG_USB_EP_CTRL_91D0    XDATA_REG8(0x91D0)
+#define REG_USB_EP_CTRL_91D0    XDATA_REG8V(0x91D0)
 /*
  * USB SS Link Event Register (0x91D1) — WRITE-1-TO-CLEAR
  *
@@ -742,7 +742,7 @@
  *   Bit 1 → 0xe6aa (simple: sets 0x0A7D=0, 0x0B2E=1)
  *   Bit 2 → 0xe682 (link reset ack: C6A8|=1, clears 0x0B2E, 0x07E8)
  */
-#define REG_USB_PHY_CTRL_91D1   XDATA_REG8(0x91D1)
+#define REG_USB_PHY_CTRL_91D1   XDATA_REG8V(0x91D1)
 #define   USB_91D1_LINK_TRAIN     0x01  // Bit 0: Link training/recovery (→ bda4 state reset)
 #define   USB_91D1_FLAG           0x02  // Bit 1: Link flag (sets G_EP_DISPATCH_VAL3=0, G_USB_TRANSFER_FLAG=1)
 #define   USB_91D1_LINK_RESET     0x04  // Bit 2: Link reset ack (C6A8|=1, clears flags)
@@ -810,7 +810,7 @@
 #define REG_POWER_STATUS        XDATA_REG8(0x92C2)
 #define   POWER_STATUS_READY      0x02  // Bit 1: Power ready
 #define   POWER_STATUS_USB_PATH   0x40  // Bit 6: Controls ISR/main loop USB path
-#define REG_POWER_MISC_CTRL     XDATA_REG8(0x92C4)
+#define REG_POWER_MISC_CTRL     XDATA_REG8V(0x92C4)
 #define REG_PHY_POWER           XDATA_REG8(0x92C5)
 #define   PHY_POWER_ENABLE        0x04  // Bit 2: PHY power enable
 #define REG_POWER_CTRL_92C6     XDATA_REG8(0x92C6)
@@ -824,7 +824,7 @@
 #define REG_POWER_CTRL_92C8     XDATA_REG8(0x92C8)
 #define   POWER_CTRL_92C8_BIT0    0x01  // Bit 0: Cleared in link training recovery
 #define   POWER_CTRL_92C8_BIT1    0x02  // Bit 1: Cleared in link training recovery
-#define REG_POWER_DOMAIN        XDATA_REG8(0x92E0)
+#define REG_POWER_DOMAIN        XDATA_REG8V(0x92E0)
 #define   POWER_DOMAIN_BIT1       0x02  // Bit 1: Power domain control
 #define REG_POWER_EVENT_92E1    XDATA_REG8(0x92E1)  // Power event register
 /*
@@ -866,7 +866,7 @@
 #define   BUF_CFG_9301_BIT6      0x40  // Bit 6: Buffer config flag
 #define   BUF_CFG_9301_BIT7      0x80  // Bit 7: Buffer config flag
 #define   BUF_CFG_9301_MSC_INIT  0xC0  // MSC engine init value (stock 0xB1DB)
-#define REG_BUF_CFG_9302        XDATA_REG8(0x9302)
+#define REG_BUF_CFG_9302        XDATA_REG8V(0x9302)
 #define   BUF_CFG_9302_BIT7      0x80  // Bit 7: Buffer status flag
 #define   BUF_CFG_9302_MSC_INIT  0xBF  // MSC engine init value (stock 0xB1DF)
 #define REG_BUF_CFG_9303        XDATA_REG8(0x9303)  /* MSC init: 0x33 (retains) */
@@ -878,26 +878,26 @@
  * Configures DMA buffer regions for USB/NVMe data transfers.
  * Written during hw_init to set up buffer base addresses and sizes.
  */
-#define REG_BUF_DESC_BASE0_HI   XDATA_REG8(0x9310)  /* Buffer 0 base address high */
-#define REG_BUF_DESC_BASE0_LO   XDATA_REG8(0x9311)  /* Buffer 0 base address low */
-#define REG_BUF_DESC_SIZE0_HI   XDATA_REG8(0x9312)  /* Buffer 0 size high */
-#define REG_BUF_DESC_SIZE0_LO   XDATA_REG8(0x9313)  /* Buffer 0 size low */
-#define REG_BUF_DESC_BASE1_HI   XDATA_REG8(0x9314)  /* Buffer 1 base address high */
-#define REG_BUF_DESC_BASE1_LO   XDATA_REG8(0x9315)  /* Buffer 1 base address low */
-#define REG_BUF_DESC_STAT0_HI   XDATA_REG8(0x9316)  /* Buffer status 0 high */
-#define REG_BUF_DESC_STAT0_LO   XDATA_REG8(0x9317)  /* Buffer status 0 low */
-#define REG_BUF_DESC_BASE2_HI   XDATA_REG8(0x9318)  /* Buffer 2 base address high */
-#define REG_BUF_DESC_BASE2_LO   XDATA_REG8(0x9319)  /* Buffer 2 base address low */
-#define REG_BUF_DESC_STAT1_HI   XDATA_REG8(0x931A)  /* Buffer status 1 high */
-#define REG_BUF_DESC_STAT1_LO   XDATA_REG8(0x931B)  /* Buffer status 1 low */
-#define REG_BUF_DESC_CFG0_HI    XDATA_REG8(0x931C)  /* Buffer config 0 high */
-#define REG_BUF_DESC_CFG0_LO    XDATA_REG8(0x931D)  /* Buffer config 0 low */
-#define REG_BUF_DESC_CFG1_HI    XDATA_REG8(0x931E)  /* Buffer config 1 high */
-#define REG_BUF_DESC_CFG1_LO    XDATA_REG8(0x931F)  /* Buffer config 1 low */
-#define REG_BUF_DESC_CFG2_HI    XDATA_REG8(0x9320)  /* Buffer config 2 high */
-#define REG_BUF_DESC_CFG2_LO    XDATA_REG8(0x9321)  /* Buffer config 2 low */
-#define REG_BUF_DESC_STAT2_HI   XDATA_REG8(0x9322)  /* Buffer status 2 high */
-#define REG_BUF_DESC_STAT2_LO   XDATA_REG8(0x9323)  /* Buffer status 2 low */
+#define REG_BUF_DESC_BASE0_HI   XDATA_REG8V(0x9310)  /* Buffer 0 base address high */
+#define REG_BUF_DESC_BASE0_LO   XDATA_REG8V(0x9311)  /* Buffer 0 base address low */
+#define REG_BUF_DESC_SIZE0_HI   XDATA_REG8V(0x9312)  /* Buffer 0 size high */
+#define REG_BUF_DESC_SIZE0_LO   XDATA_REG8V(0x9313)  /* Buffer 0 size low */
+#define REG_BUF_DESC_BASE1_HI   XDATA_REG8V(0x9314)  /* Buffer 1 base address high */
+#define REG_BUF_DESC_BASE1_LO   XDATA_REG8V(0x9315)  /* Buffer 1 base address low */
+#define REG_BUF_DESC_STAT0_HI   XDATA_REG8V(0x9316)  /* Buffer status 0 high */
+#define REG_BUF_DESC_STAT0_LO   XDATA_REG8V(0x9317)  /* Buffer status 0 low */
+#define REG_BUF_DESC_BASE2_HI   XDATA_REG8V(0x9318)  /* Buffer 2 base address high */
+#define REG_BUF_DESC_BASE2_LO   XDATA_REG8V(0x9319)  /* Buffer 2 base address low */
+#define REG_BUF_DESC_STAT1_HI   XDATA_REG8V(0x931A)  /* Buffer status 1 high */
+#define REG_BUF_DESC_STAT1_LO   XDATA_REG8V(0x931B)  /* Buffer status 1 low */
+#define REG_BUF_DESC_CFG0_HI    XDATA_REG8V(0x931C)  /* Buffer config 0 high */
+#define REG_BUF_DESC_CFG0_LO    XDATA_REG8V(0x931D)  /* Buffer config 0 low */
+#define REG_BUF_DESC_CFG1_HI    XDATA_REG8V(0x931E)  /* Buffer config 1 high */
+#define REG_BUF_DESC_CFG1_LO    XDATA_REG8V(0x931F)  /* Buffer config 1 low */
+#define REG_BUF_DESC_CFG2_HI    XDATA_REG8V(0x9320)  /* Buffer config 2 high */
+#define REG_BUF_DESC_CFG2_LO    XDATA_REG8V(0x9321)  /* Buffer config 2 low */
+#define REG_BUF_DESC_STAT2_HI   XDATA_REG8V(0x9322)  /* Buffer status 2 high */
+#define REG_BUF_DESC_STAT2_LO   XDATA_REG8V(0x9323)  /* Buffer status 2 low */
 
 //=============================================================================
 // PCIe Passthrough Registers (0xB210-0xB8FF)
@@ -1072,7 +1072,7 @@
 // PCIe Tunnel Control (0xB401-0xB404)
 #define REG_PCIE_TUNNEL_CTRL    XDATA_REG8(0xB401)  // PCIe tunnel control
 #define   PCIE_TUNNEL_ENABLE      0x01  // Bit 0: Tunnel enable
-#define REG_PCIE_CTRL_B402      XDATA_REG8(0xB402)
+#define REG_PCIE_CTRL_B402      XDATA_REG8V(0xB402)
 #define   PCIE_CTRL_B402_BIT0     0x01  // Bit 0: Control flag 0
 #define   PCIE_CTRL_B402_BIT1     0x02  // Bit 1: Control flag 1
 #define REG_PCIE_LINK_PARAM_B404 XDATA_REG8(0xB404) // PCIe link parameters
@@ -1212,13 +1212,13 @@
 //=============================================================================
 // Link/PHY Control Registers (0xC200-0xC2FF)
 //=============================================================================
-#define REG_LINK_CTRL           XDATA_REG8(0xC202)
+#define REG_LINK_CTRL           XDATA_REG8V(0xC202)
 #define   LINK_CTRL_BIT3          0x08  /* Bit 3: link controller enable (set by DAC8 init) */
 #define REG_LINK_CONFIG         XDATA_REG8(0xC203)
 #define REG_LINK_STATUS         XDATA_REG8(0xC204)
 #define REG_PHY_CTRL            XDATA_REG8(0xC205)
-#define REG_PHY_LINK_CTRL_C208  XDATA_REG8(0xC208)
-#define REG_PHY_LINK_CTRL_C20B  XDATA_REG8(0xC20B)  /* PHY link control (bit 7 cleared by DAC8 init) */
+#define REG_PHY_LINK_CTRL_C208  XDATA_REG8V(0xC208)
+#define REG_PHY_LINK_CTRL_C20B  XDATA_REG8V(0xC20B)  /* PHY link control (bit 7 cleared by DAC8 init) */
 #define REG_PHY_LINK_CONFIG_C20C XDATA_REG8(0xC20C)
 /*
  * PHY RXPLL Reset Register (0xC20E)
@@ -1228,20 +1228,20 @@
  *   Write 0x00 = de-assert RXPLL reset (PLL begins re-lock)
  * Must bracket writes with CC37 bit 2 set/clear (RXPLL reset mode).
  */
-#define REG_PHY_RXPLL_RESET     XDATA_REG8(0xC20E)
-#define REG_PHY_CTRL_C20F       XDATA_REG8(0xC20F)  /* PHY control (cleared during U1/U2 entry, restored to 0xC8) */
-#define REG_PHY_LINK_CTRL_C21B  XDATA_REG8(0xC21B)  /* PHY link control (bits 7:6 set by DAC8 init) */
-#define REG_PHY_SERDES_C22F     XDATA_REG8(0xC22F)  /* SerDes config (bit 2 set, bit 6 cleared by DAC8 init) */
-#define REG_PHY_CONFIG          XDATA_REG8(0xC233)
+#define REG_PHY_RXPLL_RESET     XDATA_REG8V(0xC20E)
+#define REG_PHY_CTRL_C20F       XDATA_REG8V(0xC20F)  /* PHY control (cleared during U1/U2 entry, restored to 0xC8) */
+#define REG_PHY_LINK_CTRL_C21B  XDATA_REG8V(0xC21B)  /* PHY link control (bits 7:6 set by DAC8 init) */
+#define REG_PHY_SERDES_C22F     XDATA_REG8V(0xC22F)  /* SerDes config (bit 2 set, bit 6 cleared by DAC8 init) */
+#define REG_PHY_CONFIG          XDATA_REG8V(0xC233)
 #define   PHY_CONFIG_MODE_MASK    0x03  // Bits 0-1: PHY config mode
-#define REG_PHY_STATUS          XDATA_REG8(0xC284)
+#define REG_PHY_STATUS          XDATA_REG8V(0xC284)
 #define REG_PHY_VENDOR_CTRL_C2E0 XDATA_REG8(0xC2E0)  /* PHY vendor control (bit 6/7 = read control) */
 #define REG_PHY_VENDOR_CTRL_C2E2 XDATA_REG8(0xC2E2)  /* PHY vendor control 2 (bit 6/7 = read control) */
 
 //=============================================================================
 // Vendor/Debug Registers (0xC300-0xC3FF)
 //=============================================================================
-#define REG_VENDOR_CTRL_C343    XDATA_REG8(0xC343)  /* Vendor control (bit 6 = enable, bit 5 = mode) */
+#define REG_VENDOR_CTRL_C343    XDATA_REG8V(0xC343)  /* Vendor control (bit 6 = enable, bit 5 = mode) */
 #define   VENDOR_CTRL_C343_BIT5   0x20              /* Bit 5: Vendor mode */
 #define   VENDOR_CTRL_C343_BIT6   0x40              /* Bit 6: Vendor enable */
 #define REG_VENDOR_CTRL_C360    XDATA_REG8(0xC360)  /* Vendor control (bit 6/7 = read control) */
@@ -1508,8 +1508,8 @@
  *   Gets SET back during link training by PHY event handlers.
  *   Stock trained value: 0x01. Custom untrained value: 0x00.
  */
-#define REG_PCIE_LANE_CTRL_C659 XDATA_REG8(0xC659)
-#define REG_PHY_CFG_C65A        XDATA_REG8(0xC65A)  /* PHY config (bit 3 set by flash_set_bit3) */
+#define REG_PCIE_LANE_CTRL_C659 XDATA_REG8V(0xC659)
+#define REG_PHY_CFG_C65A        XDATA_REG8V(0xC65A)  /* PHY config (bit 3 set by flash_set_bit3) */
 #define   PHY_CFG_C65A_BIT3       0x08  // Bit 3: PHY config flag
 #define REG_PHY_EXT_5B          XDATA_REG8(0xC65B)
 #define   PHY_EXT_ENABLE          0x08  // Bit 3: PHY extended enable
@@ -1522,18 +1522,18 @@
  * Bit 0 set (|= 0x01) in bda4 state reset, called by both
  * 91D1 bit 0 (link training) and bit 2 (link reset ack) handlers.
  */
-#define REG_PHY_CFG_C6A8        XDATA_REG8(0xC6A8)
+#define REG_PHY_CFG_C6A8        XDATA_REG8V(0xC6A8)
 #define   PHY_CFG_C6A8_ENABLE     0x01  // Bit 0: PHY link state enable
-#define REG_PHY_VENDOR_CTRL_C6DB XDATA_REG8(0xC6DB) /* PHY vendor control (bit 2 = status) */
+#define REG_PHY_VENDOR_CTRL_C6DB XDATA_REG8V(0xC6DB) /* PHY vendor control (bit 2 = status) */
 #define   PHY_VENDOR_CTRL_C6DB_BIT2 0x04            /* Bit 2: Vendor status flag */
 
 //=============================================================================
 // Interrupt Controller (0xC800-0xC80F)
 //=============================================================================
-#define REG_INT_STATUS_C800     XDATA_REG8(0xC800)  /* Interrupt status register */
+#define REG_INT_STATUS_C800     XDATA_REG8V(0xC800)  /* Interrupt status register */
 #define   INT_STATUS_GLOBAL       0x01
 #define   INT_STATUS_PCIE         0x04  // Bit 2: PCIe interrupt status
-#define REG_INT_ENABLE          XDATA_REG8(0xC801)  /* Interrupt enable register */
+#define REG_INT_ENABLE          XDATA_REG8V(0xC801)  /* Interrupt enable register */
 #define   INT_ENABLE_GLOBAL       0x01  // Bit 0: Global interrupt enable
 #define   INT_ENABLE_USB          0x02  // Bit 1: USB interrupt enable
 #define   INT_ENABLE_PCIE         0x04  // Bit 2: PCIe interrupt enable
@@ -1561,13 +1561,13 @@
 #define REG_INT_AUX_STATUS      XDATA_REG8(0xC805)
 #define   INT_AUX_ENABLE          0x02  // Bit 1: DMA mode / auxiliary enable
 #define   INT_AUX_STATUS          0x04  // Bit 2: Auxiliary status
-#define REG_INT_SYSTEM          XDATA_REG8(0xC806)  /* System interrupt status */
+#define REG_INT_SYSTEM          XDATA_REG8V(0xC806)  /* System interrupt status */
 #define   INT_SYSTEM_EVENT        0x01  // Bit 0: System event interrupt
 #define   INT_SYSTEM_TIMER        0x10  // Bit 4: System timer event
 #define   INT_SYSTEM_LINK         0x20  // Bit 5: Link state change
-#define REG_INT_DMA_CTRL        XDATA_REG8(0xC807)  /* Interrupt/DMA control */
-#define REG_INT_CTRL            XDATA_REG8(0xC809)  /* Interrupt control register */
-#define REG_INT_PCIE_NVME       XDATA_REG8(0xC80A)  /* PCIe/NVMe interrupt status */
+#define REG_INT_DMA_CTRL        XDATA_REG8V(0xC807)  /* Interrupt/DMA control */
+#define REG_INT_CTRL            XDATA_REG8V(0xC809)  /* Interrupt control register */
+#define REG_INT_PCIE_NVME       XDATA_REG8V(0xC80A)  /* PCIe/NVMe interrupt status */
 #define   INT_PCIE_NVME_EVENTS    0x0F  // Bits 0-3: PCIe event flags
 #define   INT_PCIE_NVME_TIMER     0x10  // Bit 4: NVMe command completion
 #define   INT_PCIE_NVME_EVENT     0x20  // Bit 5: PCIe link event
@@ -1677,23 +1677,23 @@
 //=============================================================================
 // CPU Mode/Control (0xCA00-0xCAFF)
 //=============================================================================
-#define REG_CPU_MODE_NEXT       XDATA_REG8(0xCA06)
+#define REG_CPU_MODE_NEXT       XDATA_REG8V(0xCA06)
 #define REG_CPU_CTRL_CA2E       XDATA_REG8(0xCA2E)  /* CPU control */
-#define REG_CPU_CTRL_CA60       XDATA_REG8(0xCA60)  /* CPU control CA60 */
-#define REG_CPU_CTRL_CA70       XDATA_REG8(0xCA70)  /* CPU control */
-#define REG_CPU_CTRL_CA81       XDATA_REG8(0xCA81)  /* CPU control CA81 - PCIe init */
+#define REG_CPU_CTRL_CA60       XDATA_REG8V(0xCA60)  /* CPU control CA60 */
+#define REG_CPU_CTRL_CA70       XDATA_REG8V(0xCA70)  /* CPU control */
+#define REG_CPU_CTRL_CA81       XDATA_REG8V(0xCA81)  /* CPU control CA81 - PCIe init */
 
 //=============================================================================
 // Timer Registers (0xCC10-0xCC24)
 //=============================================================================
-#define REG_TIMER0_DIV          XDATA_REG8(0xCC10)
+#define REG_TIMER0_DIV          XDATA_REG8V(0xCC10)
 #define REG_TIMER0_CSR          XDATA_REG8V(0xCC11)
 #define   TIMER_CSR_ENABLE        0x01  // Bit 0: Timer enable
 #define   TIMER_CSR_EXPIRED       0x02  // Bit 1: Timer expired flag
 #define   TIMER_CSR_CLEAR         0x04  // Bit 2: Clear interrupt
 #define REG_TIMER0_THRESHOLD    XDATA_REG16(0xCC12)
-#define REG_TIMER0_THRESHOLD_HI XDATA_REG8(0xCC12)  /* Timer 0 threshold high byte */
-#define REG_TIMER0_THRESHOLD_LO XDATA_REG8(0xCC13)  /* Timer 0 threshold low byte */
+#define REG_TIMER0_THRESHOLD_HI XDATA_REG8V(0xCC12)  /* Timer 0 threshold high byte */
+#define REG_TIMER0_THRESHOLD_LO XDATA_REG8V(0xCC13)  /* Timer 0 threshold low byte */
 /*
  * Timer 1 (0xCC16-0xCC19) — independent of the CC10-CC13 block.
  *
@@ -1716,7 +1716,7 @@
 #define REG_TIMER2_THRESHOLD_LO XDATA_REG8(0xCC1E)  /* Timer 2 threshold low */
 #define REG_TIMER2_THRESHOLD_HI XDATA_REG8(0xCC1F)  /* Timer 2 threshold high */
 #define REG_TIMER3_DIV          XDATA_REG8(0xCC22)
-#define REG_TIMER3_CSR          XDATA_REG8(0xCC23)
+#define REG_TIMER3_CSR          XDATA_REG8V(0xCC23)
 #define REG_TIMER3_IDLE_TIMEOUT XDATA_REG8(0xCC24)
 
 //=============================================================================
@@ -1727,7 +1727,7 @@
  * Controls USB speed capability. Written 0x01 at boot (hw_init).
  * Write 0x00 to force USB 2.0 High Speed fallback (handle_link_event).
  */
-#define REG_CPU_MODE            XDATA_REG8(0xCC30)
+#define REG_CPU_MODE            XDATA_REG8V(0xCC30)
 #define   CPU_MODE_USB2           0x00  // Force USB 2.0 High Speed (fallback)
 #define   CPU_MODE_USB3           0x01  // USB 3.0 SuperSpeed capable (boot default)
 /*
@@ -1744,26 +1744,26 @@
 #define   CPU_RESET_TRIGGER       0x01              /* Bit 0: Trigger CPU restart + USB re-enum (self-clearing) */
 #define REG_CPU_EXEC_STATUS     XDATA_REG8(0xCC32)  /* CPU execution status */
 #define   CPU_EXEC_STATUS_ACTIVE  0x01  // Bit 0: CPU execution active
-#define REG_CPU_EXEC_STATUS_2   XDATA_REG8(0xCC33)  /* CPU execution status 2 */
+#define REG_CPU_EXEC_STATUS_2   XDATA_REG8V(0xCC33)  /* CPU execution status 2 */
 #define   CPU_EXEC_STATUS_2_INT   0x04  // Bit 2: Interrupt pending
 #define REG_CPU_EXEC_CTRL_2     XDATA_REG8(0xCC34)  /* CPU execution control 2 */
-#define REG_CPU_EXEC_STATUS_3   XDATA_REG8(0xCC35)  /* CPU execution status 3 */
+#define REG_CPU_EXEC_STATUS_3   XDATA_REG8V(0xCC35)  /* CPU execution status 3 */
 #define   CPU_EXEC_STATUS_3_BIT0  0x01  // Bit 0: Exec active flag
 #define   CPU_EXEC_STATUS_3_BIT2  0x04  // Bit 2: Exec status flag
-#define REG_CPU_CTRL_CC36       XDATA_REG8(0xCC36)  /* CPU control */
+#define REG_CPU_CTRL_CC36       XDATA_REG8V(0xCC36)  /* CPU control */
 /*
  * CPU Control CC37 — RXPLL reset mode control
  * Bit 2 must be set before asserting RXPLL reset (C20E=0xFF),
  * and cleared after de-asserting (C20E=0x00) and PLL re-lock delay.
  * Stock firmware helper at bank1 0x9877 reads CC37 & 0xFB (bit 2 cleared).
  */
-#define REG_CPU_CTRL_CC37       XDATA_REG8(0xCC37)
+#define REG_CPU_CTRL_CC37       XDATA_REG8V(0xCC37)
 #define   CPU_CTRL_CC37_RXPLL_MODE 0x04  // Bit 2: RXPLL reset mode enable
 // Timer enable/disable control registers
-#define REG_TIMER_ENABLE_A      XDATA_REG8(0xCC38)  /* Timer enable control A */
+#define REG_TIMER_ENABLE_A      XDATA_REG8V(0xCC38)  /* Timer enable control A */
 #define   TIMER_ENABLE_A_BIT      0x02              /* Bit 1: Timer enable */
-#define REG_TIMER_CTRL_CC39     XDATA_REG8(0xCC39)  /* Timer control */
-#define REG_TIMER_ENABLE_B      XDATA_REG8(0xCC3A)  /* Timer enable control B */
+#define REG_TIMER_CTRL_CC39     XDATA_REG8V(0xCC39)  /* Timer control */
+#define REG_TIMER_ENABLE_B      XDATA_REG8V(0xCC3A)  /* Timer enable control B */
 #define   TIMER_ENABLE_B_BIT      0x02              /* Bit 1: Timer enable */
 #define   TIMER_ENABLE_B_BITS56   0x60              /* Bits 5-6: Timer extended mode */
 /*
@@ -1773,7 +1773,7 @@
  * 91D1 bit 0 handler: clears bit 1 if link is down (91C0 bit 1 == 0).
  * Init: written 0x0C, then 0x0D, then 0x0F during hw_init.
  */
-#define REG_TIMER_CTRL_CC3B     XDATA_REG8(0xCC3B)
+#define REG_TIMER_CTRL_CC3B     XDATA_REG8V(0xCC3B)
 #define   TIMER_CTRL_ENABLE       0x01              /* Bit 0: Timer active */
 #define   TIMER_CTRL_LINK_POWER   0x02              /* Bit 1: SS link power control (cleared in 91D1 handlers) */
 /*
@@ -1810,10 +1810,10 @@
  * Link Training and Status State Machine state control.
  * Bit 7 cleared at end of LTSSM manipulation sequence (bank1 0xCCDD-0xCD26).
  */
-#define REG_LTSSM_STATE         XDATA_REG8(0xCC3D)
+#define REG_LTSSM_STATE         XDATA_REG8V(0xCC3D)
 #define REG_CPU_CTRL_CC3D       REG_LTSSM_STATE      // Legacy alias
 #define   LTSSM_STATE_FORCE       0x80  // Bit 7: Force/lock LTSSM state
-#define REG_CPU_CTRL_CC3E       XDATA_REG8(0xCC3E)
+#define REG_CPU_CTRL_CC3E       XDATA_REG8V(0xCC3E)
 /*
  * LTSSM Control Register (0xCC3F)
  * Controls Link Training and Status State Machine transitions.
@@ -1823,13 +1823,13 @@
  *   Phase 3: Delay, clear bit 2, write, delay, set bit 6 (force state)
  *   Phase 4: Delay, clear CC3D bit 7
  */
-#define REG_LTSSM_CTRL          XDATA_REG8(0xCC3F)
+#define REG_LTSSM_CTRL          XDATA_REG8V(0xCC3F)
 #define REG_CPU_CTRL_CC3F       REG_LTSSM_CTRL       // Legacy alias
 #define   LTSSM_CTRL_WRITE_TRIG   0x02  // Bit 1: Write trigger
 #define   LTSSM_CTRL_STATE_TRIG   0x04  // Bit 2: State change trigger
 #define   LTSSM_CTRL_OVERRIDE_EN  0x20  // Bit 5: LTSSM override enable
 #define   LTSSM_CTRL_FORCE_STATE  0x40  // Bit 6: Force LTSSM state
-#define REG_CPU_CLK_CFG         XDATA_REG8(0xCC43)  /* CPU clock config */
+#define REG_CPU_CLK_CFG         XDATA_REG8V(0xCC43)  /* CPU clock config */
 
 // Timer 4 Registers (0xCC5C-0xCC5F)
 #define REG_TIMER4_DIV          XDATA_REG8(0xCC5C)  /* Timer 4 divisor */
@@ -1838,46 +1838,46 @@
 #define REG_TIMER4_THRESHOLD_HI XDATA_REG8(0xCC5F)  /* Timer 4 threshold high */
 
 // CPU control registers (0xCC80-0xCC83)
-#define REG_CPU_CTRL_CC80       XDATA_REG8(0xCC80)  /* CPU control 0xCC80 */
+#define REG_CPU_CTRL_CC80       XDATA_REG8V(0xCC80)  /* CPU control 0xCC80 */
 #define   CPU_CTRL_CC80_ENABLE   0x03  // Bits 0-1: CPU control enable mask
-#define REG_CPU_INT_CTRL        XDATA_REG8(0xCC81)
+#define REG_CPU_INT_CTRL        XDATA_REG8V(0xCC81)
 #define   CPU_INT_CTRL_ENABLE    0x01  // Bit 0: Enable/start interrupt
 #define   CPU_INT_CTRL_ACK       0x02  // Bit 1: Acknowledge interrupt
 #define   CPU_INT_CTRL_TRIGGER   0x04  // Bit 2: Trigger interrupt
-#define REG_CPU_CTRL_CC82       XDATA_REG8(0xCC82)  /* CPU control 0xCC82 */
-#define REG_CPU_CTRL_CC83       XDATA_REG8(0xCC83)  /* CPU control 0xCC83 */
+#define REG_CPU_CTRL_CC82       XDATA_REG8V(0xCC82)  /* CPU control 0xCC82 */
+#define REG_CPU_CTRL_CC83       XDATA_REG8V(0xCC83)  /* CPU control 0xCC83 */
 
 // Transfer DMA controller - for internal memory block transfers
-#define REG_XFER_DMA_CTRL       XDATA_REG8(0xCC88)  /* Transfer DMA control */
-#define REG_XFER_DMA_CMD        XDATA_REG8(0xCC89)  /* Transfer DMA command/status */
+#define REG_XFER_DMA_CTRL       XDATA_REG8V(0xCC88)  /* Transfer DMA control */
+#define REG_XFER_DMA_CMD        XDATA_REG8V(0xCC89)  /* Transfer DMA command/status */
 #define   XFER_DMA_CMD_START     0x01  // Bit 0: Start transfer
 #define   XFER_DMA_CMD_DONE      0x02  // Bit 1: Transfer complete
 #define   XFER_DMA_CMD_MODE      0x30  // Bits 4-5: Transfer mode (0x31 = mode 1)
-#define REG_XFER_DMA_ADDR_LO    XDATA_REG8(0xCC8A)  /* Transfer DMA address low */
-#define REG_XFER_DMA_ADDR_HI    XDATA_REG8(0xCC8B)  /* Transfer DMA address high */
+#define REG_XFER_DMA_ADDR_LO    XDATA_REG8V(0xCC8A)  /* Transfer DMA address low */
+#define REG_XFER_DMA_ADDR_HI    XDATA_REG8V(0xCC8B)  /* Transfer DMA address high */
 
 #define REG_CPU_DMA_CTRL_CC90   XDATA_REG8(0xCC90)  /* CPU DMA control */
-#define REG_CPU_DMA_INT         XDATA_REG8(0xCC91)  /* CPU DMA interrupt status */
+#define REG_CPU_DMA_INT         XDATA_REG8V(0xCC91)  /* CPU DMA interrupt status */
 #define   CPU_DMA_INT_ACK        0x02  // Bit 1: Acknowledge DMA interrupt
 #define   CPU_DMA_INT_TRIGGER    0x04  // Bit 2: Trigger DMA
 #define REG_CPU_DMA_DATA_LO     XDATA_REG8(0xCC92)  /* CPU DMA data low */
 #define REG_CPU_DMA_DATA_HI     XDATA_REG8(0xCC93)  /* CPU DMA data high */
-#define REG_CPU_DMA_READY       XDATA_REG8(0xCC98)  /* CPU DMA ready status */
+#define REG_CPU_DMA_READY       XDATA_REG8V(0xCC98)  /* CPU DMA ready status */
 #define   CPU_DMA_READY_BIT2     0x04              /* Bit 2: DMA ready flag */
-#define REG_XFER_DMA_CFG        XDATA_REG8(0xCC99)  /* Transfer DMA config */
+#define REG_XFER_DMA_CFG        XDATA_REG8V(0xCC99)  /* Transfer DMA config */
 #define   XFER_DMA_CFG_ACK       0x02  // Bit 1: Acknowledge config
 #define   XFER_DMA_CFG_ENABLE    0x04  // Bit 2: Config enable
 #define REG_XFER_DMA_DATA_LO    XDATA_REG8(0xCC9A)  /* Transfer DMA data low */
 #define REG_XFER_DMA_DATA_HI    XDATA_REG8(0xCC9B)  /* Transfer DMA data high */
 // Secondary transfer DMA controller
-#define REG_XFER2_DMA_CTRL      XDATA_REG8(0xCCD8)  /* Transfer 2 DMA control */
-#define REG_XFER2_DMA_STATUS    XDATA_REG8(0xCCD9)  /* Transfer 2 DMA status */
+#define REG_XFER2_DMA_CTRL      XDATA_REG8V(0xCCD8)  /* Transfer 2 DMA control */
+#define REG_XFER2_DMA_STATUS    XDATA_REG8V(0xCCD9)  /* Transfer 2 DMA status */
 #define   XFER2_DMA_STATUS_ACK   0x02  // Bit 1: Acknowledge status
 #define REG_TIMER5_CSR          XDATA_REG8(0xCCB9)  /* Timer 5 control/status (alternate) */
-#define REG_XFER2_DMA_ADDR_LO   XDATA_REG8(0xCCDA)  /* Transfer 2 DMA address low */
-#define REG_XFER2_DMA_ADDR_HI   XDATA_REG8(0xCCDB)  /* Transfer 2 DMA address high */
+#define REG_XFER2_DMA_ADDR_LO   XDATA_REG8V(0xCCDA)  /* Transfer 2 DMA address low */
+#define REG_XFER2_DMA_ADDR_HI   XDATA_REG8V(0xCCDB)  /* Transfer 2 DMA address high */
 #define REG_CPU_EXT_CTRL        XDATA_REG8(0xCCF8)  /* CPU extended control */
-#define REG_CPU_EXT_STATUS      XDATA_REG8(0xCCF9)  /* CPU extended status */
+#define REG_CPU_EXT_STATUS      XDATA_REG8V(0xCCF9)  /* CPU extended status */
 #define   CPU_EXT_STATUS_ACK     0x02  // Bit 1: Acknowledge extended status
 
 //=============================================================================
@@ -2223,33 +2223,33 @@
 //=============================================================================
 // PHY Completion / Debug (0xE300-0xE3FF)
 //=============================================================================
-#define REG_PHY_MODE_E302       XDATA_REG8(0xE302)  /* PHY mode (bits 4-5 = lane config) */
-#define REG_DEBUG_STATUS_E314   XDATA_REG8(0xE314)
-#define REG_PHY_COMPLETION_E318 XDATA_REG8(0xE318)
-#define REG_LINK_CTRL_E324      XDATA_REG8(0xE324)
+#define REG_PHY_MODE_E302       XDATA_REG8V(0xE302)  /* PHY mode (bits 4-5 = lane config) */
+#define REG_DEBUG_STATUS_E314   XDATA_REG8V(0xE314)
+#define REG_PHY_COMPLETION_E318 XDATA_REG8V(0xE318)
+#define REG_LINK_CTRL_E324      XDATA_REG8V(0xE324)
 #define   LINK_CTRL_E324_BIT2     0x04  // Bit 2: Link control flag
 
 //=============================================================================
 // Command Engine (0xE400-0xE4FF)
 //=============================================================================
-#define REG_CMD_CTRL_E400       XDATA_REG8(0xE400)  /* Engine mode/control. Firmware toggles bit 7 during setup; bit 6 selects init mode used by PD/PHY paths. */
+#define REG_CMD_CTRL_E400       XDATA_REG8V(0xE400)  /* Engine mode/control. Firmware toggles bit 7 during setup; bit 6 selects init mode used by PD/PHY paths. */
 #define   CMD_CTRL_E400_BIT6      0x40  // Bit 6: Command busy flag
 #define   CMD_CTRL_E400_BIT7      0x80  // Bit 7: Command enable
-#define REG_CMD_STATUS_E402     XDATA_REG8(0xE402)  /* Engine status/issue bits. cmd_check_busy() treats bits 1,2,3 as busy/in-flight; PD hard-reset setup sets bit 5 here before triggering. */
-#define REG_CMD_CTRL_E403       XDATA_REG8(0xE403)  /* Per-command phase/state byte. cmd_wait_completion() writes G_CMD_STATUS here just before asserting E41C bit 0. */
-#define REG_CMD_CFG_E404        XDATA_REG8(0xE404)  /* Command class/select byte. Observed values: 0x40 in PD/PHY mailbox issue path after Drive_HardRst. */
-#define REG_CMD_CFG_E405        XDATA_REG8(0xE405)  /* Command subtype/flags. Low 3 bits are opcode-like; PD hard-reset path uses value 0x05 here. */
-#define REG_CMD_CTRL_E409       XDATA_REG8(0xE409)  /* Command control (bit 0,7 = flags) */
-#define REG_CMD_CFG_E40A        XDATA_REG8(0xE40A)  /* Command config - write 0x0F */
-#define REG_CMD_CONFIG          XDATA_REG8(0xE40B)  /* Engine handshake/config bits. Helper 0x9536 clears bits 1:3 before DMA from CC8A/B, helper 0x9584 restores them after CC89 reaches done state. */
-#define REG_CMD_CFG_E40D        XDATA_REG8(0xE40D)  /* Command config - write 0x28 */
-#define REG_CMD_CFG_E40E        XDATA_REG8(0xE40E)  /* Command config - write 0x8A */
+#define REG_CMD_STATUS_E402     XDATA_REG8V(0xE402)  /* Engine status/issue bits. cmd_check_busy() treats bits 1,2,3 as busy/in-flight; PD hard-reset setup sets bit 5 here before triggering. */
+#define REG_CMD_CTRL_E403       XDATA_REG8V(0xE403)  /* Per-command phase/state byte. cmd_wait_completion() writes G_CMD_STATUS here just before asserting E41C bit 0. */
+#define REG_CMD_CFG_E404        XDATA_REG8V(0xE404)  /* Command class/select byte. Observed values: 0x40 in PD/PHY mailbox issue path after Drive_HardRst. */
+#define REG_CMD_CFG_E405        XDATA_REG8V(0xE405)  /* Command subtype/flags. Low 3 bits are opcode-like; PD hard-reset path uses value 0x05 here. */
+#define REG_CMD_CTRL_E409       XDATA_REG8V(0xE409)  /* Command control (bit 0,7 = flags) */
+#define REG_CMD_CFG_E40A        XDATA_REG8V(0xE40A)  /* Command config - write 0x0F */
+#define REG_CMD_CONFIG          XDATA_REG8V(0xE40B)  /* Engine handshake/config bits. Helper 0x9536 clears bits 1:3 before DMA from CC8A/B, helper 0x9584 restores them after CC89 reaches done state. */
+#define REG_CMD_CFG_E40D        XDATA_REG8V(0xE40D)  /* Command config - write 0x28 */
+#define REG_CMD_CFG_E40E        XDATA_REG8V(0xE40E)  /* Command config - write 0x8A */
 /*
  * PHY Event Register (0xE40F) — Write-1-to-clear
  * Stock firmware PHY maintenance dispatcher at bank1 0xAE9B reads this
  * and dispatches on individual bits in priority order: bit 7 > 0 > 5.
  */
-#define REG_PHY_EVENT_E40F      XDATA_REG8(0xE40F)
+#define REG_PHY_EVENT_E40F      XDATA_REG8V(0xE40F)
 #define REG_CMD_CTRL_E40F       REG_PHY_EVENT_E40F   // Legacy alias
 #define   PHY_EVENT_LINK_CHANGE   0x01  // Bit 0: Link state change (→ 0x83D6)
 #define   PHY_EVENT_SPEED_CHANGE  0x20  // Bit 5: Speed change (→ 0xE19E)
@@ -2259,7 +2259,7 @@
  * Checked after E40F events. Dispatches CDR and link training events.
  * Stock firmware at bank1 0xAEE4 checks individual bits.
  */
-#define REG_PHY_INT_STATUS_E410 XDATA_REG8(0xE410)
+#define REG_PHY_INT_STATUS_E410 XDATA_REG8V(0xE410)
 #define REG_CMD_CTRL_E410       REG_PHY_INT_STATUS_E410  // Legacy alias
 #define   PHY_INT_MINOR_EVENT     0x01  // Bit 0: Minor event (ack only)
 #define   PHY_INT_CDR_TIMEOUT     0x08  // Bit 3: CDR timeout
@@ -2267,10 +2267,10 @@
 #define   PHY_INT_CDR_RECOVERY    0x20  // Bit 5: CDR recovery needed (→ 0xE5DF)
 #define   PHY_INT_LINK_TRAINING   0x40  // Bit 6: Link training event (→ 0xE1BE)
 #define   PHY_INT_MAJOR_ERROR     0x80  // Bit 7: Major PHY error
-#define REG_CMD_CFG_E411        XDATA_REG8(0xE411)  /* PD/PHY command parameter A. Common init value: 0xA1. */
-#define REG_CMD_CFG_E412        XDATA_REG8(0xE412)  /* PD/PHY command parameter B. Common init value: 0x79. */
-#define REG_CMD_CFG_E413        XDATA_REG8(0xE413)  /* Command config (bits 0,1,4,5,6 = flags) */
-#define REG_CMD_BUSY_STATUS     XDATA_REG8(0xE41C)  /* Software trigger/busy latch. cmd_start_trigger() sets bit 0; hardware clears it on command acceptance/completion. */
+#define REG_CMD_CFG_E411        XDATA_REG8V(0xE411)  /* PD/PHY command parameter A. Common init value: 0xA1. */
+#define REG_CMD_CFG_E412        XDATA_REG8V(0xE412)  /* PD/PHY command parameter B. Common init value: 0x79. */
+#define REG_CMD_CFG_E413        XDATA_REG8V(0xE413)  /* Command config (bits 0,1,4,5,6 = flags) */
+#define REG_CMD_BUSY_STATUS     XDATA_REG8V(0xE41C)  /* Software trigger/busy latch. cmd_start_trigger() sets bit 0; hardware clears it on command acceptance/completion. */
 #define   CMD_BUSY_STATUS_BUSY    0x01  // Bit 0: Command engine busy / start trigger pending
 /*
  * Command mailbox window (0xE420-0xE43F).
@@ -2284,28 +2284,28 @@
  * data to or from an internal buffer at 0xC700 before the mailbox below is used;
  * it is not the hard-reset opcode itself.
  */
-#define REG_CMD_TRIGGER         XDATA_REG8(0xE420)  /* Mailbox trigger/control byte. Often cleared before setup; other paths write 0x40/0x80 here to start mode-specific issue flows. */
-#define REG_CMD_MODE_E421       XDATA_REG8(0xE421)  /* Mailbox mode/sub-op byte. Helper 0xE43D ORs this with derived slot bits before cmd_wait_completion(). */
-#define REG_CMD_PARAM           XDATA_REG8(0xE422)  /* Mailbox parameter/opcode byte. Example NVMe/SCSI path writes 0x32 here. */
-#define REG_CMD_STATUS          XDATA_REG8(0xE423)  /* Mailbox status/phase byte. Example command setup writes 0x90 here before issue. */
-#define REG_CMD_ISSUE           XDATA_REG8(0xE424)  /* Mailbox issue byte / command-specific payload low byte. */
-#define REG_CMD_TAG             XDATA_REG8(0xE425)  /* Mailbox tag/flags. Example path writes 0x04 then sets bit 4. */
-#define REG_CMD_LBA_0           XDATA_REG8(0xE426)
-#define REG_CMD_LBA_1           XDATA_REG8(0xE427)
-#define REG_CMD_LBA_2           XDATA_REG8(0xE428)
-#define REG_CMD_LBA_3           XDATA_REG8(0xE429)
-#define REG_CMD_COUNT_LOW       XDATA_REG8(0xE42A)
-#define REG_CMD_COUNT_HIGH      XDATA_REG8(0xE42B)
-#define REG_CMD_LENGTH_LOW      XDATA_REG8(0xE42C)
-#define REG_CMD_LENGTH_HIGH     XDATA_REG8(0xE42D)
-#define REG_CMD_RESP_TAG        XDATA_REG8(0xE42E)
+#define REG_CMD_TRIGGER         XDATA_REG8V(0xE420)  /* Mailbox trigger/control byte. Often cleared before setup; other paths write 0x40/0x80 here to start mode-specific issue flows. */
+#define REG_CMD_MODE_E421       XDATA_REG8V(0xE421)  /* Mailbox mode/sub-op byte. Helper 0xE43D ORs this with derived slot bits before cmd_wait_completion(). */
+#define REG_CMD_PARAM           XDATA_REG8V(0xE422)  /* Mailbox parameter/opcode byte. Example NVMe/SCSI path writes 0x32 here. */
+#define REG_CMD_STATUS          XDATA_REG8V(0xE423)  /* Mailbox status/phase byte. Example command setup writes 0x90 here before issue. */
+#define REG_CMD_ISSUE           XDATA_REG8V(0xE424)  /* Mailbox issue byte / command-specific payload low byte. */
+#define REG_CMD_TAG             XDATA_REG8V(0xE425)  /* Mailbox tag/flags. Example path writes 0x04 then sets bit 4. */
+#define REG_CMD_LBA_0           XDATA_REG8V(0xE426)
+#define REG_CMD_LBA_1           XDATA_REG8V(0xE427)
+#define REG_CMD_LBA_2           XDATA_REG8V(0xE428)
+#define REG_CMD_LBA_3           XDATA_REG8V(0xE429)
+#define REG_CMD_COUNT_LOW       XDATA_REG8V(0xE42A)
+#define REG_CMD_COUNT_HIGH      XDATA_REG8V(0xE42B)
+#define REG_CMD_LENGTH_LOW      XDATA_REG8V(0xE42C)
+#define REG_CMD_LENGTH_HIGH     XDATA_REG8V(0xE42D)
+#define REG_CMD_RESP_TAG        XDATA_REG8V(0xE42E)
 #define REG_CMD_RESP_STATUS     XDATA_REG8(0xE42F)
-#define REG_CMD_CTRL            XDATA_REG8(0xE430)
-#define REG_CMD_TIMEOUT         XDATA_REG8(0xE431)
-#define REG_CMD_PARAM_L         XDATA_REG8(0xE432)
-#define REG_CMD_PARAM_H         XDATA_REG8(0xE433)
-#define REG_CMD_EXT_PARAM_0     XDATA_REG8(0xE434)
-#define REG_CMD_EXT_PARAM_1     XDATA_REG8(0xE435)
+#define REG_CMD_CTRL            XDATA_REG8V(0xE430)
+#define REG_CMD_TIMEOUT         XDATA_REG8V(0xE431)
+#define REG_CMD_PARAM_L         XDATA_REG8V(0xE432)
+#define REG_CMD_PARAM_H         XDATA_REG8V(0xE433)
+#define REG_CMD_EXT_PARAM_0     XDATA_REG8V(0xE434)
+#define REG_CMD_EXT_PARAM_1     XDATA_REG8V(0xE435)
 
 //=============================================================================
 // Timer/CPU Control (0xCC00-0xCCFF)
@@ -2319,7 +2319,7 @@
 #define REG_DEBUG_INT_E65F      XDATA_REG8(0xE65F)  // Debug interrupt 0x65F
 #define REG_DEBUG_INT_E661      XDATA_REG8(0xE661)
 #define   DEBUG_INT_E661_FLAG     0x80  // Bit 7: Debug interrupt flag
-#define REG_PD_CTRL_E66A        XDATA_REG8(0xE66A)  /* PD control - clear bit 4 */
+#define REG_PD_CTRL_E66A        XDATA_REG8V(0xE66A)  /* PD control - clear bit 4 */
 #define   PD_CTRL_E66A_BIT4       0x10  // Bit 4: PD control flag
 
 //=============================================================================
@@ -2336,7 +2336,7 @@
  *
  * Written 0x04 during hw_init (before any link is up).
  */
-#define REG_LINK_WIDTH_E710     XDATA_REG8(0xE710)
+#define REG_LINK_WIDTH_E710     XDATA_REG8V(0xE710)
 #define   LINK_WIDTH_MASK         0xE0  // Bits 5-7: Link width (preserve in RMW)
 #define   LINK_RECOVERY_MODE      0x04  // Bit 2: Link recovery mode
 #define   LINK_WIDTH_LANES_MASK   0x1F  // Bits 0-4: Lane configuration
@@ -2349,17 +2349,17 @@
  *    Polled during U1/U2 power transitions after 92CF clock recovery.
  *    Also written 0x01 during SET_ADDRESS to signal link status change.
  */
-#define REG_LINK_STATUS_E712    XDATA_REG8(0xE712)
+#define REG_LINK_STATUS_E712    XDATA_REG8V(0xE712)
 #define   LINK_E712_BUSY          0x01  // Bit 0: Operation busy / EP0 transfer pending
 #define   LINK_E712_DONE          0x02  // Bit 1: Operation done / EP0 status complete
 
-#define REG_LINK_STATUS_E716    XDATA_REG8(0xE716)
+#define REG_LINK_STATUS_E716    XDATA_REG8V(0xE716)
 #define   LINK_STATUS_E716_MASK  0x03  // Bits 0-1: Link status
-#define REG_LINK_CTRL_E717      XDATA_REG8(0xE717)  /* Link control (bit 0 = enable) */
-#define REG_PHY_PLL_CTRL        XDATA_REG8(0xE741)  /* PHY PLL control */
-#define REG_PHY_PLL_CFG         XDATA_REG8(0xE742)  /* PHY PLL config */
+#define REG_LINK_CTRL_E717      XDATA_REG8V(0xE717)  /* Link control (bit 0 = enable) */
+#define REG_PHY_PLL_CTRL        XDATA_REG8V(0xE741)  /* PHY PLL control */
+#define REG_PHY_PLL_CFG         XDATA_REG8V(0xE742)  /* PHY PLL config */
 #define REG_PHY_POLL_E750       XDATA_REG8(0xE750)  /* PHY poll (read during reset 91D1 wait) */
-#define REG_PHY_POLL_E751       XDATA_REG8(0xE751)  /* PHY poll alt */
+#define REG_PHY_POLL_E751       XDATA_REG8V(0xE751)  /* PHY poll alt */
 /*
  * PHY RXPLL Configuration (0xE760-0xE763)
  * Used in phy_rxpll_config (bank1 0xE957) to configure RXPLL before reset.
@@ -2375,7 +2375,7 @@
 #define REG_SYS_CTRL_E760       REG_PHY_RXPLL_CFG_A  // Legacy alias
 #define REG_PHY_RXPLL_CFG_B     XDATA_REG8(0xE761)
 #define REG_SYS_CTRL_E761       REG_PHY_RXPLL_CFG_B  // Legacy alias
-#define REG_PHY_RXPLL_TRIGGER   XDATA_REG8(0xE763)
+#define REG_PHY_RXPLL_TRIGGER   XDATA_REG8V(0xE763)
 #define REG_SYS_CTRL_E763       REG_PHY_RXPLL_TRIGGER // Legacy alias
 /*
  * PHY Timer Control (0xE764)
@@ -2383,31 +2383,31 @@
  * Stock trained value: 0x19 (bits 0,3,4 set) — bits 0,3 get set during link training.
  * Custom untrained value: 0x14 (bit 2,4 set).
  */
-#define REG_PHY_TIMER_CTRL_E764 XDATA_REG8(0xE764)
-#define REG_SYS_CTRL_E765       XDATA_REG8(0xE765)  /* System control E765 */
+#define REG_PHY_TIMER_CTRL_E764 XDATA_REG8V(0xE764)
+#define REG_SYS_CTRL_E765       XDATA_REG8V(0xE765)  /* System control E765 */
 #define   SYS_CTRL_E765_PCIE_LINK_UP  0x02           /*   Bit 1: PCIe link is up */
 #define REG_SYS_CTRL_E76C       XDATA_REG8(0xE76C)  /* System control */
 #define REG_SYS_CTRL_E774       XDATA_REG8(0xE774)  /* System control */
-#define REG_SYS_CTRL_E77C       XDATA_REG8(0xE77C)  /* System control */
-#define REG_SYS_CTRL_E780       XDATA_REG8(0xE780)  /* System control */
+#define REG_SYS_CTRL_E77C       XDATA_REG8V(0xE77C)  /* System control */
+#define REG_SYS_CTRL_E780       XDATA_REG8V(0xE780)  /* System control */
 #define REG_FLASH_READY_STATUS  XDATA_REG8(0xE795)
-#define REG_PHY_LINK_CTRL       XDATA_REG8(0xE7E3)
+#define REG_PHY_LINK_CTRL       XDATA_REG8V(0xE7E3)
 #define   PHY_LINK_CTRL_BIT6      0x40  // Bit 6: PHY link control flag
 #define   PHY_LINK_CTRL_BIT7      0x80  // Bit 7: PHY link ready
-#define REG_PHY_LINK_TRIGGER    XDATA_REG8(0xE7FA)  /* PHY link trigger/config */
-#define REG_LINK_MODE_CTRL      XDATA_REG8(0xE7FC)
+#define REG_PHY_LINK_TRIGGER    XDATA_REG8V(0xE7FA)  /* PHY link trigger/config */
+#define REG_LINK_MODE_CTRL      XDATA_REG8V(0xE7FC)
 #define   LINK_MODE_CTRL_MASK     0x03  // Bits 0-1: Link mode control
 
 //=============================================================================
 // System Control Extended (0xEA00-0xEAFF)
 //=============================================================================
-#define REG_SYS_CTRL_EA90       XDATA_REG8(0xEA90)  /* System control EA90 */
+#define REG_SYS_CTRL_EA90       XDATA_REG8V(0xEA90)  /* System control EA90 */
 
 //=============================================================================
 // NVMe Event (0xEC00-0xEC0F)
 //=============================================================================
-#define REG_NVME_EVENT_ACK      XDATA_REG8(0xEC04)
-#define REG_NVME_EVENT_STATUS   XDATA_REG8(0xEC06)
+#define REG_NVME_EVENT_ACK      XDATA_REG8V(0xEC04)
+#define REG_NVME_EVENT_STATUS   XDATA_REG8V(0xEC06)
 #define   NVME_EVENT_PENDING      0x01  // Bit 0: NVMe event pending
 
 //=============================================================================

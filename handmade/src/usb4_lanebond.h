@@ -147,8 +147,8 @@ static uint8_t u4lb_edf5_route_query(void) {
       uart_putc(' '); uart_puthex(PR(0x06ED)); uart_putc(' '); uart_puthex(PR(0x06EE));
       uart_putc(' '); uart_puthex(PR(0x0775)); uart_putc(' '); uart_puthex(PR(0x0776));
       uart_putc(' '); uart_puthex(PR(0x0777));
-      uart_putc('|'); uart_puthex(PR(0xCCD9)); uart_putc(' '); uart_puthex(PR(0xC80A));
-      uart_putc(' '); uart_puthex(PR(0xCC37)); uart_putc(' '); uart_puthex(PR(0xCA60));
+      uart_putc('|'); uart_puthex(REG_XFER2_DMA_STATUS); uart_putc(' '); uart_puthex(REG_INT_PCIE_NVME);
+      uart_putc(' '); uart_puthex(REG_CPU_CTRL_CC37); uart_putc(' '); uart_puthex(REG_CPU_CTRL_CA60);
       /* DIAG (host-post wall): P1[0x0109] = edd9 host-request gate; SB[0xD8] = ack strobe;
        * SB[0x3A-3D] = device router/lane DESCRIPTOR RAM (stock 12,36,06,00 vs handmade FF garbage). */
       uart_putc('|'); uart_puthex(P1_RD(0x0109)); uart_putc(' '); uart_puthex(SB_RD(0xD8));
@@ -176,7 +176,7 @@ static uint8_t u4lb_edf5_route_query(void) {
   }
 
   /* 97ef + tail: CCD9 strobe, set the in-flight token 0x0719 = 1 */
-  PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02; PR(0xCCD9) = 0x01;   /* 97ef + DEC A tail */
+  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02; REG_XFER2_DMA_STATUS = 0x01;   /* 97ef + DEC A tail */
   PR(0x0719) = 0x01;                             /* e300-e303: 0x0719 = 1 (in-flight token) */
   return 1;                                      /* ee0e: R7 = 1 (a query was just sent) */
 }
@@ -372,21 +372,21 @@ static void u4lb_e07d(void) {
  * 0x1fd6/0x1fe6 are CODE STRINGS not regs (corrected). */
 static void u4lb_e9e7(void) {
   uart_puts("\r\n[RstRxpll...]");                   /* e9ed 538d(str 0x1fd6) */
-  PR(0xCC37) = (PR(0xCC37) & 0xFB) | 0x04;          /* e9f0 984d: CC37=(CC37&0xFB)|4 */
-  PR(0xC20E) = 0xFF;                                /* e9f6-e9f9 9a27: C20E=0xFF */
+  REG_CPU_CTRL_CC37 = (REG_CPU_CTRL_CC37 & 0xFB) | 0x04;          /* e9f0 984d: CC37=(CC37&0xFB)|4 */
+  REG_PHY_RXPLL_RESET = 0xFF;                                /* e9f6-e9f9 9a27: C20E=0xFF */
   phy_cc10_cmd_wait(1, 0, 0x14);                    /* e9fc: R7=1,R4=0,R5=0x14 */
-  PR(0xC20E) = 0x00;                                /* e9ff-ea03: C20E=0 */
+  REG_PHY_RXPLL_RESET = 0x00;                                /* e9ff-ea03: C20E=0 */
   phy_cc10_cmd_wait(2, 0, 0x28);                    /* ea09: R7=2,R4=0,R5=0x28 */
-  PR(0xCC37) = PR(0xCC37) & 0xFB;                   /* ea0c 984d: CC37 &= ~4 */
+  REG_CPU_CTRL_CC37 = REG_CPU_CTRL_CC37 & 0xFB;                   /* ea0c 984d: CC37 &= ~4 */
   uart_puts("[Done]");                              /* ea16 538d(str 0x1fe6) */
 }
 
 /* ---- ebde settle: C20F=0xFF + phy_cc10_cmd_wait(1,0,0x14); C20F=0; BOUNDED-spin C2D0.5 then
  * C350.5 (PLL/lane rate-lock). Verbatim CODE_BANK1::ebde (inlined into e980 below). */
 static void u4lb_ebde(void) {
-  PR(0xC20F) = 0xFF;                                /* ebde-ebe1 9a27: C20F=0xFF */
+  REG_PHY_CTRL_C20F = 0xFF;                                /* ebde-ebe1 9a27: C20F=0xFF */
   phy_cc10_cmd_wait(1, 0, 0x14);                    /* ebe4: R7=1,R4=0,R5=0x14 */
-  PR(0xC20F) = 0x00;                                /* ebe7-ebeb: C20F=0 */
+  REG_PHY_CTRL_C20F = 0x00;                                /* ebe7-ebeb: C20F=0 */
   { uint16_t g = 0; while (((PR(0xC2D0) & 0x20) == 0) && ++g < 0x2000); }  /* ebec: C2D0.5 lock */
   { uint16_t g = 0; while (((PR(0xC350) & 0x20) == 0) && ++g < 0x2000); }  /* ebf8: C350.5 lock */
 }
@@ -515,11 +515,11 @@ static void u4lb_state4_b0b4(void) {
 
   /* --- E716/CA06 enable (b13d-b15b), gated 0x0AF1.0 --- */
   if (PR(0x0AF1) & 0x01) {
-    PR(0xE716) = (PR(0xE716) & 0xFC) | 0x03;               /* b147 9790: E716=(E716&0xFC)|3 */
+    REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;               /* b147 9790: E716=(E716&0xFC)|3 */
     phy_cc10_cmd_wait(2, 0, 0x28);                         /* b14a-b150 051b: R7=2,R4=0,R5=0x28 */
-    PR(0xE716) = PR(0xE716) & 0xFC;                        /* b153 9789: E716 &= ~3 */
-    PR(0xCA81) = PR(0xCA81) & 0xFE;                        /* b156 9908: CA81 &= ~1 */
-    PR(0xCA06) = (PR(0xCA06) & 0x1F) | 0x60;               /* b159-b15b: CA06=(CA06&0x1F)|0x60 */
+    REG_LINK_STATUS_E716 = REG_LINK_STATUS_E716 & 0xFC;                        /* b153 9789: E716 &= ~3 */
+    REG_CPU_CTRL_CA81 = REG_CPU_CTRL_CA81 & 0xFE;                        /* b156 9908: CA81 &= ~1 */
+    REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;               /* b159-b15b: CA06=(CA06&0x1F)|0x60 */
   }
 
   /* --- e305: [PcieTunnel-PwrOn] (ROUND B placeholder) (b15c) --- */
@@ -528,7 +528,7 @@ static void u4lb_state4_b0b4(void) {
    * stand-in for the E764 train-arm, reuse the EXISTING e57d reset pulse + the connect-head CA06 RMW
    * (already in handmade). The real ee29/a840/b8db SERDES/link-speed bodies are NOT fabricated. */
   boot_phy_e57d_e764_reset_pulse(0x01);             /* e57d E764 reset pulse (Round B stand-in) */
-  PR(0xCA06) = (PR(0xCA06) & 0x1F) | 0x20;          /* connect-head CA06 RMW (Round B stand-in) */
+  REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x20;          /* connect-head CA06 RMW (Round B stand-in) */
 
   /* --- L0 OS-arm (b15f-b176), gated 0x0819.0 --- */
   if (PR(0x0819) & 0x01) {
@@ -545,18 +545,18 @@ static void u4lb_state4_b0b4(void) {
 
   uart_puts("[b4:D]");   /* INSTR: past E716/PwrOn-stub/OS-arm; entering rate-change */
   /* --- CC37.2 set -> d3b0(3) Chg2 20G -> e980 rate apply -> e9e7 RstRxpll -> CC37.2 clr (b18f-b1a3) */
-  PR(0xCC37) = (PR(0xCC37) & 0xFB) | 0x04;          /* b18f-b194 984d: CC37 |= 0x04 */
+  REG_CPU_CTRL_CC37 = (REG_CPU_CTRL_CC37 & 0xFB) | 0x04;          /* b18f-b194 984d: CC37 |= 0x04 */
   u4lb_d3b0(3);                                     /* b195-b197: d3b0(3) Chg2 20G */
   u4lb_e980();                                      /* b19a: rate descriptor apply */
   u4lb_e9e7();                                      /* b19d: RstRxpll */
-  PR(0xCC37) = PR(0xCC37) & 0xFB;                   /* b1a0-b1a3 984d: CC37 &= ~0x04 */
+  REG_CPU_CTRL_CC37 = REG_CPU_CTRL_CC37 & 0xFB;                   /* b1a0-b1a3 984d: CC37 &= ~0x04 */
 
   /* --- b8db: [CDRV ok] (ROUND B placeholder) (b1a4) --- */
   uart_puts("[CDRV ok]");
   /* ROUND B: real b8db CDR/margining compare body TBD (under-mapped). */
 
   /* --- CA60.3 set (b1a7-b1af) --- */
-  PR(0xCA60) = (PR(0xCA60) & 0xF7) | 0x08;          /* CA60 bit3 = tunnel-adapter enable */
+  REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0xF7) | 0x08;          /* CA60 bit3 = tunnel-adapter enable */
 
   /* --- c593 bank0 stub (b1b0): tunnel/PHY commit -- ROUND B placeholder (LCALL 0x05c0 -> bank0). --- */
   /* (No standalone observable XDATA effect mapped; left as a documented Round-B node.) */
@@ -667,7 +667,7 @@ static uint8_t u4lb_e461(void) {
     SB_WR(0x2C, 0x04);                              /* W1C SB[0x2C].2 */
     phy_cc10_cmd(1, 0, 0x0B);                        /* d614 */
     SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));
-    PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02;            /* 97ef strobe */
+    REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;            /* 97ef strobe */
     dc = SB_RD(0x0C);                               /* d5da return = SB[0x0C] - 7 */
     PR(0x0719) = (uint8_t)((uint8_t)(dc - 7) - 1);  /* token 0x0719 = d5da_ret - 1 */
   }
@@ -676,7 +676,7 @@ static uint8_t u4lb_e461(void) {
 
 /* ea7c: CC-orientation PHY CL bit2 program (C2CB/C34B). sel==0x0F set bit2 else clear. */
 static void u4lb_ea7c(uint8_t sel, uint8_t cc) {
-  uint8_t idx = (PR(0xC6DB) & 0x01) ? (uint8_t)((cc + 1) & 0x01) : cc;
+  uint8_t idx = (REG_PHY_VENDOR_CTRL_C6DB & 0x01) ? (uint8_t)((cc + 1) & 0x01) : cc;
   uint16_t reg = (idx == 0) ? 0xC2CB : 0xC34B;
   if (sel == 0x0F) PR(reg) = (uint8_t)((PR(reg) & 0xFB) | 0x04);
   else             PR(reg) = (uint8_t)(PR(reg) & 0xFB);
@@ -791,7 +791,7 @@ static void u4lb_walk_8000(void) {
         }
         PR(0x081C + lane) |= 0x40;                   /* 8108-8117: shadow |= 0x40 */
         PR(0x081C + lane) = 0x00;                    /* 811a-811b CLR A;MOVX (verbatim post-OR write) */
-        if ((PR(0xC2C3) & 0x01) || (PR(0xC343) & 0x01)) {  /* 811c-8127: orientation gate */
+        if ((PR(0xC2C3) & 0x01) || (REG_VENDOR_CTRL_C343 & 0x01)) {  /* 811c-8127: orientation gate */
           if ((PR(0x0819) & 0x03) != 0) {            /* 812d-8137: 0x0819 lane bits */
             PR(0x081C + lane) = (uint8_t)((PR(0x081C + lane) | 0x40) & 0x7F);  /* 813f-8152 */
             PR(0x081D + lane) = (uint8_t)(((PR(0x081D + lane) | 0x10) + 1) & 0x7F);  /* 8157-816b */

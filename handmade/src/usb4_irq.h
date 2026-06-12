@@ -85,12 +85,12 @@ static void C397(uint16_t a) { RMW(a, 0xF1, 0x0E); PR(a + 1) = 0; }
  * sb.h::sb_lane_flip_init. This 8e31 block configures the underlying PHY lanes; both are needed. */
 static void usb4_phy_rx_descriptor_8e31(void) {
   /* 8e31 head: E741/E742/CC43/C21F */
-  PR(0xE741) = (PR(0xE741) & 0xF8) | 0x03;
-  PR(0xE741) = (PR(0xE741) & 0xC7) | 0x28;
-  PR(0xE742) = (PR(0xE742) & 0xFC) | 0x03;
-  PR(0xE741) = (PR(0xE741) & 0x3F) | 0x80;
-  PR(0xE742) = PR(0xE742) & 0xF7;
-  PR(0xCC43) = (PR(0xCC43) & 0x1F) | 0x80;
+  REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0xF8) | 0x03;
+  REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0xC7) | 0x28;
+  REG_PHY_PLL_CFG = (REG_PHY_PLL_CFG & 0xFC) | 0x03;
+  REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0x3F) | 0x80;
+  REG_PHY_PLL_CFG = REG_PHY_PLL_CFG & 0xF7;
+  REG_CPU_CLK_CFG = (REG_CPU_CLK_CFG & 0x1F) | 0x80;
   C390(0xC21F);                                  /* 8e5e */
   SB_WR(0x49, 0xA0);                              /* 8e64 */
 
@@ -124,7 +124,7 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   PR(0xC30C) = PR(0xC30C) & 0xFD;                 /* 8f2c */
   C351(0xC31C); C351(0xC32C);                     /* 8f33/8f39 */
   PR(0xC33C) = PR(0xC33C) & 0xFD;                 /* 8f3f */
-  PR(0xC343) = (PR(0xC343) & 0xC3) | 0x1C;        /* 8f46 */
+  REG_VENDOR_CTRL_C343 = (REG_VENDOR_CTRL_C343 & 0xC3) | 0x1C;        /* 8f46 */
   PR(0xC349) = (PR(0xC349) & 0x80) | 0x41;        /* 8f4f */
   C335(0xC325);                                   /* 8f58 */
   C30E(0xC34A);                                   /* 8f5e */
@@ -138,9 +138,9 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   PR(0xC21D) = (PR(0xC21D) & 0x3F) | 0x80;        /* 8f8e */
 
   /* page-0x93 clears: 8f97..8fa9 */
-  PR(0x9316) = 0; PR(0x9317) = 0;
-  PR(0x931A) = 0; PR(0x931B) = 0;
-  PR(0x9322) = 0; PR(0x9323) = 0;
+  REG_BUF_DESC_STAT0_HI = 0; REG_BUF_DESC_STAT0_LO = 0;
+  REG_BUF_DESC_STAT1_HI = 0; REG_BUF_DESC_STAT1_LO = 0;
+  REG_BUF_DESC_STAT2_HI = 0; REG_BUF_DESC_STAT2_LO = 0;
 
   /* --- lane A (c2xx) cfg block 2: 8faa..9063 --- */
   PR(0xC290) = PR(0xC290) & 0x9F;                 /* 8faa */
@@ -153,7 +153,7 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   C36D(0xC291);                                   /* 8fd9 */
   C36D(0xC2A1);                                   /* 8fdf */
   PR(0xC2DB) = (PR(0xC2DB) & 0xE0) | 0x1B;        /* 8fe5 */
-  PR(0xC284) = (PR(0xC284) & 0xF0) | 0x05;        /* 8fee */
+  REG_PHY_STATUS = (REG_PHY_STATUS & 0xF0) | 0x05;        /* 8fee */
   C2E0(0xC294);                                   /* 8ffa */
   C2E7(0xC285);                                   /* 9000 */
   PR(0xC295) = (PR(0xC295) & 0xF0) | 0x0C;        /* 9003 */
@@ -162,7 +162,7 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   C2E7(0xC296);                                   /* 9018 */
   C374(0xC2A7);                                   /* 9021 */
   PR(0xC28B) = (PR(0xC28B) & 0xC0) | 0x0A;        /* 9024 */
-  PR(0xC284) = (PR(0xC284) & 0x8F) | 0x40;        /* 902d */
+  REG_PHY_STATUS = (REG_PHY_STATUS & 0x8F) | 0x40;        /* 902d */
   PR(0xC2A4) = PR(0xC2A4) & 0x8F;                 /* 9036 */
   PR(0xC289) = (PR(0xC289) & 0x0F) | 0x90;        /* 903d */
   C37B(0xC299);                                   /* 9046 */
@@ -203,18 +203,18 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   C397(0xC34C);                                   /* 9133 c397(C34C)->C34C/C34D */
 
   /* page-0x93 descriptor seed: 9136..9168 (emulated byte-exact incl. the c3a1 zero-fill helper) */
-  PR(0x9310) = 0x01;                              /* 9136 */
-  PR(0x9311) = 0x60; PR(0x9312) = 0x00;          /* 913b c3a1(0x60) */
-  PR(0x9313) = 0xE3;                              /* 9140 */
-  PR(0x9314) = 0x01;                              /* 9143 */
-  PR(0x9315) = 0x60;                              /* 9147 */
-  PR(0x9318) = 0x01;                              /* 914b */
-  PR(0x9319) = 0x60;                              /* 9151 */
-  PR(0x931C) = 0x00;                              /* 9155 */
-  PR(0x931D) = 0x03; PR(0x931E) = 0x00;          /* 915a c3a1(0x03) */
-  PR(0x931F) = 0xE0;                              /* 915f */
-  PR(0x9320) = 0x00;                              /* 9162 */
-  PR(0x9321) = 0xE3;                              /* 9165 */
+  REG_BUF_DESC_BASE0_HI = 0x01;                              /* 9136 */
+  REG_BUF_DESC_BASE0_LO = 0x60; REG_BUF_DESC_SIZE0_HI = 0x00;          /* 913b c3a1(0x60) */
+  REG_BUF_DESC_SIZE0_LO = 0xE3;                              /* 9140 */
+  REG_BUF_DESC_BASE1_HI = 0x01;                              /* 9143 */
+  REG_BUF_DESC_BASE1_LO = 0x60;                              /* 9147 */
+  REG_BUF_DESC_BASE2_HI = 0x01;                              /* 914b */
+  REG_BUF_DESC_BASE2_LO = 0x60;                              /* 9151 */
+  REG_BUF_DESC_CFG0_HI = 0x00;                              /* 9155 */
+  REG_BUF_DESC_CFG0_LO = 0x03; REG_BUF_DESC_CFG1_HI = 0x00;          /* 915a c3a1(0x03) */
+  REG_BUF_DESC_CFG1_LO = 0xE0;                              /* 915f */
+  REG_BUF_DESC_CFG2_HI = 0x00;                              /* 9162 */
+  REG_BUF_DESC_CFG2_LO = 0xE3;                              /* 9165 */
 
   /* --- lane A (c2xx) cfg block 3: 9169..91e3 --- */
   C2FF(0xC2A3);                                   /* 9169 */
@@ -264,18 +264,18 @@ static void usb4_phy_rx_descriptor_8e31(void) {
 /* db0d (full): page-0x12[0x62] RMW + SB[0xED]/[0xCE]/[0x1C]/[0x1D] + C20B/C22F.
  * Produces the stock SB[0x1C]=0xC2 (|=0x80,0x40,0x02 from 0). Transcribed VERBATIM from bank1. */
 static void usb4_irq_db0d(void) {
-  PR(0xC21B) = (PR(0xC21B) & 0x3F) | 0xC0;        /* db0d */
-  PR(0xC202) = (PR(0xC202) & 0xF7) | 0x08;        /* db16 */
+  REG_PHY_LINK_CTRL_C21B = (REG_PHY_LINK_CTRL_C21B & 0x3F) | 0xC0;        /* db0d */
+  REG_LINK_CTRL = (REG_LINK_CTRL & 0xF7) | 0x08;        /* db16 */
   PG_WR(0x1262, PG_RD(0x1262) & 0xEF);            /* db1f page-0x12[0x62] &= 0xEF (NOT discard) */
   SB_WR(0xED, (SB_RD(0xED) & 0xBF) | 0x40);       /* db2d SB[0xED]=(&0xBF)|0x40 */
   SB_WR(0xCE, SB_RD(0xCE) & 0xFE);                /* db3b SB[0xCE] &= 0xFE */
   SB_SET(0x1C, 0x80);                              /* db45 SB[0x1C] |= 0x80 */
   SB_SET(0x1C, 0x40);                              /* db4f SB[0x1C] |= 0x40 */
   SB_SET(0x1C, 0x02);                              /* db57 SB[0x1C] |= 0x02  => 0xC2 */
-  PR(0xC20B) = PR(0xC20B) & 0x7F;                 /* db5f C20B &= 0x7F */
+  REG_PHY_LINK_CTRL_C20B = REG_PHY_LINK_CTRL_C20B & 0x7F;                 /* db5f C20B &= 0x7F */
   SB_WR(0x1D, SB_RD(0x1D) & 0xFE);                /* db66 inc r1 -> SB[0x1D] &= 0xFE */
   C390(0xC22F);                                    /* db72 c390(C22F): (&FB)|04 */
-  PR(0xC22F) = PR(0xC22F) & 0xBF;                 /* db75 C22F &= 0xBF */
+  REG_PHY_SERDES_C22F = REG_PHY_SERDES_C22F & 0xBF;                 /* db75 C22F &= 0xBF */
 }
 
 /* ef1e (d0ac + 9a63): the SB-PHY 4-lane RX arm. AUDIT FIX T2: the prior handmade version did ONLY
@@ -300,8 +300,8 @@ static void usb4_irq_ef24(void) {
 /* The missing init_sys_flags arming (CC35/CC3B + ef24 + ef1e). Call once at boot after
  * pd_int1_enable_group (pd_keystone_init). */
 static void usb4_irq_arm(void) {
-  PR(0xCC35) = PR(0xCC35) & 0xFE;                 /* CC35 &= ~1 */
-  PR(0xCC3B) = (PR(0xCC3B) & 0xFD) | 0x02;        /* CC3B = (&0xFD)|2 */
+  REG_CPU_EXEC_STATUS_3 = REG_CPU_EXEC_STATUS_3 & 0xFE;                 /* CC35 &= ~1 */
+  REG_TIMER_CTRL_CC3B = (REG_TIMER_CTRL_CC3B & 0xFD) | 0x02;        /* CC3B = (&0xFD)|2 */
   usb4_irq_ef24();
   usb4_irq_ef1e();
 }
@@ -327,10 +327,10 @@ static void usb4_routerop_init(void) {
   PR(0xEC00) = (PR(0xEC00) & 0xFE) | 0x01;        /* EC00 = (&0xFE)|1 (router-op engine enable) */
   PR(0xEA88) = 100;                                /* EA88 = 100 (0x64) speed descriptor lo */
   PR(0xEA89) = 0x24;                               /* EA89 = 0x24 speed descriptor hi */
-  PR(0xEC04) = 1;                                  /* EC04 = 1 (router-op event ack/arm) */
+  REG_NVME_EVENT_ACK = 1;                                  /* EC04 = 1 (router-op event ack/arm) */
   PR(0xEC05) = PR(0xEC05) & 0xFE;                 /* EC05 &= ~1 */
-  PR(0xC807) = PR(0xC807) & 0xBF;                 /* C807 &= 0xBF */
-  PR(0xC807) = (PR(0xC807) & 0x7F) | 0x80;        /* *** C807 bit7 SET = SB-transport RX-enable *** */
+  REG_INT_DMA_CTRL = REG_INT_DMA_CTRL & 0xBF;                 /* C807 &= 0xBF */
+  REG_INT_DMA_CTRL = (REG_INT_DMA_CTRL & 0x7F) | 0x80;        /* *** C807 bit7 SET = SB-transport RX-enable *** */
   PR(0x0B02) = 0;                                  /* 0x0B02 = 0 (router-op message state idle) */
 }
 

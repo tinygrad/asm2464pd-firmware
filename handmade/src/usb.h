@@ -187,7 +187,7 @@ static void usb_pipe_engine_init(void) {
     REG_BUF_CFG_9300      = 0x0C;
     REG_BUF_CFG_9301      = 0xC0;
     REG_BUF_CFG_9302      = 0xBF;
-    XDATA_REG8(0x9091)    = 0x1F;        /* control-phase reg, boot-time raw write */
+    REG_USB_CTRL_PHASE    = 0x1F;        /* control-phase reg, boot-time raw write */
     REG_USB_EP_CFG1       = 0x0F;        /* 0x9093 */
     REG_USB_PHY_CTRL_91C1 = 0xF0;
     REG_BUF_CFG_9303      = 0x33;
@@ -211,22 +211,22 @@ static void usb_pipe_engine_init(void) {
  * which touch CC30/CC33/CC3F/E324 + the downstream PCIe tunnel — out of scope, HW-risky.) */
 static void boot_phy_early_settle(void) {
     /* subcmd=2, CC12=0, CC13=0x14, then poll CC11.1 + ack (phy_cmd_cc10_and_wait) */
-    XDATA_REG8(0xCC11) = 0x04; XDATA_REG8(0xCC11) = 0x02;
-    XDATA_REG8(0xCC10) = (XDATA_REG8(0xCC10) & 0xF8) | 0x02;
-    XDATA_REG8(0xCC12) = 0x00;
-    XDATA_REG8(0xCC13) = 0x14;
-    XDATA_REG8(0xCC11) = 0x01;
-    { uint16_t g = 0; while (!(XDATA_REG8V(0xCC11) & 0x02) && ++g < 0xFFFF); }
-    XDATA_REG8(0xCC11) = 0x02;
+    REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
+    REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x02;
+    REG_TIMER0_THRESHOLD_HI = 0x00;
+    REG_TIMER0_THRESHOLD_LO = 0x14;
+    REG_TIMER0_CSR = 0x01;
+    { uint16_t g = 0; while (!(REG_TIMER0_CSR & 0x02) && ++g < 0xFFFF); }
+    REG_TIMER0_CSR = 0x02;
     /* subcmd=3, CC12=0, CC13=0x0A, then WAIT E712[1:0] OR CC11.1 + ack */
-    XDATA_REG8(0xCC11) = 0x04; XDATA_REG8(0xCC11) = 0x02;
-    XDATA_REG8(0xCC10) = (XDATA_REG8(0xCC10) & 0xF8) | 0x03;
-    XDATA_REG8(0xCC12) = 0x00;
-    XDATA_REG8(0xCC13) = 0x0A;
-    XDATA_REG8(0xCC11) = 0x01;
+    REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
+    REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x03;
+    REG_TIMER0_THRESHOLD_HI = 0x00;
+    REG_TIMER0_THRESHOLD_LO = 0x0A;
+    REG_TIMER0_CSR = 0x01;
     { uint16_t g = 0;
-      while (!((XDATA_REG8V(0xE712) & 0x03) || (XDATA_REG8V(0xCC11) & 0x02)) && ++g < 0xFFFF); }
-    XDATA_REG8(0xCC11) = 0x04; XDATA_REG8(0xCC11) = 0x02;
+      while (!((REG_LINK_STATUS_E712 & 0x03) || (REG_TIMER0_CSR & 0x02)) && ++g < 0xFFFF); }
+    REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
 }
 
 /* usb4_phy_arm — the upstream USB4 PHY link-up arm (stock phy_link_train_cmd_cc10 @0xE50D, called
@@ -235,19 +235,19 @@ static void boot_phy_early_settle(void) {
  * between the CC10 issue and the CC11.1 ack — the arm is self-contained). Values verbatim. */
 static void usb4_phy_arm(void) {
     /* ack any prior event (phy_cc11_ack_event @0xE8EF): CC11=4 then CC11=2 */
-    XDATA_REG8(0xCC11) = 0x04;
-    XDATA_REG8(0xCC11) = 0x02;
+    REG_TIMER0_CSR = 0x04;
+    REG_TIMER0_CSR = 0x02;
     /* issue subcmd=4, CC12=0x01, CC13=0x8F */
-    XDATA_REG8(0xCC10) = (XDATA_REG8(0xCC10) & 0xF8) | 0x04;
-    XDATA_REG8(0xCC12) = 0x01;
-    XDATA_REG8(0xCC13) = 0x8F;
-    XDATA_REG8(0xCC11) = 0x01;            /* go */
+    REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x04;
+    REG_TIMER0_THRESHOLD_HI = 0x01;
+    REG_TIMER0_THRESHOLD_LO = 0x8F;
+    REG_TIMER0_CSR = 0x01;            /* go */
     /* WAIT E318.4 (PHY link-up) OR CC11.1 (done), bounded */
     { uint16_t g = 0;
-      while (!((XDATA_REG8V(0xE318) & 0x10) || (XDATA_REG8V(0xCC11) & 0x02)) && ++g < 0xFFFF); }
+      while (!((REG_PHY_COMPLETION_E318 & 0x10) || (REG_TIMER0_CSR & 0x02)) && ++g < 0xFFFF); }
     /* ack (E8EF): CC11=4 then CC11=2 */
-    XDATA_REG8(0xCC11) = 0x04;
-    XDATA_REG8(0xCC11) = 0x02;
+    REG_TIMER0_CSR = 0x04;
+    REG_TIMER0_CSR = 0x02;
 }
 
 /* EP0 IN: send `len` bytes of DESC_BUF, or a zero-length ack. */

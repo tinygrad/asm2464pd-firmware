@@ -72,10 +72,10 @@ static uint16_t pd_rx_ptr_get(void) {
  */
 static void pd_tx_commit_engine(void) {
   /* 0xE09A idle wait (bounded, like pd_drive_hard_reset in pd.h) */
-  { uint16_t g; for (g = 0; ((PR(0xE402) & 0x0E) || (PR(0xE41C) & 0x01)) && g < 0x4000; g++); }
-  PR(0xE403) = PR(0x07C4);                     /* TX length descriptor */
-  PR(0xE41C) = (PR(0xE41C) & 0xFE) | 0x01;     /* 0x9605: trigger TX */
-  { uint16_t g; for (g = 0; (PR(0xE41C) & 0x01) && g < 0x4000; g++); }   /* wait TX accepted */
+  { uint16_t g; for (g = 0; ((REG_CMD_STATUS_E402 & 0x0E) || (REG_CMD_BUSY_STATUS & 0x01)) && g < 0x4000; g++); }
+  REG_CMD_CTRL_E403 = PR(0x07C4);                     /* TX length descriptor */
+  REG_CMD_BUSY_STATUS = (REG_CMD_BUSY_STATUS & 0xFE) | 0x01;     /* 0x9605: trigger TX */
+  { uint16_t g; for (g = 0; (REG_CMD_BUSY_STATUS & 0x01) && g < 0x4000; g++); }   /* wait TX accepted */
   PR(0x07C3) = (PR(0x07C3) + 1) & 7;           /* bump TX MessageID */
   PR(0x07B7) = 0;
 }
@@ -91,10 +91,10 @@ static void pd_e933_clear_cc81(void) { pd_cc_event_clear(0xCC81); }
 /* e81b(p1,p2): arm the CC sender-response / PS-transition timer:
  *   CC82 = p1 ; CC83 = p2 ; CC81 = (write 4 then 2) then leave CC81 = 1 (go). */
 static void pd_arm_cc_timer(uint8_t p1, uint8_t p2) {
-  PR(0xCC82) = p1;
-  PR(0xCC83) = p2;
+  REG_CPU_CTRL_CC82 = p1;
+  REG_CPU_CTRL_CC83 = p2;
   pd_cc_event_clear(0xCC81);
-  PR(0xCC81) = 0x01;                /* stock: (95c2 result)-1 == 2-1 == 1 -> CC81 go */
+  REG_CPU_INT_CTRL = 0x01;                /* stock: (95c2 result)-1 == 2-1 == 1 -> CC81 go */
 }
 
 /* ---------- TX header builder (pd_tx_set_sop_header @0xDD12) ----------
@@ -108,16 +108,16 @@ static void pd_arm_cc_timer(uint8_t p1, uint8_t p2) {
 static void pd_tx_set_sop_header(uint8_t nobj, uint8_t msgtype) {
   uint8_t sop = PR(0x07CA);
   /* dd12: E420 bits 7:6 select the SpecRev/SOP type (0x40=SOP, 0x80=SOP'/cable). */
-  if (sop == 2 || sop == 3) PR(0xE420) = 0x80; else PR(0xE420) = 0x40;
-  PR(0xE405) &= 0xF8;                               /* 9635 */
+  if (sop == 2 || sop == 3) REG_CMD_TRIGGER = 0x80; else REG_CMD_TRIGGER = 0x40;
+  REG_CMD_CFG_E405 &= 0xF8;                               /* 9635 */
   /* PD header byte1 (E421): NumDataObjects in bits 6:4, TX MessageID in bits 3:1.
    * **CY4500 wire capture PROVED this**: with the previous E421=sop|(MsgID<<1) (NumObj=0) a
    * Request (MsgType 2) transmitted as a control GotoMin (hdr=0x0282) and the host Soft-Reset;
    * with NumObj here it is a proper Request (nobj=1 -> hdr=0x1082). The host reads the header
    * NumObj field directly (it is NOT derived from the TX length). */
-  PR(0xE421) = (uint8_t)(((nobj & 7) << 4) | ((uint8_t)(PR(0x07C3) << 1) & 0x0E));
+  REG_CMD_MODE_E421 = (uint8_t)(((nobj & 7) << 4) | ((uint8_t)(PR(0x07C3) << 1) & 0x0E));
   /* PD header byte0 (E420): SpecRev in bits 7:6 (kept), MessageType in bits 4:0. */
-  PR(0xE420) = (uint8_t)((PR(0xE420) & 0xC0) | msgtype);
+  REG_CMD_TRIGGER = (uint8_t)((REG_CMD_TRIGGER & 0xC0) | msgtype);
 }
 
 /* e73a: zero the PD TX message buffer E420-E43F (32 bytes). */
@@ -173,29 +173,29 @@ static void pd_build_send_request_rdo(void) {
 
   /* Fixed RDO: operating current = max current = offered; object position = 0x07C7+1.
    * Exact bit packing from stock pd_build_send_request_rdo @0xACD4. */
-  PR(0xE422) = d4;
-  PR(0xE423) = d3;
-  PR(0xE423) = PR(0xE423) | (uint8_t)(d4 << 2);
-  PR(0xE424) = (uint8_t)((d3 << 2) & 0x0C);
-  PR(0xE424) = PR(0xE424) | (uint8_t)(d4 >> 6);
-  PR(0xE425) = 1;
-  PR(0xE425) = PR(0xE425) | (uint8_t)(((PR(0x07C7) + 1) & 7) << 4);   /* object position */
-  PR(0xE425) = PR(0xE425) | 2;
-  PR(0xE425) = PR(0xE425) & 0xFE;
+  REG_CMD_PARAM = d4;
+  REG_CMD_STATUS = d3;
+  REG_CMD_STATUS = REG_CMD_STATUS | (uint8_t)(d4 << 2);
+  REG_CMD_ISSUE = (uint8_t)((d3 << 2) & 0x0C);
+  REG_CMD_ISSUE = REG_CMD_ISSUE | (uint8_t)(d4 >> 6);
+  REG_CMD_TAG = 1;
+  REG_CMD_TAG = REG_CMD_TAG | (uint8_t)(((PR(0x07C7) + 1) & 7) << 4);   /* object position */
+  REG_CMD_TAG = REG_CMD_TAG | 2;
+  REG_CMD_TAG = REG_CMD_TAG & 0xFE;
 
   PR(0x07C4) = 6;                    /* 95af: TX length = 2 header + 4 RDO */
   PR(0x07BD) = 3;                    /* substate: Request sent, waiting Accept/PS_RDY */
 
   /* CC controller: issue the PD-message TX command (opcode 3 in CC10[2:0]). */
-  PR(0xCC10) &= 0xF7;
+  REG_TIMER0_DIV &= 0xF7;
   pd_cc_event_clear(0xCC11);                       /* 95c2(CC11): W1C the PHY-cmd event */
-  PR(0xCC10) = (PR(0xCC10) & 0xF8) | 0x03;         /* opcode 3 = transmit PD message */
-  PR(0xCC12) = 0;
-  PR(0xCC13) = 0x28;
-  PR(0xCC11) = 0x01;                               /* go */
-  { uint16_t g = 0; while (!((PR(0xCC11) >> 1) & 1) && ++g < PD_WAIT_LIMIT);
+  REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x03;         /* opcode 3 = transmit PD message */
+  REG_TIMER0_THRESHOLD_HI = 0;
+  REG_TIMER0_THRESHOLD_LO = 0x28;
+  REG_TIMER0_CSR = 0x01;                               /* go */
+  { uint16_t g = 0; while (!((REG_TIMER0_CSR >> 1) & 1) && ++g < PD_WAIT_LIMIT);
     if (g >= PD_WAIT_LIMIT) pd_cc_timeout = 1; }   /* wait done (flag timeout) */
-  PR(0xCC11) = 0x02;                               /* W1C ack */
+  REG_TIMER0_CSR = 0x02;                               /* W1C ack */
 
   pd_tx_commit_engine();                           /* transmit (E403<-0x07C4, E41C|=1) */
   pd_arm_cc_timer(2, 0x30);                        /* arm SenderResponse timer */
@@ -316,8 +316,8 @@ static void pd_ctrl_wait(void) {
   pd_e933_clear_cc81();
   if (PR(0x07B8) != 0) {
     pd_arm_cc_timer(0xD0, 0x07);
-    { uint16_t g = 0; while (!(PR(0xCC81) & 0x02) && ++g < PD_WAIT_LIMIT); }  /* JNB CC81.1 */
-    PR(0xCC81) = 0x02;                                  /* W1C ack */
+    { uint16_t g = 0; while (!(REG_CPU_INT_CTRL & 0x02) && ++g < PD_WAIT_LIMIT); }  /* JNB CC81.1 */
+    REG_CPU_INT_CTRL = 0x02;                                  /* W1C ack */
     pd_ctrl_goodcrc();
   } else {
     pd_ctrl_goodcrc();                                  /* 9684 reset tail */
@@ -336,7 +336,7 @@ static void pd_rx_nak_send(void) {
     pd_tx_set_sop_header(0, 1);
   } else {
     /* 9664/965d: header byte0/E405 setup for non-SOP control reply (faithful: clear E405 low) */
-    PR(0xE405) = PR(0xE405) & 0xF8;
+    REG_CMD_CFG_E405 = REG_CMD_CFG_E405 & 0xF8;
   }
   PR(0x07C4) = 2;                    /* 95e4: control message = 2 header bytes, no data */
   pd_tx_commit_engine();
@@ -373,7 +373,7 @@ static void pd_ctrl_soft_reset(void) {
   /* §6.8.1: the Accept response to Soft_Reset MUST carry wire MessageID=0. pd_tx_set_sop_header
    * ORs 0x07CA (SpecRev=2, bit1 set) into E421, and E421 bits 3:1 ARE the wire MessageID (proven
    * on HW: clearing them stops the host escalating Soft_Reset -> Hard_Reset). Force MsgID bits 0. */
-  PR(0xE421) = (uint8_t)(PR(0xE421) & 0xF1);
+  REG_CMD_MODE_E421 = (uint8_t)(REG_CMD_MODE_E421 & 0xF1);
 
   pd_tx_commit_engine();          /* e1c6: transmit Accept with MessageID=0 (bumps 0x07C3 0->1) */
 
@@ -420,8 +420,8 @@ static void pd_dispatch_data(uint8_t msgtype) {
     if (sop == 2 || sop == 3) {
       /* stock 0x84b3: A=0x80; 9713(0x80) writes E420=0x80 and returns (E409 & 0xF1);
        * then 0x84b8 A|=4; MOVX @DPTR,A -> E409 = (E409 & 0xF1) | 4. */
-      PR(0xE420) = 0x80;             /* 9713(0x80): seed TX control byte */
-      PR(0xE409) = (PR(0xE409) & 0xF1) | 0x04;
+      REG_CMD_TRIGGER = 0x80;             /* 9713(0x80): seed TX control byte */
+      REG_CMD_CTRL_E409 = (REG_CMD_CTRL_E409 & 0xF1) | 0x04;
     }
     {
       uint8_t s = PR(0x07BD);
@@ -474,7 +474,7 @@ static void pd_dispatch_data(uint8_t msgtype) {
  * pd_rx_message_dispatch @0x83D6 — entry point (called from pd_rx_isr after E40F.0 W1C).
  * ==================================================================================== */
 static void pd_rx_message_dispatch(void) {
-  uint8_t e40f = PR(0xE40F);
+  uint8_t e40f = REG_PHY_EVENT_E40F;
   uint8_t hdr0, hdr1, sop, ext_bit;
   uint16_t base;
 

@@ -542,16 +542,16 @@ void int1_isr(void) __interrupt(1) {
   uint8_t saved_dpx = DPX;
   DPX = 0x00;
   if (isr_dbg_budget && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget--; uart_putc('I'); }
-  if (XDATA_REG8V(0xC806) & 0x01) cc_pd_timer_tick();        /* O1 timer-tick, ungated, FIRST */
+  if (REG_INT_SYSTEM & 0x01) cc_pd_timer_tick();        /* O1 timer-tick, ungated, FIRST */
   if (isr_dbg_budget2 && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget2--; uart_putc('t'); }
-  if (XDATA_REG8V(0xCC33) & 0x04) { XDATA_REG8V(0xCC33) = 0x04; }  /* O2 CC33.2 link-state W1C ack */
-  if (XDATA_REG8V(0xC80A) & 0x40) pd_rx_isr();               /* C80A.6 PD-RX */
+  if (REG_CPU_EXEC_STATUS_2 & 0x04) { REG_CPU_EXEC_STATUS_2 = 0x04; }  /* O2 CC33.2 link-state W1C ack */
+  if (REG_INT_PCIE_NVME & 0x40) pd_rx_isr();               /* C80A.6 PD-RX */
   if (isr_dbg_budget3 && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget3--; uart_putc('p'); }
   /* USB4 event demux, gated by (0x09F9 & 0x83) like the stock orchestrator @0x4486.
    * M2: the C80A.5 SB-router handler (a066, sb_router.h) now W1C-acks every event, so the demux
    * runs every ISR (the M1 one-shot latch is removed). */
   if (XDATA_REG8V(0x09F9) & 0x83) usb4_int_demux();          /* C80A.5/4 + EC06 + C80A.0-3 */
-  if (XDATA_REG8V(0xC806) & 0x10) { /* C806.4 -> bank1 ef4e; ack-only for now (no-op) */ }
+  if (REG_INT_SYSTEM & 0x10) { /* C806.4 -> bank1 ef4e; ack-only for now (no-op) */ }
   DPX = saved_dpx;
 }
 
@@ -570,9 +570,9 @@ void main(void) {
   // PCIe-tunnel boot pre-stage (d996). THIS powers the sideband (SB) transport that rides the
   // Type-C SBU pins — without it the SB block reads back 0 and the host never trains E302.
   boot_phy_bringup_early();
-  uart_puts("[BOOTPHY cc3f="); uart_puthex(XDATA_REG8V(0xCC3F));
-  uart_puts(" cc30=");          uart_puthex(XDATA_REG8V(0xCC30));
-  uart_puts(" e712=");          uart_puthex(XDATA_REG8V(0xE712));
+  uart_puts("[BOOTPHY cc3f="); uart_puthex(REG_LTSSM_CTRL);
+  uart_puts(" cc30=");          uart_puthex(REG_CPU_MODE);
+  uart_puts(" e712=");          uart_puthex(REG_LINK_STATUS_E712);
   uart_puts(" sb05=");          uart_puthex(SB_RD(0x05)); uart_puts("]\n");
 
   // bank0 92C5 RAM-state seed (audit O6/S4). Seeds the lane-engine link WIDTH (0x0AE9=0x0F), MODE
@@ -622,9 +622,9 @@ void main(void) {
   // boot_phy_early_settle() removed: the CC10 settle is now done by boot_phy_bringup_early() above
   // (run at stock's early position, with the full Type-C SBU + PHY config + SB-block enable).
   usb4_phy_arm();
-  uart_puts("[PHYarm e318="); uart_puthex(XDATA_REG8V(0xE318));
-  uart_puts(" 91c0=");        uart_puthex(XDATA_REG8V(0x91C0));
-  uart_puts(" e712=");        uart_puthex(XDATA_REG8V(0xE712)); uart_puts("]\n");
+  uart_puts("[PHYarm e318="); uart_puthex(REG_PHY_COMPLETION_E318);
+  uart_puts(" 91c0=");        uart_puthex(REG_USB_PHY_CTRL_91C0);
+  uart_puts(" e712=");        uart_puthex(REG_LINK_STATUS_E712); uart_puts("]\n");
 
   // USB4/PD keystone: present a PD-capable Type-C attach + arm the PD engine so the host
   // engages USB-PD. Must run before interrupts are enabled (so a Source_Cap can be RX'd).
@@ -636,10 +636,10 @@ void main(void) {
   // detects the host's sideband connect packets and raises C80A.5 (the SB-router event the M2
   // handler services). Without it the SB block is powered but never signals connect.
   usb4_irq_arm();
-  uart_puts("[U4irq c21b="); uart_puthex(XDATA_REG8V(0xC21B));
-  uart_puts(" c202=");        uart_puthex(XDATA_REG8V(0xC202));
-  uart_puts(" e741=");        uart_puthex(XDATA_REG8V(0xE741));
-  uart_puts(" cc43=");        uart_puthex(XDATA_REG8V(0xCC43)); uart_puts("]\n");
+  uart_puts("[U4irq c21b="); uart_puthex(REG_PHY_LINK_CTRL_C21B);
+  uart_puts(" c202=");        uart_puthex(REG_LINK_CTRL);
+  uart_puts(" e741=");        uart_puthex(REG_PHY_PLL_CTRL);
+  uart_puts(" cc43=");        uart_puthex(REG_CPU_CLK_CFG); uart_puts("]\n");
 
   // RE-AUDIT #7a: USB4 CM router-op RX-enable (bank1 e56f). Turns on the EC00 router-op engine and
   // sets C807.7 (SB-transport RX-enable) so the host CM's router-op queries (CE88/CE89 transport +
@@ -648,8 +648,8 @@ void main(void) {
   if (XDATA_REG8V(0x09F9) & 0x81) {
     usb4_routerop_init();
     uart_puts("[U4rop ec00="); uart_puthex(XDATA_REG8V(0xEC00));
-    uart_puts(" ec04=");        uart_puthex(XDATA_REG8V(0xEC04));
-    uart_puts(" c807=");        uart_puthex(XDATA_REG8V(0xC807));
+    uart_puts(" ec04=");        uart_puthex(REG_NVME_EVENT_ACK);
+    uart_puts(" c807=");        uart_puthex(REG_INT_DMA_CTRL);
     uart_puts(" ea88=");        uart_puthex(XDATA_REG8V(0xEA88)); uart_puts("]\n");
   }
 
@@ -795,11 +795,11 @@ void main(void) {
       IE &= (uint8_t)~IE_EX1;
       bank0_c9a8(0);
       IE |= IE_EX1;
-      uart_puts("[8a89 ret e764=");  uart_puthex(XDATA_REG8V(0xE764));
-      uart_puts(" e751=");           uart_puthex(XDATA_REG8V(0xE751));
-      uart_puts(" e302=");           uart_puthex(XDATA_REG8V(0xE302));
-      uart_puts(" c80a=");           uart_puthex(XDATA_REG8V(0xC80A));
-      uart_puts(" ec06=");           uart_puthex(XDATA_REG8V(0xEC06)); uart_puts("]\n");
+      uart_puts("[8a89 ret e764=");  uart_puthex(REG_PHY_TIMER_CTRL_E764);
+      uart_puts(" e751=");           uart_puthex(REG_PHY_POLL_E751);
+      uart_puts(" e302=");           uart_puthex(REG_PHY_MODE_E302);
+      uart_puts(" c80a=");           uart_puthex(REG_INT_PCIE_NVME);
+      uart_puts(" ec06=");           uart_puthex(REG_NVME_EVENT_STATUS); uart_puts("]\n");
     }
 
     /* Deferred tunnel-up: the SB-router ISR (e52d) sets sb_tunnel_up_pending on lane-bond-complete;
@@ -834,18 +834,18 @@ void main(void) {
       { static __xdata uint32_t p; static __xdata uint8_t e302; static __xdata uint8_t best;
         e302 = 0; best = 0;                   /* XDATA: keep these diag locals out of the full IRAM/DSEG */
         for (p = 0; p < 2000000UL; p++) {     /* bounded ~100ms+ poll window for HW to train */
-          e302 = XDATA_REG8V(0xE302);
+          e302 = REG_PHY_MODE_E302;
           if (((e302 >> 4) & 3) > ((best >> 4) & 3)) best = e302;
-          c80a_acc |= XDATA_REG8V(0xC80A);    /* catch a transient C80A.5 even with no INT */
+          c80a_acc |= REG_INT_PCIE_NVME;    /* catch a transient C80A.5 even with no INT */
           if (((e302 >> 4) & 3) >= 2) break;
         }
         uart_puts("[SBDIAG e302=");      uart_puthex(e302);
         uart_puts(" best=");             uart_puthex(best);
-        uart_puts(" c80a=");             uart_puthex(XDATA_REG8V(0xC80A));
-        uart_puts(" ec06=");             uart_puthex(XDATA_REG8V(0xEC06));
-        uart_puts(" 91c0=");             uart_puthex(XDATA_REG8V(0x91C0));
-        uart_puts(" e318=");             uart_puthex(XDATA_REG8V(0xE318));
-        uart_puts(" cc30=");             uart_puthex(XDATA_REG8V(0xCC30));
+        uart_puts(" c80a=");             uart_puthex(REG_INT_PCIE_NVME);
+        uart_puts(" ec06=");             uart_puthex(REG_NVME_EVENT_STATUS);
+        uart_puts(" 91c0=");             uart_puthex(REG_USB_PHY_CTRL_91C0);
+        uart_puts(" e318=");             uart_puthex(REG_PHY_COMPLETION_E318);
+        uart_puts(" cc30=");             uart_puthex(REG_CPU_MODE);
         uart_puts(" is_usb2=");          uart_puthex(is_usb2);
         uart_puts(" 09f9=");             uart_puthex(XDATA_REG8V(0x09F9));
         uart_puts(" 09fa=");             uart_puthex(XDATA_REG8V(0x09FA));
@@ -857,17 +857,17 @@ void main(void) {
          * E764.4 = LINK-MODE armed; E751 = USB4 link arm; 8a89? = engine entered; C801.4/C809.3 =
          * SB-PHY RX unmask landed; 0x07E8/0x9101/0x91D1/0x9302 = did the host DRIVE INT0 link events. */
         uart_puts("[LYR c80a5=");        uart_puthex((c80a_acc >> 5) & 1);
-        uart_puts(" e764=");             uart_puthex(XDATA_REG8V(0xE764));
-        uart_puts(" e751=");             uart_puthex(XDATA_REG8V(0xE751));
+        uart_puts(" e764=");             uart_puthex(REG_PHY_TIMER_CTRL_E764);
+        uart_puts(" e751=");             uart_puthex(REG_PHY_POLL_E751);
         uart_puts(" 09fa=");             uart_puthex(XDATA_REG8V(0x09FA));
         uart_puts(" 0af1=");             uart_puthex(XDATA_REG8V(0x0AF1));
         uart_puts(" 07e8=");             uart_puthex(XDATA_REG8V(0x07E8));
         uart_puts(" 8a89?=");            uart_puthex(bank0_8a89_entered);
-        uart_puts(" c801=");             uart_puthex(XDATA_REG8V(0xC801));
-        uart_puts(" c809=");             uart_puthex(XDATA_REG8V(0xC809));
-        uart_puts(" 9101=");             uart_puthex(XDATA_REG8V(0x9101));
-        uart_puts(" 91d1=");             uart_puthex(XDATA_REG8V(0x91D1));
-        uart_puts(" 9302=");             uart_puthex(XDATA_REG8V(0x9302));
+        uart_puts(" c801=");             uart_puthex(REG_INT_ENABLE);
+        uart_puts(" c809=");             uart_puthex(REG_INT_CTRL);
+        uart_puts(" 9101=");             uart_puthex(REG_USB_PERIPH_STATUS);
+        uart_puts(" 91d1=");             uart_puthex(REG_USB_PHY_CTRL_91D1);
+        uart_puts(" 9302=");             uart_puthex(REG_BUF_CFG_9302);
         uart_puts("]\n");
         if (((best >> 4) & 3) >= 2) uart_puts("[*** USB4 TRAINED ***]\n");
         else                        uart_puts("[!!! E302 NOT TRAINED !!!]\n");
@@ -875,21 +875,21 @@ void main(void) {
     }
     uart_puts("[TICK seen="); uart_puthex(tick_seen);
     uart_puts(" cc_hit=");     uart_puthex(cc_hit);
-    uart_puts(" c806=");       uart_puthex(XDATA_REG8V(0xC806));
-    uart_puts(" cc91=");       uart_puthex(XDATA_REG8V(0xCC91));
-    uart_puts(" cc81=");       uart_puthex(XDATA_REG8V(0xCC81));
-    uart_puts(" c809=");       uart_puthex(XDATA_REG8V(0xC809)); uart_puts("]\n");
+    uart_puts(" c806=");       uart_puthex(REG_INT_SYSTEM);
+    uart_puts(" cc91=");       uart_puthex(REG_CPU_DMA_INT);
+    uart_puts(" cc81=");       uart_puthex(REG_CPU_INT_CTRL);
+    uart_puts(" c809=");       uart_puthex(REG_INT_CTRL); uart_puts("]\n");
     uart_puts("[U ");
-    uart_puthex(XDATA_REG8V(0xE302)); uart_putc(':');   /* USB4 link-mode ((>>4)&3 >=2 == trained) */
-    uart_puthex(XDATA_REG8V(0xC80A)); uart_putc(':');   /* PD/USB4 int status (bit6=PD,5=SB,4=evt) */
-    uart_puthex(XDATA_REG8V(0xEC06)); uart_putc(':');   /* USB4 router-op event (bit0) */
-    uart_puthex(XDATA_REG8V(0xE763)); uart_putc(':');   /* PCIe-tunnel link event */
+    uart_puthex(REG_PHY_MODE_E302); uart_putc(':');   /* USB4 link-mode ((>>4)&3 >=2 == trained) */
+    uart_puthex(REG_INT_PCIE_NVME); uart_putc(':');   /* PD/USB4 int status (bit6=PD,5=SB,4=evt) */
+    uart_puthex(REG_NVME_EVENT_STATUS); uart_putc(':');   /* USB4 router-op event (bit0) */
+    uart_puthex(REG_PHY_RXPLL_TRIGGER); uart_putc(':');   /* PCIe-tunnel link event */
     uart_puthex(XDATA_REG8V(0xB432)); uart_putc(':');   /* downstream PCIe lane status (&7==7 up) */
-    uart_puthex(XDATA_REG8V(0xE765)); uart_putc(':');   /* PCIe link-up (bit1) */
+    uart_puthex(REG_SYS_CTRL_E765); uart_putc(':');   /* PCIe link-up (bit1) */
     uart_puthex(usb4_int_seen); uart_putc(':');         /* USB4 INT sources seen (1=SB,2=evt,4=rop,8=tun) */
     uart_puthex(pd_cc_timeout); uart_puts("]\n");       /* 1 = a CC cmd wait timed out */
     /* Pass: USB4 upstream link trained (E302 link-mode (E302>>4)&3 >= 2). */
-    if (((XDATA_REG8V(0xE302) >> 4) & 3) >= 2) uart_puts("[*** USB4 TRAINED ***]\n");
+    if (((REG_PHY_MODE_E302 >> 4) & 3) >= 2) uart_puts("[*** USB4 TRAINED ***]\n");
     /* M2/M3 observability: SB-router route-up (0x0766) + tunnel/PCIe state. */
     uart_puts("[M2 766=");      uart_puthex(XDATA_REG8V(0x0766));
     uart_puts(" 6f1=");         uart_puthex(XDATA_REG8V(0x06F1));
@@ -907,16 +907,16 @@ void main(void) {
     uart_puts(" aa0=");          uart_puthex(XDATA_REG8V(0x0AA0));
     uart_puts(" sba0=");         uart_puthex(SB_RD(0xA0));
     uart_puts(" sba1=");         uart_puthex(SB_RD(0xA1));
-    uart_puts(" e710=");         uart_puthex(XDATA_REG8V(0xE710));
-    uart_puts(" ca06=");         uart_puthex(XDATA_REG8V(0xCA06));
+    uart_puts(" e710=");         uart_puthex(REG_LINK_WIDTH_E710);
+    uart_puts(" ca06=");         uart_puthex(REG_CPU_MODE_NEXT);
     uart_puts(" a9e=");          uart_puthex(XDATA_REG8V(0x0A9E));
     uart_puts(" a9f=");          uart_puthex(XDATA_REG8V(0x0A9F));
     uart_puts(" b430=");         uart_puthex(XDATA_REG8V(0xB430));
     uart_puts(" b432=");         uart_puthex(XDATA_REG8V(0xB432));
-    uart_puts(" e751=");         uart_puthex(XDATA_REG8V(0xE751));
-    uart_puts(" e763=");         uart_puthex(XDATA_REG8V(0xE763));
-    uart_puts(" e765=");         uart_puthex(XDATA_REG8V(0xE765));
-    uart_puts(" e764=");         uart_puthex(XDATA_REG8V(0xE764));
+    uart_puts(" e751=");         uart_puthex(REG_PHY_POLL_E751);
+    uart_puts(" e763=");         uart_puthex(REG_PHY_RXPLL_TRIGGER);
+    uart_puts(" e765=");         uart_puthex(REG_SYS_CTRL_E765);
+    uart_puts(" e764=");         uart_puthex(REG_PHY_TIMER_CTRL_E764);
     uart_puts("]\n");
     /* LANE-BOND state-4 (b0b4) observability: the 0x06ED FSM state + the four 0x075x OS1 latches
      * (must reach 0x10 for e672 to enter state-5) + the SB lane state. */
