@@ -192,7 +192,7 @@ static uint8_t usb4_mode_entry_commit(void) {
     PR(0x0ACD) = 3;
     PR(0x0ACE) = 1;
     PR(0x92E1) = 0x10;                 /* USB4 mode-entry latch */
-    REG_USB_INT_MASK_9090 = REG_USB_INT_MASK_9090 & 0x7F;    /* clear USB global int mask bit7 */
+    REG_USB_INT_MASK_9090 &= 0x7F;    /* clear USB global int mask bit7 */
     return 4;                          /* stock d7b1: R7=4 (USB4 mode) */
   }
   PR(0x0ACD) = 1;
@@ -222,7 +222,7 @@ static void vdm_handle_enter_mode(uint8_t objpos, uint8_t svid_lo, uint8_t svid_
   /* Non-TBT or wrong state: plain EnterMode ACK echoing SVID, obj-pos in E423. */
   pd_tx_set_sop_header(1, 0x0F);
   pd_vdm_hdr_build(2, 4);
-  REG_CMD_STATUS = REG_CMD_STATUS | (PR(0x0AAA) & 0x07);
+  REG_CMD_STATUS |= (PR(0x0AAA) & 0x07);
   REG_CMD_ISSUE = svid_lo;
   REG_CMD_TAG = svid_hi;
   PR(0x07C4) = 6;
@@ -276,7 +276,7 @@ static void pd_handle_enter_usb(void) {
        * a host link-event. Stock's setter is the C80A.4 a522 link-width path (0x09FA|=4), which the
        * Intel host never reaches with handmade. Mirror it here so the link-event entry is armed.
        * 0x07E8/0x0AF1.0 are set on the USB4 route entry (pd.h) + connect (usb4.h). */
-      PR(0x09FA) = PR(0x09FA) | 0x04;             /* 0x09FA.2 -> c9a8 gate bit (a522 mirror) */
+      PR(0x09FA) |= 0x04;             /* 0x09FA.2 -> c9a8 gate bit (a522 mirror) */
       PR(0x07E8) = 1;                             /* D(d): USB4 route entry -> c9a8 gate term */
     }
   } else {

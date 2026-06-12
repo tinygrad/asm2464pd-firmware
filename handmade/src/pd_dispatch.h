@@ -175,13 +175,13 @@ static void pd_build_send_request_rdo(void) {
    * Exact bit packing from stock pd_build_send_request_rdo @0xACD4. */
   REG_CMD_PARAM = d4;
   REG_CMD_STATUS = d3;
-  REG_CMD_STATUS = REG_CMD_STATUS | (uint8_t)(d4 << 2);
+  REG_CMD_STATUS |= (uint8_t)(d4 << 2);
   REG_CMD_ISSUE = (uint8_t)((d3 << 2) & 0x0C);
-  REG_CMD_ISSUE = REG_CMD_ISSUE | (uint8_t)(d4 >> 6);
+  REG_CMD_ISSUE |= (uint8_t)(d4 >> 6);
   REG_CMD_TAG = 1;
-  REG_CMD_TAG = REG_CMD_TAG | (uint8_t)(((PR(0x07C7) + 1) & 7) << 4);   /* object position */
-  REG_CMD_TAG = REG_CMD_TAG | 2;
-  REG_CMD_TAG = REG_CMD_TAG & 0xFE;
+  REG_CMD_TAG |= (uint8_t)(((PR(0x07C7) + 1) & 7) << 4);   /* object position */
+  REG_CMD_TAG |= 2;
+  REG_CMD_TAG &= 0xFE;
 
   PR(0x07C4) = 6;                    /* 95af: TX length = 2 header + 4 RDO */
   PR(0x07BD) = 3;                    /* substate: Request sent, waiting Accept/PS_RDY */
@@ -336,7 +336,7 @@ static void pd_rx_nak_send(void) {
     pd_tx_set_sop_header(0, 1);
   } else {
     /* 9664/965d: header byte0/E405 setup for non-SOP control reply (faithful: clear E405 low) */
-    REG_CMD_CFG_E405 = REG_CMD_CFG_E405 & 0xF8;
+    REG_CMD_CFG_E405 &= 0xF8;
   }
   PR(0x07C4) = 2;                    /* 95e4: control message = 2 header bytes, no data */
   pd_tx_commit_engine();
@@ -373,7 +373,7 @@ static void pd_ctrl_soft_reset(void) {
   /* §6.8.1: the Accept response to Soft_Reset MUST carry wire MessageID=0. pd_tx_set_sop_header
    * ORs 0x07CA (SpecRev=2, bit1 set) into E421, and E421 bits 3:1 ARE the wire MessageID (proven
    * on HW: clearing them stops the host escalating Soft_Reset -> Hard_Reset). Force MsgID bits 0. */
-  REG_CMD_MODE_E421 = (uint8_t)(REG_CMD_MODE_E421 & 0xF1);
+  REG_CMD_MODE_E421 &= 0xF1;
 
   pd_tx_commit_engine();          /* e1c6: transmit Accept with MessageID=0 (bumps 0x07C3 0->1) */
 

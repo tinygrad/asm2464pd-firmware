@@ -54,11 +54,11 @@ static void usb4_connect_u4(void) {
   /* RE-AUDIT #3/D(c): 0x0AF1.0 is a DYNAMIC connect-time gate (NOT the static boot 0). Both this
    * inner a3f5 body AND c9a8/bank0_8a89 require it set before the connect runs. Stock seeds it 0 at
    * boot (92C5) and sets it on the connect path; set it here on connect entry. */
-  PR(0x0AF1) = PR(0x0AF1) | 0x01;
+  PR(0x0AF1) |= 0x01;
   /* a3f5: gated on 0x0AF1.0 — link/route control RMW (direct bank0 XDATA, high confidence). */
   if (PR(0x0AF1) & 0x01) {
     REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;     /* a3fc */
-    REG_CPU_CTRL_CA81 = REG_CPU_CTRL_CA81 & 0xFE;              /* a405 */
+    REG_CPU_CTRL_CA81 &= 0xFE;              /* a405 */
     REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;     /* a40c */
   }
   /* a415 UNCONDITIONAL pre-gate (the PHY-descriptor seed the host CM reads): dd42(0)/e7c1(1)/e0d9(0). */
@@ -81,7 +81,7 @@ static void usb4_connect_u4(void) {
       else                 { PR(0x09FA) = (PR(0x09FA) & 0x04) | 1; PR(0x09FB) = 2; }
     }
     if (PR(0x09FA) & 0x02) {                     /* a45a: 0x09FA.1 lane-1 route mode */
-      REG_LINK_STATUS_E716 = REG_LINK_STATUS_E716 & 0xFC;
+      REG_LINK_STATUS_E716 &= 0xFC;
       REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
       SB_WR(0xD8, 0x02);                          /* SB[0xD8]=2 (page1 0x128D8) */
     }

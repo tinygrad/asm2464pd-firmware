@@ -106,11 +106,11 @@ static void sb_lane_flip_init(void) {
     P1_WR(0x0101, (P1_RD(0x0101) & 0xEF) | 0x10);   /* 0x9685+0x96b7: set b4, clr b5 */
     P1_CLR(0x0101, 0x20);                            /* 0x96b7: clr b5 */
     P1_SET(0x0101, 0x80);                            /* 0x980d: set b7 */
-    REG_LINK_MODE_CTRL = REG_LINK_MODE_CTRL & ~0x03;                /* connect -> clear bond gate */
+    REG_LINK_MODE_CTRL &= ~0x03;                /* connect -> clear bond gate */
   } else {
     P1_CLR(0x0101, 0x10);                            /* 0x96b2: clr b4 */
     P1_CLR(0x0101, 0x80);                            /* clr b7 */
-    REG_LINK_MODE_CTRL = REG_LINK_MODE_CTRL | 0x03;                 /* no connect -> set bond gate */
+    REG_LINK_MODE_CTRL |= 0x03;                 /* no connect -> set bond gate */
   }
 
   SB_WR(0xD1, (SB_RD(0xD1) & 0xEF) | 0x10);     /* b4=1 */
@@ -127,7 +127,7 @@ static void sb_lane_flip_init(void) {
   /* SB 0x98/0x99 PHY-RX descriptor (0c7a A=0x3e B=0x80 -> stock SB[0x98]=3E SB[0x99]=80) */
   SB_WR(0x98, 0x3E); SB_WR(0x99, 0x80);
   REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;          /* 97ef: CCD9 mailbox strobe (4 then 2) */
-  REG_XFER2_DMA_CTRL = REG_XFER2_DMA_CTRL & 0xEF;                /* CCD8 &= ~0x10 */
+  REG_XFER2_DMA_CTRL &= 0xEF;                /* CCD8 &= ~0x10 */
   REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x10;       /* *** C801.4 SET (SB-PHY RX unmask) *** */
   REG_XFER2_DMA_CTRL = (REG_XFER2_DMA_CTRL & 0xF8) | 0x04;       /* CCD8 bits2:0 = 4 */
   REG_XFER2_DMA_ADDR_LO = 0x00;
@@ -179,7 +179,7 @@ static void sb_rom_descriptor_load(void) {
   PR(0x0804) = PR(0x0A57);
   PR(0x0805) = PR(0x0A58);
   /* if not USB4-cap (0x09F9.7 clear): clear DROM[0x1B].1 */
-  if (!(PR(0x09F9) & 0x80)) PR(0x081B) = PR(0x081B) & ~0x02;
+  if (!(PR(0x09F9) & 0x80)) PR(0x081B) &= ~0x02;
   for (i = 0; i < 0x10; i++) PR(0x0700 + i) = sb_lane_desc_21d4[i];
   /* b7a4 0x081A.5 (20G lane-present bit): if 0x09F5 set, SET bit5.
    * NOTE: stock ALSO has a conditional clear-back here: clear bit5 if
@@ -190,7 +190,7 @@ static void sb_rom_descriptor_load(void) {
    * stock writers of 0x07CC/0x07BA before b7a4 and reproduce them, THEN restore the clear-back. */
   if (PR(0x09F5)) PR(0x081A) = (uint8_t)((PR(0x081A) & 0xDF) | 0x20);
   /* if 0x09F6 == 0: DROM[0x1A] &= 0xED */
-  if (PR(0x09F6) == 0) PR(0x081A) = PR(0x081A) & 0xED;
+  if (PR(0x09F6) == 0) PR(0x081A) &= 0xED;
 
   /* ---- b83b-b8d8 tail (RE-AUDIT breakthrough A + #5): connect-state init + the SB[0xC9]
    * walking-1 connect-detect ARM + SB[0x28]/[0x2A]/[0x2C]/[0x66] + 0x6EE/0x6EF latch + CCD9 strobe
@@ -270,27 +270,27 @@ static void sb_block_init(void) {
   SB_CLR(0x27, 0x14);                             /* clr bits 2,4 */
 
   /* --- PHY bank0 RMW (DPX=0) --- */
-  REG_PHY_CONFIG = REG_PHY_CONFIG & ~0x08;
+  REG_PHY_CONFIG &= ~0x08;
   PR(0xC2C4) = (PR(0xC2C4) & 0xBF) | 0x40;
-  PR(0xC2DC) = PR(0xC2DC) & 0xC0;
+  PR(0xC2DC) &= 0xC0;
   PR(0xC344) = (PR(0xC344) & 0xBF) | 0x40;
-  PR(0xC35C) = PR(0xC35C) & 0xC0;
+  PR(0xC35C) &= 0xC0;
 
   /* e34b PHY lane cfg (bc42). Helpers: b70d(a)=&FE;&FD;(&C3)|1C;&BF ; b796(a)=(&BF)|40 ;
    * b73b: C2C3&=7F;C343&=7F. Transcribed VERBATIM from bank1 e34b (e34b..e38e). */
   PR(0x0AB3) = 0; PR(0x0AB4) = 3; PR(0x0AB5) = 3; PR(0x0AB6) = 0;
   /* b70d(C2C3) */
-  REG_PHY_ORIENT_C2C3 = REG_PHY_ORIENT_C2C3 & 0xFE; REG_PHY_ORIENT_C2C3 = REG_PHY_ORIENT_C2C3 & 0xFD;
-  REG_PHY_ORIENT_C2C3 = (REG_PHY_ORIENT_C2C3 & 0xC3) | 0x1C; REG_PHY_ORIENT_C2C3 = REG_PHY_ORIENT_C2C3 & 0xBF;
-  PR(0xC2CB) = PR(0xC2CB) & 0xFB;                 /* e35f C2CB &= ~0x04 */
+  REG_PHY_ORIENT_C2C3 &= 0xFE; REG_PHY_ORIENT_C2C3 &= 0xFD;
+  REG_PHY_ORIENT_C2C3 = (REG_PHY_ORIENT_C2C3 & 0xC3) | 0x1C; REG_PHY_ORIENT_C2C3 &= 0xBF;
+  PR(0xC2CB) &= 0xFB;                 /* e35f C2CB &= ~0x04 */
   /* b70d(C343) */
-  REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0xFE; REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0xFD;
-  REG_VENDOR_CTRL_C343 = (REG_VENDOR_CTRL_C343 & 0xC3) | 0x1C; REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0xBF;
-  PR(0xC34B) = PR(0xC34B) & 0xFB;                 /* e36c C34B &= ~0x04 */
+  REG_VENDOR_CTRL_C343 &= 0xFE; REG_VENDOR_CTRL_C343 &= 0xFD;
+  REG_VENDOR_CTRL_C343 = (REG_VENDOR_CTRL_C343 & 0xC3) | 0x1C; REG_VENDOR_CTRL_C343 &= 0xBF;
+  PR(0xC34B) &= 0xFB;                 /* e36c C34B &= ~0x04 */
   PR(0xC21C) = (PR(0xC21C) & 0xBF) | 0x40;        /* e373 b796(C21C) */
-  REG_PHY_LINK_CTRL_C208 = REG_PHY_LINK_CTRL_C208 & 0xBF;                 /* e379 C208 &= ~0x40 */
-  REG_PHY_ORIENT_C2C3 = REG_PHY_ORIENT_C2C3 & 0x7F;                 /* e380 b73b: C2C3 &= 0x7F */
-  REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0x7F;                 /* e380 b73b: C343 &= 0x7F */
+  REG_PHY_LINK_CTRL_C208 &= 0xBF;                 /* e379 C208 &= ~0x40 */
+  REG_PHY_ORIENT_C2C3 &= 0x7F;                 /* e380 b73b: C2C3 &= 0x7F */
+  REG_VENDOR_CTRL_C343 &= 0x7F;                 /* e380 b73b: C343 &= 0x7F */
   SB_CLR(0x1D, 0x02);                             /* e387 SB[0x1D] &= ~0x02 (DPX=1) */
 
   /* --- bb45 tail (bc45..bc5d): the truncated SB[0xBA]/[0xBD] + 0x09F7 sub-block --- */
@@ -466,14 +466,14 @@ static void u4c_bcd7_tail(void) {
   /* bcc4: r3_read(0x1504) & 0xF3, then r3_write |= 2 -> this is an SB[0x04]-region descriptor RMW.
    * Resolved net: the descriptor commit handled by the engine; the load-bearing XDATA writes follow. */
   if (PR(0x09FA) & 0x81) {              /* a48f: bcd7() != 0  (0x09FA & 0x81) */
-    REG_CPU_MODE_NEXT = REG_CPU_MODE_NEXT & 0xEF;     /* a4a6: CA06 &= ~0x10 */
+    REG_CPU_MODE_NEXT &= 0xEF;     /* a4a6: CA06 &= ~0x10 */
     sb_pcie_width_ramp(0x0F);           /* a4ac: pcie_tunnel_link_width_config_b434_b436(0xF) = d436 */
     if (PR(0x0AF1) & 0x10) {            /* a4cd: JNB 0x0AF1.4 -> skip e7ae block */
       uint16_t g = 0;
       while (((PR(0xC006) & 0x1F) != 0x10) && ++g < 0x0800);   /* bank0_e7ae C006 lock (bounded) */
       g = 0;
       while (((PR(0xC00E) & 0x07) != 0x00) && ++g < 0x0800);   /* bank0_e7ae C00E lock (bounded) */
-      REG_CPU_MODE = REG_CPU_MODE & 0xFE;                            /* CC30 &= ~1 */
+      REG_CPU_MODE &= 0xFE;                            /* CC30 &= ~1 */
       REG_LINK_WIDTH_E710 = (REG_LINK_WIDTH_E710 & 0xE0) | 0x1F;                   /* E710 rate latch low5 = 0x1F */
     }
     PR(0xB430) = (PR(0xB430) & 0xFE) | 0x01;   /* ee82: B430 |= 1 (tunnel link-up bit) */

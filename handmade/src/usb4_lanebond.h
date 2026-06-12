@@ -377,7 +377,7 @@ static void u4lb_e9e7(void) {
   phy_cc10_cmd_wait(1, 0, 0x14);                    /* e9fc: R7=1,R4=0,R5=0x14 */
   REG_PHY_RXPLL_RESET = 0x00;                                /* e9ff-ea03: C20E=0 */
   phy_cc10_cmd_wait(2, 0, 0x28);                    /* ea09: R7=2,R4=0,R5=0x28 */
-  REG_CPU_CTRL_CC37 = REG_CPU_CTRL_CC37 & 0xFB;                   /* ea0c 984d: CC37 &= ~4 */
+  REG_CPU_CTRL_CC37 &= 0xFB;                   /* ea0c 984d: CC37 &= ~4 */
   uart_puts("[Done]");                              /* ea16 538d(str 0x1fe6) */
 }
 
@@ -396,13 +396,13 @@ static void u4lb_ebde(void) {
  * C2A8|=0x80; C328|=0x80 (START). All bank0 PLAIN XDATA (PR()). Verbatim CODE_BANK1::e980 (decompiler
  * ghosts a param_1; the asm c343/c32d/c31f resolve to these net writes). */
 static void u4lb_e980(void) {
-  PR(0xC2A8) = PR(0xC2A8) & 0x3F;                   /* e980-e986 c343/c32d: C2A8&=0x3F */
-  PR(0xC328) = PR(0xC328) & 0x3F;                   /* e986: C328&=0x3F */
+  PR(0xC2A8) &= 0x3F;                   /* e980-e986 c343/c32d: C2A8&=0x3F */
+  PR(0xC328) &= 0x3F;                   /* e986: C328&=0x3F */
   u4lb_ebde();                                      /* e987: ebde settle */
-  PR(0xC2A8) = PR(0xC2A8) & 0x3F;                   /* e98a-e98d c343: C2A8&=0x3F (re-commit) */
+  PR(0xC2A8) &= 0x3F;                   /* e98a-e98d c343: C2A8&=0x3F (re-commit) */
   PR(0xC2C9) = (PR(0xC2C9) & 0x80)
              | (uint8_t)(((PR(0xC2EC) & 0x38) >> 3) | 0x40);  /* e98e-e99c: C2C9 rate desc */
-  PR(0xC328) = PR(0xC328) & 0x3F;                   /* e99c: C328&=0x3F */
+  PR(0xC328) &= 0x3F;                   /* e99c: C328&=0x3F */
   PR(0xC349) = (PR(0xC349) & 0x80)
              | (uint8_t)(((PR(0xC36C) & 0x38) >> 3) | 0x40);  /* e99d-e9a8: C349 rate desc */
   PR(0xC2A8) = (PR(0xC2A8) & 0x3F) | 0x80;          /* e9a9-e9b3: C2A8 START bit7 */
@@ -440,7 +440,7 @@ static void u4lb_ec51(void) {
   REG_LANE_TRAIN_CTRL = (REG_LANE_TRAIN_CTRL & 0xF8) | 0x04;          /* ec57-ec5f: CCE0 bits2:0 = 4 */
   REG_LANE_TRAIN_MASK_LO = 0xFF; REG_LANE_TRAIN_MASK_HI = 0xFF;             /* ec60-ec67: CCE2=CCE3=0xFF */
   REG_LANE_TRAIN_ARM = 0x01;                                /* ec68-ec6d: CCE1=1 (arm) */
-  PR(0x0774) = PR(0x0774) ^ 0x01;                   /* ec6e-ec74: 0x0774 ^= 1 */
+  PR(0x0774) ^= 0x01;                   /* ec6e-ec74: 0x0774 ^= 1 */
 }
 
 /* ---- b226 settle: phy_cc10_cmd_wait(2,0,0xc8). Verbatim CODE_BANK1::b226. */
@@ -517,8 +517,8 @@ static void u4lb_state4_b0b4(void) {
   if (PR(0x0AF1) & 0x01) {
     REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;               /* b147 9790: E716=(E716&0xFC)|3 */
     phy_cc10_cmd_wait(2, 0, 0x28);                         /* b14a-b150 051b: R7=2,R4=0,R5=0x28 */
-    REG_LINK_STATUS_E716 = REG_LINK_STATUS_E716 & 0xFC;                        /* b153 9789: E716 &= ~3 */
-    REG_CPU_CTRL_CA81 = REG_CPU_CTRL_CA81 & 0xFE;                        /* b156 9908: CA81 &= ~1 */
+    REG_LINK_STATUS_E716 &= 0xFC;                        /* b153 9789: E716 &= ~3 */
+    REG_CPU_CTRL_CA81 &= 0xFE;                        /* b156 9908: CA81 &= ~1 */
     REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;               /* b159-b15b: CA06=(CA06&0x1F)|0x60 */
   }
 
@@ -531,19 +531,19 @@ static void u4lb_state4_b0b4(void) {
   REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x20;          /* e305 prologue: CA06 mode-next select */
   if (PR(0x09FA) & 0x81) {                            /* d17e gate (e305/e26a passed it; param hardcoded 1) */
     REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xF7) | 0x08;  /* e7d4: set bit3 */
-    REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFB;            /* e7d4: clr bit2 */
-    REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFE;            /* cdc6 pre: clr bit0 */
+    REG_PHY_TIMER_CTRL_E764 &= 0xFB;            /* e7d4: clr bit2 */
+    REG_PHY_TIMER_CTRL_E764 &= 0xFE;            /* cdc6 pre: clr bit0 */
     REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFD) | 0x02;   /* cdc6 pre: set bit1 */
     phy_cc10_cmd_wait(1, 7, 0xCF);                    /* cde2-cde8: THE TRAIN (e80a CC10 subcmd1, CC12=7, CC13=0xCF) */
     if (PR(0xE762) & 0x10) {                          /* E762.4 RXPLL ready -> DONE -> E764 = 0x19 */
       REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFE) | 0x01; /* cc8b: set bit0 */
-      REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFD;          /* cc8b: clr bit1 */
+      REG_PHY_TIMER_CTRL_E764 &= 0xFD;          /* cc8b: clr bit1 */
       PR(0x06E9) = 0;
     } else {                                          /* not ready -> START (clear the train bits) */
-      REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xF7;
-      REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFB;
-      REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFE;
-      REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFD;
+      REG_PHY_TIMER_CTRL_E764 &= 0xF7;
+      REG_PHY_TIMER_CTRL_E764 &= 0xFB;
+      REG_PHY_TIMER_CTRL_E764 &= 0xFE;
+      REG_PHY_TIMER_CTRL_E764 &= 0xFD;
       PR(0x06E9) = 1;
     }
   }
@@ -567,7 +567,7 @@ static void u4lb_state4_b0b4(void) {
   u4lb_d3b0(3);                                     /* b195-b197: d3b0(3) Chg2 20G */
   u4lb_e980();                                      /* b19a: rate descriptor apply */
   u4lb_e9e7();                                      /* b19d: RstRxpll */
-  REG_CPU_CTRL_CC37 = REG_CPU_CTRL_CC37 & 0xFB;                   /* b1a0-b1a3 984d: CC37 &= ~0x04 */
+  REG_CPU_CTRL_CC37 &= 0xFB;                   /* b1a0-b1a3 984d: CC37 &= ~0x04 */
 
   /* --- b8db: [CDRV ok] (ROUND B placeholder) (b1a4) --- */
   uart_puts("[CDRV ok]");

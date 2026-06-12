@@ -330,7 +330,7 @@ static void sb_edd9_receive_ack(void) {
   if (P1_RD(0x0109) & 0x01) {                  /* 9779(9): page1 0x0109 bit0 host-request gate */
     P1_WR(0x0109, P1_RD(0x0109) & 0xFE);       /* 98b7: ACK/clear the request bit */
     SB_WR(0xD8, 0x02);                         /* 973d: SB[0xD8] (page1 0x28D8) = 2 (receipt strobe) */
-    REG_LINK_STATUS_E716 = REG_LINK_STATUS_E716 & 0xFC;            /* 9789: E716 PHY link reset */
+    REG_LINK_STATUS_E716 &= 0xFC;            /* 9789: E716 PHY link reset */
     REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;   /* 9789: restart to mode 3 */
     uart_puts("\r\n[edd9]");                    /* DIAG: edd9 fired (host had set P1[0x0109].0) */
   }
@@ -491,18 +491,18 @@ static void sb_chan_prelude(void) {
  * (0=Connect_U4 normal path; !=0=EnterMode-TBT). Verbatim from CODE_BANK1::db7a. ---- */
 static void sb_db7a_route_arm(void) {
   if (PR(0x07B9) == 0) {
-    REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60 & 0xF7;            /* CA60 &= ~0x08 */
+    REG_CPU_CTRL_CA60 &= 0xF7;            /* CA60 &= ~0x08 */
     /* 98de() returns a CA60-derived value; reproduced as the masked self (no host-gating side fx) */
     REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60;
-    REG_PHY_LINK_TRIGGER = REG_PHY_LINK_TRIGGER & 0xEF;            /* E7FA &= ~0x10 */
+    REG_PHY_LINK_TRIGGER &= 0xEF;            /* E7FA &= ~0x10 */
     /* 975e(CA60 & 0x8F | 0x50): PHY-route write; reproduced as the CA60 RMW */
     REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0x8F) | 0x50;
   } else {
-    REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60 & 0xF7;
-    REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60 | 0x04;
+    REG_CPU_CTRL_CA60 &= 0xF7;
+    REG_CPU_CTRL_CA60 |= 0x04;
     REG_PHY_CTRL_C20F = 0xFF;
     REG_CPU_CTRL_CA70 = (REG_CPU_CTRL_CA70 & 0xFC) | 0x02 | 0x04;
-    REG_PHY_LINK_TRIGGER = REG_PHY_LINK_TRIGGER | 0x10;
+    REG_PHY_LINK_TRIGGER |= 0x10;
     REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0x8F) | 0x60;
     REG_PHY_CTRL_C20F = 0x00;
   }
@@ -584,7 +584,7 @@ static void sb_con_consequence(void) {
     REG_LANE_TRAIN_CTRL = (REG_LANE_TRAIN_CTRL & 0xF8) | 0x04;   /* CCE0 bits2:0 = 4 */
     REG_LANE_TRAIN_MASK_LO = 0xFF; REG_LANE_TRAIN_MASK_HI = 0xFF;       /* CCE2=CCE3=0xFF */
     REG_LANE_TRAIN_ARM = 0x01;                          /* CCE1=1 (arm the trigger) */
-    PR(0x0774) = PR(0x0774) ^ 0x01;             /* 0x0774 ^= 1 */
+    PR(0x0774) ^= 0x01;             /* 0x0774 ^= 1 */
   }
   PR(0x0768) = REG_LANE_WIDTH_CNT_HI;                      /* 98ec: lane-width snapshot hi (GAP1) */
   PR(0x0769) = REG_LANE_WIDTH_CNT_LO;                      /* 98ec: lane-width snapshot lo (GAP1) */
@@ -620,7 +620,7 @@ static void sb_lane_bond_complete_tunnel_up(void) {
   if (PR(0x09FA) & 0x02) {                    /* 0x09FA.1 tunnel route */
     sb_tunnel_up_pending = 1;                 /* 3578: defer downstream PCIe bring-up to super-loop */
   }
-  REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60 & 0xF7;            /* clear clock/power bit3 */
+  REG_CPU_CTRL_CA60 &= 0xF7;            /* clear clock/power bit3 */
 }
 
 /* ====================================================================================
@@ -677,7 +677,7 @@ static void sb_channel_connect_service(void) {
     SB_WR(0x5A, 0x40);                         /* c453/9728: SB[0x5A]=0x40 */
     /* c458 9a31: A = PR(0x0819) & 0xFD (PLAIN XDATA 0x0819, DPX=0 -- NOT page1); c45b writes it back,
      * c45c re-reads, JNB bit0 -> 9874 zero latches; else read SB[0xA0]. */
-    PR(0x0819) = PR(0x0819) & 0xFD;
+    PR(0x0819) &= 0xFD;
     if (!(PR(0x0819) & 0x01)) {
       PR(0x074E) = 0; PR(0x074F) = 0;          /* c46b 9874: zero per-lane CL0 latches */
     } else {

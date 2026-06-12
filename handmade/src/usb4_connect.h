@@ -173,7 +173,7 @@ static void bank0_8a89(uint8_t mode) {
     /* *** E764 bit4 = LINK-MODE-ENABLE *** (the keystone write) */
     REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xEF) | 0x10;
     /* re-latch link rate into 0x0A9F/0x0A9E (final) */
-    PR(0x0A9F) = PR(0x0A9F) | (REG_LINK_WIDTH_E710 & 0xE0);  /* bVar5 | bd49() */
+    PR(0x0A9F) |= (REG_LINK_WIDTH_E710 & 0xE0);  /* bVar5 | bd49() */
     PR(0x0A9E) = (REG_CPU_MODE_NEXT & 0x1F) | (uint8_t)(PR(0x0A9E) << 5);  /* bd57() | (0x0A9E<<5) */
     REG_CPU_CTRL_CA81 &= 0xFE;
 
