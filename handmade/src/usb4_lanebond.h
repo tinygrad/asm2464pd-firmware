@@ -60,7 +60,7 @@ static void u4lb_eb62(uint8_t p1, uint8_t p2) {
  * + the [SB P0x] prints already show how far the FSM walks.) */
 
 /* [EDF5] dump budget (XDATA, seeded in main()). */
-static volatile uint8_t __xdata __at(0x8818) u4lb_edf5_print_budget;
+static volatile uint8_t __xdata __at(0x0B58) u4lb_edf5_print_budget;
 
 /* ====================================================================================
  * edf5 / e2b9 (CODE_BANK1::edf5 -> e2b9) — THE DROPPED DEVICE->HOST SB-TRANSPORT ROUTE-QUERY.
@@ -83,7 +83,8 @@ static volatile uint8_t __xdata __at(0x8818) u4lb_edf5_print_budget;
  *   d4cd();                                   // sb_transport_substate_poll (drain pending edges)
  *   997e(0xAA9):  SBTX[0] = 0xAA9 (=7)        // TX-plane byte 0
  *   A=0xAAB(=0); 9923(A, 0xAAA): SBTX[1] = (0xAAA(=5) | A<<7) = 5;  returns A(=0) -> JZ branch:
- *     9695(): A = SB[0x0C];  A = (A & 0x80) | 0x08;  SBTX[1] = A   // overwrite byte 1 w/ status|8
+ *     9695(): A = SB[0x0C];  A = (A & 0x80) | 0x08;  SB[0x0C] = A   // STAGE descriptor (status|8).
+ *       9695 sets R2:R1=0x28:0x0C, so r3_write_dispatch's target is SB[0x0C] (page1 0x280C), NOT SBTX[1].
  *   96f7(0xAA8 -> R1=0x15):  SB[0x15] = 0xAA8 (=5)   // THE SB-TRANSPORT TX COMMAND
  *   d5da(0):  trigger (SB[0x10]=1, wait SB[0x2C].2)  // HW transport send
  *   97ef():  CCD9=4; CCD9=2;   then CCD9=(2-1)=1;  0x0719 = 1   // set the in-flight token
@@ -99,30 +100,74 @@ static uint8_t u4lb_edf5_route_query(void) {
   if (PR(0x0719) != 0) return 0;               /* edff-ee01: in-flight token set -> R7=0, don't re-send */
 
   PR(0x0AAB) = 0;                              /* ee04-ee08: 0x0AAB = 0 */
-  /* ---- e2b9(R7=5, R5=7, R3=5, R2=4) ---- */
-  PR(0x0AA8) = 5;                              /* e2b9-e2bd: 0xAA8 = R7 = 5 (-> SB[0x15] opcode) */
-  PR(0x0AA9) = 7;                              /* e2be-e2c0: 0xAA9 = R5 = 7 (-> SBTX[0]) */
-  PR(0x0AAA) = 5;                              /* e2c1-e2c3: 0xAAA = R3 = 5 (-> SBTX[1] base) */
+  /* ---- a7de loads R5=3, R7=0x0C (a7f7/a7fb) then LCALL edf5 -> e2b9(R5=3, R7=0x0C, 5) ----
+   * e2b9: 0xAA8=param_3=5; 0xAA9=param_2=R7=0x0C; 0xAAA=param_1=R5=3.
+   * FIX 2026-06-11: the route-query PAYLOAD was WRONG. Stock sends SBTX[0]=0x0C, SBTX[1]=3 (the
+   * "TX=0C03" connection-routing descriptor the host actually responds to). Handmade had hardcoded
+   * 7/5 (a mis-derivation of the e2b9 args from a7de R5/R7) -> the host received a malformed query
+   * and never posted the routing descriptor (0x0777 stayed 0x55). Verified from the a7de disasm. */
+  PR(0x0AA8) = 5;                              /* 0xAA8 = param_3 = 5 (-> SB[0x15] TX command) */
+  PR(0x0AA9) = 0x0C;                           /* 0xAA9 = R7 = 0x0C (-> SBTX[0]) */
+  PR(0x0AAA) = 3;                              /* 0xAAA = R5 = 3  (-> SBTX[1] base) */
   sb_transport_substate_poll();                /* e2c4: d4cd (drain pending SB[0x28].3 edges) */
 
   SBTX_WR(0, PR(0x0AA9));                       /* 997e: SBTX[0] = 0xAA9 (=7) */
   /* 9923(A=0xAAB(=0), 0xAAA(=5)): SBTX[1] = 5; returns 0 -> JZ branch (e2d7) */
   SBTX_WR(1, (uint8_t)(PR(0x0AAA) | ((PR(0x0AAB) & 1) << 7)));   /* = 5 */
-  /* JZ taken (9923 returned 0): 9695()=SB[0x0C]; (&0x80)|8; overwrite SBTX[1] */
+  /* JZ taken (9923 returned 0): 9695() sets R2:R1=0x28:0x0C and returns SB[0x0C]; stage
+   * (SB[0x0C]&0x80)|0x08 -> SB[0x0C].3 (descriptor-staged).
+   * FIX 2026-06-11: this write targets SB[0x0C] (page1 0x280C), NOT SBTX[1] (0x2901). The old
+   * SBTX_WR(1,..) was a plane-misdirection transcription bug: it clobbered SBTX[1] and never staged
+   * SB[0x0C], so the HW descriptor-engine never armed SB[0x2C] bits 5,4 (channel READY) and
+   * SB[0x2C].2 (TX-complete) never asserted -> the route-query TX poll looped forever. (HW-confirmed:
+   * stock SB[0x0C]=0x08/SB[0x2C]=0xF1 vs handmade SB[0x0C]=0x00/SB[0x2C]=0x03.) */
   b1 = (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08);  /* e2e3-e2e8 */
-  SBTX_WR(1, b1);                               /* r3_write_dispatch(b1, 0x2900+1) */
+  SB_WR(0x0C, b1);                              /* e2ea r3_write_dispatch(b1, 0x2800+0x0C) = SB[0x0C] */
 
   SB_WR(0x15, PR(0x0AA8));                       /* 96f7: SB[0x15] = 0xAA8 (=5) -- TX COMMAND */
 
   /* ---- d5da(0): the SB-transport TX trigger (byte-faithful CODE_BANK1::d5da, bounded poll) ---- */
-  { uint8_t tx_done;
+  { uint8_t tx_done; uint16_t g = 0;
     PR(0x0AAC) = 0;                              /* d5dd: 0x0AAC = R7(=0) (param!=1 -> skip 96cf/97e8) */
     P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));  /* d5ea 9777: P1[0x0100] &= 0xFE (NOT SB[0x00]) */
     SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));  /* d5f2 98c7(R2=0x28,R1=4): SB[0x04] clr bit1 */
+    /* [TX] PRE-GO dump (matches stock app/patch_txtrace.py hook fields, same order). */
+    if (u4lb_edf5_print_budget) {
+      uart_puts("\r\n[TX p15="); uart_puthex(SB_RD(0x15));
+      uart_putc(' '); uart_puthex(SB_RD(0x10));
+      uart_putc(' '); uart_puthex(SB_RD(0x2C));
+      uart_putc(' '); uart_puthex(SB_RD(0x0C));
+      uart_putc(' '); uart_puthex(SB_RD(0x0D));
+      uart_putc(' '); uart_puthex(SB_RD(0x0E));
+      uart_putc(' '); uart_puthex(SB_RD(0x18));
+      uart_putc(' '); uart_puthex(SB_RD(0x28));
+      uart_putc('|'); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(SBTX_RD(i)); }
+      uart_putc('|'); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i))); }
+      uart_putc('|'); uart_puthex(PR(0x0719)); uart_putc(' '); uart_puthex(PR(0x0758));
+      uart_putc(' '); uart_puthex(PR(0x06ED)); uart_putc(' '); uart_puthex(PR(0x06EE));
+      uart_putc(' '); uart_puthex(PR(0x0775)); uart_putc(' '); uart_puthex(PR(0x0776));
+      uart_putc(' '); uart_puthex(PR(0x0777));
+      uart_putc('|'); uart_puthex(PR(0xCCD9)); uart_putc(' '); uart_puthex(PR(0xC80A));
+      uart_putc(' '); uart_puthex(PR(0xCC37)); uart_putc(' '); uart_puthex(PR(0xCA60));
+      /* DIAG (host-post wall): P1[0x0109] = edd9 host-request gate; SB[0xD8] = ack strobe;
+       * SB[0x3A-3D] = device router/lane DESCRIPTOR RAM (stock 12,36,06,00 vs handmade FF garbage). */
+      uart_putc('|'); uart_puthex(P1_RD(0x0109)); uart_putc(' '); uart_puthex(SB_RD(0xD8));
+      uart_putc(' '); uart_puthex(SB_RD(0x3A)); uart_puthex(SB_RD(0x3B));
+      uart_puthex(SB_RD(0x3C)); uart_puthex(SB_RD(0x3D));
+      uart_putc(']');
+    }
     SB_WR(0x10, 0x01);                           /* d5f9: SB[0x10] = 1 (TX go) */
     /* d600 poll: wait SB[0x2C].2 (TX complete) */
-    { uint16_t g = 0; while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { } }
+    while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { }
     tx_done = (uint8_t)((SB_RD(0x2C) >> 2) & 1);
+    /* [TX] POST-POLL: did SB[0x2C].2 assert? + iteration count + SB[0x2C] raw. */
+    if (u4lb_edf5_print_budget) {
+      u4lb_edf5_print_budget--;
+      uart_puts("[TXdone done="); uart_puthex(tx_done);
+      uart_puts(" sb2c="); uart_puthex(SB_RD(0x2C));
+      uart_puts(" g="); uart_puthex((uint8_t)(g >> 8)); uart_puthex((uint8_t)g);
+      uart_puts("]\r\n");
+    }
     SB_WR(0x2C, 0x04);                           /* d60d 9799(4): W1C SB[0x2C].2 */
     phy_cc10_cmd(1, 0, 0x0B);                    /* d614-d61a e80a(subcmd=1,cc12=0,cc13=0x0b) */
     SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));  /* d61d 96ee(0x0f): SB[0x0F] &= 0xFE */
@@ -133,17 +178,6 @@ static uint8_t u4lb_edf5_route_query(void) {
   /* 97ef + tail: CCD9 strobe, set the in-flight token 0x0719 = 1 */
   PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02; PR(0xCCD9) = 0x01;   /* 97ef + DEC A tail */
   PR(0x0719) = 0x01;                             /* e300-e303: 0x0719 = 1 (in-flight token) */
-
-  if (u4lb_edf5_print_budget) {
-    u4lb_edf5_print_budget--;
-    uart_puts("\r\n[EDF5 sb15="); uart_puthex(SB_RD(0x15));
-    uart_puts(" tx="); { uint8_t i; for (i = 0; i < 4; i++) uart_puthex(SBTX_RD(i)); }
-    uart_puts(" sb2c="); uart_puthex(SB_RD(0x2C));
-    uart_puts(" sb18="); uart_puthex(SB_RD(0x18));
-    uart_puts(" sb28="); uart_puthex(SB_RD(0x28));
-    uart_puts(" 719="); uart_puthex(PR(0x0719));
-    uart_puts("]\r\n");
-  }
   return 1;                                      /* ee0e: R7 = 1 (a query was just sent) */
 }
 
@@ -239,6 +273,9 @@ static void u4lb_cm_conn_routing_setup(void) {
     else PR(0x0751) = 0;
     /* 0x0750 = 2 iff (0x077a.5 && 0x081a.5) */
     if ((b77a & 0x20) && (PR(0x081A) & 0x20)) PR(0x0750) = 2;
+    /* DIAG (latch localization): what the lane-present latch sees AT RUN TIME. */
+    uart_puts("[Lt77A="); uart_puthex(b77a); uart_puts(" 81A="); uart_puthex(PR(0x081A));
+    uart_puts(" 819="); uart_puthex(PR(0x0819)); uart_puts("]");
     PR(0x0763) = 0; PR(0x0764) = 0;
   }
 
@@ -413,7 +450,11 @@ static void u4lb_b226(void) { phy_cc10_cmd_wait(2, 0, 0xC8); }
  * CODE_BANK1::ee57. CCE4/CCE5 is a read-only HW lane-width/train counter (every firmware access
  * image-wide -- 981b/b10f/b20f/ee65 -- is a READ; nothing writes it). ---- */
 static void u4lb_ee57(void) {
-  if ((PR(0xCCE1) & 0x01) && (PR(0xCCE1) & 0x02)) u4lb_ec51();  /* ee5a-ee62 */
+  /* FIX 2026-06-12: condition was INVERTED. Stock ee57 = `if ((CCE1&1)==0 || (CCE1&2)!=0) ec51()`
+   * — fires the lane-train Trig-arm when CCE1.0 is CLEAR (e.g. CCE1=0 initial) OR CCE1.1 set. The old
+   * `(CCE1.0 && CCE1.1)` only fired at CCE1=0x03, so ec51 NEVER armed the trigger at db7a -> the lanes
+   * never trained -> CCE4:CCE5 (read-only HW train counter) stayed 0 -> b0b4 WIDGATE-abort. */
+  if (!(PR(0xCCE1) & 0x01) || (PR(0xCCE1) & 0x02)) u4lb_ec51();  /* ee5a-ee62 */
   /* ee65-ee6d: returns R6=CCE4, R7=CCE5 to the caller (98ec consumes them). */
 }
 
@@ -461,7 +502,10 @@ static void u4lb_state4_b0b4(void) {
     uint16_t neg   = ((uint16_t)PR(0xCCE4) << 8) | PR(0xCCE5);
     uart_puts("[b4:wid="); uart_puthex(PR(0x0768)); uart_puthex(PR(0x0769));
     uart_puts(" neg="); uart_puthex(PR(0xCCE4)); uart_puthex(PR(0xCCE5));
-    uart_puts(" 765="); uart_puthex(PR(0x0765)); uart_puthex(PR(0x0766)); uart_puts("]");
+    uart_puts(" 765="); uart_puthex(PR(0x0765)); uart_puthex(PR(0x0766));
+    /* DIAG (state-5 lane-present): 0x0819/0x081A (lane-present + device lane-cap) + 0x077A (host width). */
+    uart_puts(" 819="); uart_puthex(PR(0x0819)); uart_puts(" 81A="); uart_puthex(PR(0x081A));
+    uart_puts(" 77A="); uart_puthex(PR(0x077A)); uart_puts("]");
     if ((uint16_t)(width - neg) < 0x0038) { uart_puts("[b4:WIDGATE-abort]"); return; }  /* b12d */
   }
 
@@ -548,14 +592,370 @@ static void u4lb_state4_b0b4(void) {
 }
 
 /* ====================================================================================
- * State 5 (0x06ED==5) — e672 runs 8000 (if 0x0718==4) else 850b: the per-lane CL-state walker that
- * drives SB[0xA0]/[0xA1] 0x07->...->CL0=0x02 and prints [Trig]/L0:CL0/L1:CL0. DEEP PHY LAYER (8000
- * @CODE_BANK1::8000 / 850b @CODE_BANK1::850b -- the ~150-line lane FSM with the func_0def movc
- * dispatch). NOT transcribed. Wired as a marker that finalises to state 0.
+ * State 5 (0x06ED==5) — THE CL-STATE LANE-BOND WALKER. Faithful C port of CODE_BANK1::8000
+ * (run when 0x0718==4) and 850b (else): the per-lane FSMs that drive SB[0xA0]/[0xA1] toward
+ * CL0(0x02) via the 0x0800-plane PHY shadow + ea7c, emitting Lx:CL0. RE'd by the
+ * re-state5-walker workflow (dispatch ladders adversarially verified; 850b ladder corrected).
+ * IRAM: runs from the super-loop (e672), all scratch is C locals; persistent cells (0x0759-
+ * 0x076x, 0x0767, 0x0800-plane shadow) already live in XDATA. Helpers are bounded.
+ * Flagged <90% (HW will confirm): the lane-gate (here the semantic 0x0819.lane present-test),
+ * e461's full e2b9 chain (reproduced as gating result + 0x0AAB arm), the 0x8174 width producer
+ * (8000 loop1 0x50), and whether the 0x0800-shadow+ea7c path actually drives SB[0xA0/A1] to CL0.
  * ==================================================================================== */
+
+/* [S5:..] per-pass CL-state dump budget. Auto __xdata -> lands in the SDCC XSEG, which is now
+ * relocated to chip-CM XDATA 0x0BC0 (see Makefile): the WHOLE 0x88xx scratch region read-STALLS
+ * the CPU at state-5 once the PCIe tunnel is active, whereas chip-CM XDATA stays valid RAM. */
+static volatile uint8_t __xdata u4lb_s5_print_budget;
+
+/* ee6e: per-lane SB connect-present = SB[lane?0x60:0x56].0 (DPX=1 SB plane). */
+static uint8_t u4lb_ee6e(uint8_t lane) { return (uint8_t)(SB_RD(lane ? 0x60 : 0x56) & 0x01); }
+
+/* eda0: route-special selector (0=eval-path, 1=idle, 2=route-special); clears 0x0775/0x0719. */
+static uint8_t u4lb_eda0(void) {
+  if (PR(0x0775) != 0) { PR(0x0775) = 0; PR(0x0719) = 0; return 0; }
+  if (PR(0x0719) == 0x02) { PR(0x0719) = 0; return 2; }
+  return 1;
+}
+
+/* e461 (CODE_BANK1::e461) — the SB-transport route PUSH the walker depends on. The walker iterates
+ * fine (HW-confirmed it advances 0x10->0x20->0x30) and PARKS at 0x30 because this was a stub: at 0x20
+ * it returns 1 to advance but never sends the e2b9 descriptor, so the host never sets 0x0775 and the
+ * 0x30 handler's eda0() never returns EVAL -> no CL0 emit. Faithful live-path push below.
+ *
+ * e2b9 (byte-exact e2b9-e304): 0xAA8=p3(->SB[0x15] TX cmd), 0xAA9=p2(->SBTX[0]), 0xAAA=p1(->SBTX[1]).
+ * Stock-trace target descriptor at state-5 = SBTX[0]=0x0D, SBTX[1]=0x04, SB[0x15]=0x0718(=4),
+ * token 0x0719=0x0D. d5da triggers the transport TX (bounded). Returns 0 if the 0x0719 in-flight
+ * token is busy (no re-push, no advance), 1 if a push was issued. Separate push body from edf5
+ * (must NOT share the working state-3 route-query timing). */
+static uint8_t u4lb_e461(void) {
+  uint16_t g;
+  if (PR(0x0719) != 0) return 0;                   /* token busy -> no push, no advance */
+  if (PR(0x0718) == 0) {                            /* NOT the live AMD path (0x0718 must be 4) */
+    SB_WR(0x04, (uint8_t)((SB_RD(0x04) & 0xFE) | 0x01));
+    SB_WR(0x04, (uint8_t)((SB_RD(0x04) & 0xFD) | 0x02));
+    PR(0x0AAB) = 0;
+    return 1;
+  }
+  /* LIVE PATH = faithful e2b9(p1=0x04, p2=0x0D, p3=0x0718=4) (audit #15). KEY FIXES vs the old push:
+   *  (1) status byte 8 -> SB[0x0D|0x0E] (port-sel), NOT SB[0x0C]. The old push wrote the status to the
+   *      WRONG register, so the host never saw a valid route-query and never posted the eaac-routed
+   *      response (the descriptor with 0x752.0==0) that sets 0x0775 -> the walker stalled at LOOP1 0x30.
+   *      Stock e2b9: bVar1=9923(); if(bVar1==0){9695(); status=8;} r3_write(status, SB[0x0D|0x0E]); since
+   *      9960 set 0xAAB=0, 9923 returns 0 -> status=8.
+   *  (2) token 0x0719 = d5da_ret - 1 (d5da returns SB[0x0C]-7), NOT hardcoded 0x0D.
+   *  (3) FULL d4cd (transport+link) before the push (stock e2b9 head sb_transport_substate_poll(p1,p1)). */
+  {
+    uint8_t soff = (PR(0x06F0) == 0) ? 0x0D : 0x0E;
+    uint8_t dc;
+    PR(0x0AAB) = 0;                                /* 9960: 0xAAB = 0 */
+    PR(0x0AA8) = PR(0x0718);                       /* p3 -> SB[0x15] (=4 ROUTE-ENABLE) */
+    PR(0x0AA9) = 0x0D;                             /* p2 -> SBTX[0] */
+    PR(0x0AAA) = 0x04;                             /* p1 -> SBTX[1] */
+    sb_d4cd_transport_edges();                     /* e2b9 head: FULL d4cd -- transport edges ... */
+    sb_transport_substate_poll();                  /*                      ... + link edges */
+    SBTX_WR(0, PR(0x0AA9));                         /* 997e: SBTX[0] = 0x0D */
+    SBTX_WR(1, (uint8_t)(PR(0x0AAA) | ((PR(0x0AAB) & 1) << 7)));   /* 9923: SBTX[1] = 0x04 | (0xAAB.0<<7) */
+    (void)SB_RD(0x0C);                             /* 9695: discard read (0xAAB==0 -> status = 8) */
+    SB_WR(soff, 0x08);                             /* r3_write status = 8 -> SB[0x0D|0x0E] (port-sel) */
+    SB_WR(0x15, PR(0x0AA8));                        /* 96f7: SB[0x15] = 4 */
+    /* d5da(0): the bounded SB-transport TX trigger; stock returns cVar5 = SB[0x0C] - 7. */
+    PR(0x0AAC) = 0;
+    P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
+    SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));
+    SB_WR(0x10, 0x01);                              /* SB[0x10] = 1 (TX go) */
+    g = 0; while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { }   /* wait SB[0x2C].2 (bounded) */
+    SB_WR(0x2C, 0x04);                              /* W1C SB[0x2C].2 */
+    phy_cc10_cmd(1, 0, 0x0B);                        /* d614 */
+    SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));
+    PR(0xCCD9) = 0x04; PR(0xCCD9) = 0x02;            /* 97ef strobe */
+    dc = SB_RD(0x0C);                               /* d5da return = SB[0x0C] - 7 */
+    PR(0x0719) = (uint8_t)((uint8_t)(dc - 7) - 1);  /* token 0x0719 = d5da_ret - 1 */
+  }
+  return 1;
+}
+
+/* ea7c: CC-orientation PHY CL bit2 program (C2CB/C34B). sel==0x0F set bit2 else clear. */
+static void u4lb_ea7c(uint8_t sel, uint8_t cc) {
+  uint8_t idx = (PR(0xC6DB) & 0x01) ? (uint8_t)((cc + 1) & 0x01) : cc;
+  uint16_t reg = (idx == 0) ? 0xC2CB : 0xC34B;
+  if (sel == 0x0F) PR(reg) = (uint8_t)((PR(reg) & 0xFB) | 0x04);
+  else             PR(reg) = (uint8_t)(PR(reg) & 0xFB);
+}
+
+/* 8992: per-lane SB lane-arm (SB[0x15]=v; SB[0x0C]=(.&0x80)|3; d5da(1)). */
+static void u4lb_8992(uint8_t v) {
+  SB_WR(0x15, v);
+  SB_WR(0x0C, (uint8_t)((SB_RD(0x0C) & 0x80) | 0x03));
+  u4lb_d5da(1);
+}
+
+/* lane gate: walk lane L iff 0x0819.L (lane-present). [Stock uses a shift+mask over a 9a11 read;
+ * the per-lane-present test is the verified net for the live path (0x0819=01 -> walk L0 only).] */
+static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(PR(0x0819) & (uint8_t)(1u << lane)); }
+
+/* [S5:..] diagnostic — print only on CHANGE of the lane-state bytes, so a fast-iterating walker is
+ * visible WITHOUT flooding/saturating the UART (the bounded uart_putc drops a long burst once the TX
+ * FIFO fills ~64-75 bytes -- that saturation is why only ONE full [S5] line ever survived). A SHORT
+ * marker per state change tells us if the walker actually advances (running) or is stuck (hung). */
+static volatile uint8_t __xdata u4lb_s5_last759, u4lb_s5_last75b, u4lb_s5_seen, u4lb_s5_lasta0;
+static volatile uint8_t __xdata u4lb_s5_last775;
+static void u4lb_s5_diag(void) {
+  uint8_t a = PR(0x0759), b = PR(0x075B), a0 = SB_RD(0xA0), h = PR(0x0775);
+  uint8_t edge = (uint8_t)((SB_RD(0x28) | SB_RD(0x2A) | SB_RD(0x81) | SB_RD(0x83)) & 0x08);
+  if (u4lb_s5_seen && a == u4lb_s5_last759 && b == u4lb_s5_last75b && a0 == u4lb_s5_lasta0
+      && h == u4lb_s5_last775 && edge == 0) return;   /* also re-print while any transport/link edge pends */
+  if (!u4lb_s5_print_budget) return;          /* cap output so a fast 775-cycle can't flood */
+  u4lb_s5_print_budget--;
+  u4lb_s5_seen = 1; u4lb_s5_last759 = a; u4lb_s5_last75b = b; u4lb_s5_lasta0 = a0; u4lb_s5_last775 = h;
+  uart_puts("\r\n[s5 9="); uart_puthex(a); uart_putc('/'); uart_puthex(b);
+  uart_puts(" A="); uart_puthex(a0); uart_puthex(SB_RD(0xA1));
+  uart_puts(" t="); uart_puthex(PR(0x0719)); uart_puts(" 775="); uart_puthex(h);
+  uart_puts(" TX="); uart_puthex(SBTX_RD(0)); uart_puthex(SBTX_RD(1)); uart_puthex(SBTX_RD(4)); uart_puthex(SBTX_RD(5));
+  uart_puts(" 2a="); { uint8_t i; for (i = 0; i < 4; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i))); }
+  uart_puts(" 28="); uart_puthex(SB_RD(0x28)); uart_puts(" 2A="); uart_puthex(SB_RD(0x2A));
+  uart_puts(" 81="); uart_puthex(SB_RD(0x81)); uart_puts(" 83="); uart_puthex(SB_RD(0x83));
+  uart_puts(" EE="); uart_puthex(PR(0x06EE)); uart_puts(" EF="); uart_puthex(PR(0x06EF));
+  uart_puts(" 18="); uart_puthex(SB_RD(0x18)); uart_putc(']');
+}
+
+/* --- 8000: PRIMARY state-5 walker (0x0718==4). LOOP1 state@0x0759+lane, LOOP2 (CL walk) @0x075B+lane. --- */
+static void u4lb_walk_8000(void) {
+  __xdata uint8_t lane, s;
+  /* (marker removed) */
+  /* LOOP1: lane-width / PHY-present FSM (state @0x0759+lane). */
+  for (lane = 0; lane < 2; lane++) {
+    if (!u4lb_lane_gate(lane)) continue;
+    s = PR(0x0759 + lane);
+    if (s == 0x10) {
+      PR(0x0800 + lane) &= 0xEF;
+      PR(0x081C + lane) &= 0x7F;
+      PR(0x0819 + lane) &= 0xDF;
+      PR(0x0759 + lane) = 0x20;
+    } else if (s == 0x20) {
+      if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x30;
+    } else if (s == 0x30) {
+      __xdata uint8_t r = u4lb_eda0();
+      if (r == 0) {
+        if (((PR(0x077B + lane) >> 7) & 1) == 0) PR(0x0759 + lane) = 0x40;
+        else PR(0x0759 + lane) = 0x20;
+      } else if (r == 2) PR(0x0759 + lane) = 0x20;
+    } else if (s == 0x40) {
+      PR(0x0759 + lane) = 0x50;
+    } else if (s == 0x50) {
+      if (u4lb_ee6e(lane) == 0) PR(0x0759 + lane) = 0x00;   /* TODO(<90%): 0x8174 width producer */
+    } else if (s == 0x60) {
+      if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x70;
+    } else if (s == 0x70) {
+      __xdata uint8_t r = u4lb_eda0();
+      if (r == 0) {
+        __xdata uint8_t x = PR(0x077B + lane);
+        if ((x & 0xC0) == 0xC0 && (x & 0x0F) == (uint8_t)((0x1C + lane) & 0x0F)) {
+          if (PR(0x0AB3)) u4lb_e9e7();
+          PR(0x0759 + lane) = 0x80;
+        } else PR(0x0759 + lane) = 0x60;
+      } else if (r == 2) PR(0x0759 + lane) = 0x60;
+    } else if (s == 0x80) {
+      if (u4lb_ee6e(lane)) {
+        PR(0x0800 + lane) |= 0x10;
+        PR(0x081C + lane) |= 0x40;
+        PR(0x0819 + lane) &= 0x7F;
+      }
+      PR(0x0759 + lane) = 0x90;
+    } else if (s == 0x90) {
+      PR(0x0759 + lane) = 0xA0;
+    } else if (s == 0xA0) {
+      if (u4lb_e461() == 1) PR(0x0759 + lane) = 0xA1;
+    } else if (s == 0xA1) {
+      __xdata uint8_t r = u4lb_eda0();
+      if (r == 0) {
+        if ((PR(0x077B + lane) & 0xC0) == 0x80) PR(0x0759 + lane) = 0x50;
+        else PR(0x0759 + lane) = 0xA0;
+      } else if (r == 2) PR(0x0759 + lane) = 0xA0;
+    }
+  }
+  /* LOOP2: THE CL-STATE WALKER (state @0x075B+lane). */
+  for (lane = 0; lane < 2; lane++) {
+    if (!u4lb_lane_gate(lane)) continue;
+    s = PR(0x075B + lane);
+    if (s == 0x10) {
+      PR(0x0802 + lane) |= 0x80;
+      PR(0x081E + lane) &= 0xBF;
+      PR(0x075B + lane) = 0x20;
+    } else if (s == 0x20) {
+      if (u4lb_e461() == 1) PR(0x075B + lane) = 0x30;
+    } else if (s == 0x30) {
+      __xdata uint8_t r = u4lb_eda0();
+      if (r == 0) {
+        __xdata uint8_t snap = PR(0x0779 + lane);
+        if ((snap >> 4) & 1) PR(0x075B + lane) = 0x00;
+        else if (((snap >> 7) & 1) == 0) PR(0x075B + lane) = 0x20;
+        else {
+          __xdata uint8_t v = (uint8_t)(snap & 0x0F), cap, d23 = 0, d24 = 0;
+          PR(0x0761 + lane) = v;
+          PR(0x0802 + lane) &= 0xF0;
+          PR(0x081E + lane) |= v;
+          PR(0x081E + lane) |= 0x40;
+          cap = PR(0x0AB4 + lane);
+          if ((cap >> 1) & 1) d24 = PR(0x072E + v);
+          if (cap & 1) { __xdata uint16_t m = (uint16_t)(PR(0x073E + v) * 0x20); d24 |= (uint8_t)m; d23 |= (uint8_t)(m >> 8); }
+          uart_puts(lane ? "\r\nL1:CL0 " : "\r\nL0:CL0 ");
+          uart_puthex(d23); uart_puthex(d24);
+          u4lb_ea7c(v, lane);
+          PR(0x075B + lane) = 0x50;
+        }
+      } else if (r == 2) PR(0x075B + lane) = 0x20;
+    } else if (s == 0x50) {
+      if (u4lb_e461() == 1) PR(0x075B + lane) = 0x60;
+    } else if (s == 0x60) {
+      __xdata uint8_t r = u4lb_eda0();
+      if (r == 0) {
+        if ((PR(0x0779 + lane) >> 7) & 1) PR(0x075B + lane) = 0x50;
+        else { PR(0x0802 + lane) &= 0xBF; PR(0x075B + lane) = 0x20; }
+      } else if (r == 2) PR(0x075B + lane) = 0x50;
+    }
+  }
+}
+
+/* --- 850b: ALTERNATE state-5 walker (0x0718 != 4). Corrected (handler-writes-N+1) ladder.
+ * Dead on the live AMD path (0x0718==4 -> 8000); included for completeness/faithfulness. --- */
+static void u4lb_walk_850b(void) {
+  __xdata uint8_t lane, s, dat22 = 0;
+  /* LOOP1: state @0x075B+lane. */
+  for (lane = 0; lane < 2; lane++) {
+    if (!u4lb_lane_gate(lane)) continue;
+    s = PR(0x075B + lane);
+    if (s == 0x11) {
+      __xdata uint8_t r = u4lb_eda0(); dat22 = r;
+      if (r == 0) PR(0x075B + lane) = 0x20;
+      else if (r == 1) PR(0x075B + lane) = 0x10;
+    } else if (s == 0x20) {
+      __xdata uint8_t r = u4lb_eda0(); dat22 = r;
+      if (r == 0) { if (PR(0x0779) == 0) PR(0x075B + lane) = 0x30; else PR(0x075B + lane) = 0x20; }
+      else if (r != 2) PR(0x075B + lane) = 0x20;
+    } else if (s == 0x21) {
+      if (u4lb_ee6e(lane) == 0) PR(0x075B + lane) = 0x40;
+    } else if (s == 0x30) {
+      if (u4lb_e461() == 1) {
+        __xdata uint8_t a = PR(0x0B26 + lane);
+        if (!((a >> 4) & 1)) PR(0x075B + lane) = 0x00;
+        else if ((a >> 7) & 1) { PR(0x0761 + lane) = (uint8_t)(a & 0x0F); PR(0x075B + lane) = 0x50; }
+        else PR(0x075B + lane) = 0x30;
+      }
+    } else if (s == 0x40) {
+      __xdata uint8_t cap = PR(0x0AB4 + lane), v = PR(0x0761 + lane), d23 = 0, d24 = 0;
+      if ((cap >> 1) & 1) d24 = PR(0x072E + v);
+      if (cap & 1) { __xdata uint16_t m = (uint16_t)(PR(0x073E + v) * 0x20); d24 |= (uint8_t)m; d23 |= (uint8_t)(m >> 8); }
+      uart_puts(lane ? "\r\nL1:CL0 " : "\r\nL0:CL0 ");
+      uart_puthex(d23); uart_puthex(d24);
+      u4lb_ea7c(v, lane);
+      PR(0x075B + lane) = 0x51;
+    } else if (s == 0x50) {
+      PR(0x075B + lane) = 0x60;
+    } else if (s == 0x51) {
+      __xdata uint8_t v;
+      PR(0x0B2C + lane) |= 0x80;
+      v = (uint8_t)((PR(0x0B2C + lane) & 0xF0) | PR(0x0761 + lane));
+      PR(0x0B2C + lane) = v;
+      if (v == 0) PR(0x075B + lane) = 0x61;
+    } else if (s == 0x60) {
+      if (u4lb_e461() == 1) { if (PR(0x0779) == 0) PR(0x075B + lane) = 0x70; else PR(0x075B + lane) = 0x60; }
+    } else if (s == 0x61) {
+      if (u4lb_e461() == 1) PR(0x075B + lane) = 0x71;
+    } else if (s == 0x70) {
+      if (u4lb_e461() == 1) {
+        __xdata uint8_t a = PR(0x0B26 + lane);
+        if (!((a >> 7) & 1)) PR(0x075B + lane) = 0x30;
+        else if (PR(0x0761 + lane) != 0x07) PR(0x075B + lane) = 0x30;
+        else PR(0x075B + lane) = 0x70;
+      }
+    } else {
+      if (u4lb_ee6e(lane) == 0) PR(0x075B + lane) = 0x11;   /* 0x10 + default: bootstrap */
+    }
+  }
+  /* width-limit one-shot + LOOP2 (state @0x0759+lane). */
+  if (PR(0x075B) == 0 && PR(0x075C) == 0) {
+    if (PR(0x0767) == 0) {
+      if (PR(0x0819) & 0x01) u4lb_8992(0x86);
+      if ((PR(0x0819) >> 1) & 0x01) u4lb_8992(0xA6);
+      PR(0x0767) = 1;
+    }
+    for (lane = 0; lane < 2; lane++) {
+      if (!u4lb_lane_gate(lane)) continue;
+      s = PR(0x0759 + lane);
+      if (s == 0x10) {
+        if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x21;
+      } else if (s == 0x20) {
+        if (u4lb_e461() == 1) {
+          if ((PR(0x0B28 + lane) >> 7) & 1) { SB_WR(0x40, (uint8_t)(u4lb_ee6e(lane) ? 2 : 1)); PR(0x0759 + lane) = 0x30; }
+          else PR(0x0759 + lane) = 0x20;
+        }
+      } else if (s == 0x21) {
+        if (u4lb_eda0() != 0) PR(0x081C + lane) |= 0x10;
+        PR(0x0759 + lane) = 0x40;
+      } else if (s == 0x30) {
+        if (u4lb_eda0() != 0) {
+          if (PR(0x075F + lane) != 0) PR(0x0759 + lane) = 0x50;
+          else { uart_puts("\r\n(lim)"); PR(0x0759 + lane) = 0x60; }
+        }
+      } else if (s == 0x40) {
+        uart_puts("EQ");
+        SB_WR(0x50, (uint8_t)(u4lb_ee6e(lane) ? 2 : 1));
+        PR(0x0759 + lane) = 0x51;
+      } else if (s == 0x50) {
+        PR(0x0B2A + lane) |= 0x10;
+        if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x52;
+      } else if (s == 0x51) {
+        __xdata uint8_t r = u4lb_eda0();
+        if (r == 0) { if (PR(0x0779) != 0) PR(0x0759 + lane) = 0x51; else { uart_puts("\r\n(lim)"); PR(0x075B + lane) = 0x00; } }
+        else if (r != 2) PR(0x0759 + lane) = 0x51;
+      } else if (s == 0x52) {
+        PR(0x075F + lane)++;
+        PR(0x075D + lane) = (uint8_t)((PR(0x075D + lane) + 1) & 0x0F);
+        PR(0x0759 + lane) = 0x70;
+      } else if (s == 0x60) {
+        __xdata uint8_t a = PR(0x075D + lane);
+        PR(0x071A + a) |= 0xA0;
+        PR(0x0B2A + lane) = a;
+        if (a == 0) PR(0x0759 + lane) = 0x80;
+      } else if (s == 0x70) {
+        __xdata uint8_t r = u4lb_eda0();
+        if (r == 0) { if (PR(0x0779) == 0) { SB_WR(0x40, (uint8_t)(u4lb_ee6e(lane) ? 2 : 1)); PR(0x0759 + lane) = 0x90; } else PR(0x0759 + lane) = 0x70; }
+        else if (r != 2) PR(0x0759 + lane) = 0x70;
+      } else if (s == 0x80) {
+        PR(0x0759 + lane) = 0xA0;
+      } else if (s == 0x90) {
+        PR(0x0B2A + lane) &= 0x7F;
+        if (u4lb_e461() == 1) PR(0x0759 + lane) = 0xA1;
+      } else if (s == 0xA0) {
+        __xdata uint8_t r = u4lb_eda0();
+        if (r == 0) { if (PR(0x0779) == 0) PR(0x0759 + lane) = 0xB0; else PR(0x0759 + lane) = 0xA0; }
+        else if (r != 2) PR(0x0759 + lane) = 0xA0;
+      } else if (s == 0xA1) {
+        if (u4lb_ee6e(lane) == 0) { uart_puts("\r\n(lim)"); PR(0x075B + lane) = 0x60; }
+        else PR(0x0759 + lane) = 0x50;
+      } else {
+        PR(0x0800 + lane) &= 0xEF;
+        PR(0x0800 + lane) &= 0x7F;
+        PR(0x081C + lane) &= 0xDF;
+        PR(0x075F + lane) = 0x00;
+        PR(0x0759 + lane) = 0x20;
+      }
+    }
+  }
+  (void)dat22;
+}
+
+/* u4lb_state5(): e672 state-5 entry. 0x0718==4 -> 8000 else 850b. The idle/finalise (eb62(0,0)
+ * when all sub-lane states drain) is handled by u4lb_e672 BEFORE it calls us; we only walk. */
 static void u4lb_state5(void) {
-  uart_puts("[u4lb:S5 8000/850b OMITTED]");
-  u4lb_eb62(0, 0);             /* finalise -> [SB P00] -> FSM idle */
+  DPX = 0x00;                                       /* defensive: ensure flat plane for the PR() reads below */
+  u4lb_s5_diag();                                  /* change-gated [s5 ..] marker (no per-pass flooding) */
+  if (PR(0x0718) == 0x04) u4lb_walk_8000();
+  else                    u4lb_walk_850b();
+  DPX = 0x00;   /* CRITICAL: the walker's SB accessors can leave DPX=1; restore the flat-XDATA plane
+                 * so the super-loop's subsequent PR()/0x06ED reads don't hit plane-1 and read-STALL. */
+  /* (S marker removed -- the change-gated [s5 ..] diag is the only state-5 output now) */
 }
 
 /* ====================================================================================
@@ -577,6 +977,7 @@ static void u4lb_e672(void) {
       return;
     }
     u4lb_state5();             /* 0x0718==4 -> 8000, else 850b (both omitted markers) */
+    uart_putc('E');            /* TRIAGE: e672 regained control after state5 */
     return;
   }
   if (st == 0x03) {
