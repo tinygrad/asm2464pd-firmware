@@ -54,7 +54,16 @@ clear_ram_loop:
     ; 0x6B (just below data top) for a 148-byte CLEAN (non-overlapping) stack -- bigger AND
     ; collision-free vs HEAD's overlapping 141. Verify the build's __start__stack (= dseg_end) stays
     ; >= this sp; if DSEG grows again, move MORE IRAM state to XDATA -- do NOT raise sp.
-    mov     sp, #0x6B
+    ;
+    ; FIX 2026-06-12 (HW: state-5 walker corrupted its return address): DSEG grew back to 0x80 (the
+    ; state-5 lane-bond walker + helpers), so sp=0x6B was BELOW dseg_end=0x80 again -> the deep
+    ; walker chain (e672->state5->walk_8000->8992->d5da->phy_cc10) pushed into live DSEG/overlay at
+    ; 0x6C-0x7F and clobbered the saved return address -> the device hung returning from u4lb_state5
+    ; (a clean RET to garbage, not a crash). Set sp to dseg_end-1 (0x7F) for a 128-byte NON-OVERLAPPING
+    ; stack -- ample for both the walker (~40B) and the INT1 connect path (only failed below ~80B;
+    ; stock itself uses sp=0x72 = 141B with its data below 0x72). MUST be >= the build's __start__stack-1;
+    ; if DSEG grows past 0x80, shrink it (IRAM state -> XDATA) rather than lowering sp into the data.
+    mov     sp, #0x7F
 
     ; Initialize DPX = 0 (bank 0)
     mov     0x96, #0x00

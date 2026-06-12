@@ -17,8 +17,11 @@ __sfr __at(0x88) TCON;
 #define IE_ET0  0x02
 #define IE_EX0  0x01
 
-// blocking version: void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
-void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
+// Bounded-blocking: wait for TX-FIFO space (REG_UART_TFBF = bytes free; 0 == full) so rapid
+// diagnostic bursts are not silently dropped, but cap the spin so a wedged UART can never hang
+// the CPU. (Old version wrote THR unconditionally and dropped chars whenever the FIFO filled,
+// which made fast diagnostic sequences look like a CPU stall.)
+void uart_putc(uint8_t ch) { uint16_t g = 0; while (!REG_UART_TFBF && ++g < 0x8000) { } REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {
   static __code const char hex[] = "0123456789ABCDEF";
@@ -53,10 +56,14 @@ static void sleep(uint16_t milliseconds) {
  * host's C80A.5 SB-connect silently stopped firing (rate fell 4/8 -> 3/8 -> ~0). Moving them to
  * XDATA both frees DSEG bytes AND removes them from the stack-corruption zone. Each is __at a fixed
  * address (no SDCC auto-XINIT) and explicitly seeded in main()'s boot zero-init block. */
-static uint8_t __xdata __at(0x8800) is_usb2;
+/* LAYOUT FIX 2026-06-12 (audit C2-xdata): is_usb2/dma_dwords were __at(0x0B40-0x0B44), which STOCK uses
+ * LIVE (the e869/d47f/ee29 USB4 recovery cells). Moved to the SDCC XSEG (chip-CM 0x0BC0, HW+RE-confirmed
+ * free) as plain auto-__xdata. is_usb2 is set by the boot fork before any read; dma_dwords is dead on the
+ * USB4 build. Handmade must NOT touch 0x0B40-0x0B44 (left for stock's recovery path). */
+static volatile uint8_t __xdata is_usb2;
 
 /* Streaming PCIe state — configured via 0xF0 control message */
-static uint32_t __xdata __at(0x8801) dma_dwords;    /* total dwords remaining for streaming transfer */
+static volatile uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming transfer */
 
 /* FIX#4 (GOFWD): super-loop FSM-stall counter (XDATA, off the IRAM stack). bank0_8a89 is reached in
  * STOCK ONLY from INT0 link-events (c9a8 via e94d/e952), NEVER from the C80A.5/a066 SB-router path;
@@ -64,7 +71,7 @@ static uint32_t __xdata __at(0x8801) dma_dwords;    /* total dwords remaining fo
  * that STARVES the lane-bond FSM and masks EX1 during the host's post-connect window. Defer it: only
  * after the FSM has stalled (no 0x06ED progress) for several iterations with SB[0xA0]/[0xA1] not at
  * CL0. Seeded 0 in the boot zero-init loop (extended to 0x8812). */
-static volatile uint8_t __xdata __at(0x8812) fsm_stall;
+static volatile uint8_t __xdata __at(0x0B52) fsm_stall;
 
 
 #include "pcie_pio.h"
@@ -425,6 +432,10 @@ void handle_usb_bulk_data(void) {
 }
 
 
+/* TRIAGE budgets (auto __xdata -> chip-CM XSEG 0x0BC0, safe at state-5) for the post-walker hang hunt.
+ * Uninitialized (seeded in main) -- XISEG copy may not run in this crt0. */
+static volatile uint8_t __xdata isr_dbg_budget, isr_dbg_budget2, isr_dbg_budget3;
+
 void int0_isr(void) __interrupt(0) {
   uint8_t int0_type = REG_INT_USB_STATUS;
   if (int0_type & INT_USB_GATE) {
@@ -530,9 +541,12 @@ void int1_isr(void) __interrupt(1) {
    * PD-RX, then the (0x09F9&0x83)-gated USB4 demux, then C806.4 last. */
   uint8_t saved_dpx = DPX;
   DPX = 0x00;
+  if (isr_dbg_budget && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget--; uart_putc('I'); }
   if (XDATA_REG8V(0xC806) & 0x01) cc_pd_timer_tick();        /* O1 timer-tick, ungated, FIRST */
+  if (isr_dbg_budget2 && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget2--; uart_putc('t'); }
   if (XDATA_REG8V(0xCC33) & 0x04) { XDATA_REG8V(0xCC33) = 0x04; }  /* O2 CC33.2 link-state W1C ack */
   if (XDATA_REG8V(0xC80A) & 0x40) pd_rx_isr();               /* C80A.6 PD-RX */
+  if (isr_dbg_budget3 && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget3--; uart_putc('p'); }
   /* USB4 event demux, gated by (0x09F9 & 0x83) like the stock orchestrator @0x4486.
    * M2: the C80A.5 SB-router handler (a066, sb_router.h) now W1C-acks every event, so the demux
    * runs every ISR (the M1 one-shot latch is removed). */
@@ -681,13 +695,19 @@ void main(void) {
   // crt0's stack no longer overlaps live globals on the deep INT1 connect path. XDATA is NOT cleared
   // by crt0 (which only zeroes IRAM), so seed them here explicitly. All start at 0 except the
   // [===SB Con===] print budget (=6).
-  { uint8_t z; for (z = 0; z <= (0x8818 - 0x8800); z++) XDATA_REG8V(0x8800 + z) = 0; }
+  /* Zero the __at scratch block 0x0B45-0x0B58 (the budgets/flags). Do NOT touch 0x0B40-0x0B44 -- stock
+   * uses those cells LIVE (e869/d47f/ee29 recovery); is_usb2/dma_dwords moved to the XSEG. (audit C2) */
+  { uint8_t z; for (z = 0; z <= (0x0B58 - 0x0B45); z++) XDATA_REG8V(0x0B45 + z) = 0; }
   sb_con_print_budget = 6;
-  sb_eaac_print_budget = 6;   /* [EAAC] dump budget (sb_router.h @0x8815) */
-  sb_af38_print_budget = 6;   /* [AF38] dump budget (sb_router.h @0x8816) */
+  sb_eaac_print_budget = 0;   /* [EAAC] dump OFF (cd3f now runs in the a066 ISR -- keep it light) */
+  sb_af38_print_budget = 0;   /* [AF38] dump OFF (ISR safety) */
+  sb_d4cd_log_budget = 40;    /* DIAG: log transport-edge alternation through connect -> route-query */
   sb_af38_force_budget = 0;   /* PROBE off by default (HW-answered: host doesn't respond to af38 TX);
                                * set =8 to re-run the chicken-and-egg test (sb_router.h @0x8817) */
-  u4lb_edf5_print_budget = 6; /* [EDF5] route-query dump budget (usb4_lanebond.h @0x8818) */
+  u4lb_edf5_print_budget = 40; /* [EDF5] route-query dump budget (usb4_lanebond.h @0x8818) */
+  u4lb_s5_print_budget = 60;   /* [S5] state-5 CL-walker dump budget (XSEG now in chip-CM RAM) */
+  isr_dbg_budget = 20; isr_dbg_budget2 = 20; isr_dbg_budget3 = 20;   /* TRIAGE: post-walker hang */
+  u4lb_s5_seen = 0; u4lb_s5_last759 = 0; u4lb_s5_last75b = 0;        /* change-gated [s5] diag state */
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
@@ -705,8 +725,8 @@ void main(void) {
      * masks IE_EX1 itself (sb_ex1_mask_pending=2) and the storm stops on that IRET, letting THIS loop
      * finally run. Print a marker the first time we observe the masked state. The loop pumps the armed
      * FSM (0x06ED=3 -> cb10->e672->[ConnRout]) below, then re-enables IE_EX1 once it advances. */
-    if (sb_ex1_mask_pending == 2 && !XDATA_REG8V(0x8814)) {
-      XDATA_REG8V(0x8814) = 1;
+    if (sb_ex1_mask_pending == 2 && !XDATA_REG8V(0x0B54)) {
+      XDATA_REG8V(0x0B54) = 1;
       uart_puts("[EX1masked 6ed="); uart_puthex(XDATA_REG8V(0x06ED)); uart_puts("]\n");
     }
     /* ===== FIX#3 (GOFWD): FSM-advance HOISTED to the TOP of the loop, before any delay/prints =====
@@ -720,10 +740,13 @@ void main(void) {
     if ((XDATA_REG8V(0x09F9) & 0x83) && XDATA_REG8V(0x06EC)) {
       uint8_t fsm_before = XDATA_REG8V(0x06ED);
       IE &= (uint8_t)~IE_EA;
+      if (isr_dbg_budget && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget--; uart_putc('c'); }
       sb_cb10_lane_advance();                     /* the SB[0xA0]/[0xA1] readout + latch compare */
+      if (isr_dbg_budget2 && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget2--; uart_putc('n'); }
       /* GAP2: super-loop cd3f reproduction -> ebb5 sets 0x0765=1 from the host SB[0x18]/[0x19]
        * connect descriptor. Done HERE (not the a066/INT1 ISR) to keep the C80A.5 stack path intact. */
       sb_connect_present_poll();
+      if (isr_dbg_budget3 && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget3--; uart_putc('k'); }
       if (XDATA_REG8V(0x06ED) == 0) {             /* db7a effect: first-arm the FSM -> [SB P03] */
         uart_puts("[LB arm]");
         u4lb_eb62(0, 3);
@@ -736,9 +759,11 @@ void main(void) {
       { uint8_t pmp, prev; for (pmp = 0; pmp < 4; pmp++) {
           prev = XDATA_REG8V(0x06ED);
           u4lb_e672();
+          if (XDATA_REG8V(0x06ED) == 5) uart_putc('P');   /* post-e672 at state-5 (unbudgeted, 1 per pump break) */
           if (XDATA_REG8V(0x06ED) == prev) break;
       } }
       IE |= IE_EA;
+      if (XDATA_REG8V(0x06ED) == 5) uart_putc('T');        /* tail reached after pump (state-5) */
       /* FIX#4 stall tracking: if the FSM made no 0x06ED progress this iteration, count toward the
        * 8a89-fallback threshold; reset the counter as soon as it advances. */
       if (XDATA_REG8V(0x06ED) == fsm_before) { if (fsm_stall < 0xFF) fsm_stall++; }
