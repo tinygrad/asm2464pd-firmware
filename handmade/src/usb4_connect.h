@@ -82,7 +82,7 @@ static void bank0_8a89(uint8_t mode) {
   uart_putc(']');
 
   /* head: pick 0x0AA0 config by the lane-rate latch C8FF */
-  if (PR(0xC8FF) < 0x06) {
+  if (REG_LANE_RATE_C8FF < 0x06) {
     PR(0x0AA0) = 0x0A;
   } else {
     PR(0x0AA0) = 0x0B;

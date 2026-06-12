@@ -147,7 +147,7 @@ static void sb_lane_flip_init(void) {
    * (the A5/02 marker descriptor the engine/b7a4 own) that HW reads to arm SB[0x2C] bits 5,4. Verified
    * vs CODE_BANK1::b230: the lane_port_map_b copy targets 0x07:(0x3E+i). (SB-page diff confirmed
    * handmade clobbered SB[0x40-0x4D] with these ROM bytes.) */
-  if (PR(0xC8FF) == 0x04) {
+  if (REG_LANE_RATE_C8FF == 0x04) {
     uint8_t k;
     for (k = 0; k < 0x10; k++) PR((uint16_t)(0x073E + k)) = sb_flip_rom_21b4[k];
   }
@@ -280,8 +280,8 @@ static void sb_block_init(void) {
    * b73b: C2C3&=7F;C343&=7F. Transcribed VERBATIM from bank1 e34b (e34b..e38e). */
   PR(0x0AB3) = 0; PR(0x0AB4) = 3; PR(0x0AB5) = 3; PR(0x0AB6) = 0;
   /* b70d(C2C3) */
-  PR(0xC2C3) = PR(0xC2C3) & 0xFE; PR(0xC2C3) = PR(0xC2C3) & 0xFD;
-  PR(0xC2C3) = (PR(0xC2C3) & 0xC3) | 0x1C; PR(0xC2C3) = PR(0xC2C3) & 0xBF;
+  REG_PHY_ORIENT_C2C3 = REG_PHY_ORIENT_C2C3 & 0xFE; REG_PHY_ORIENT_C2C3 = REG_PHY_ORIENT_C2C3 & 0xFD;
+  REG_PHY_ORIENT_C2C3 = (REG_PHY_ORIENT_C2C3 & 0xC3) | 0x1C; REG_PHY_ORIENT_C2C3 = REG_PHY_ORIENT_C2C3 & 0xBF;
   PR(0xC2CB) = PR(0xC2CB) & 0xFB;                 /* e35f C2CB &= ~0x04 */
   /* b70d(C343) */
   REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0xFE; REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0xFD;
@@ -289,7 +289,7 @@ static void sb_block_init(void) {
   PR(0xC34B) = PR(0xC34B) & 0xFB;                 /* e36c C34B &= ~0x04 */
   PR(0xC21C) = (PR(0xC21C) & 0xBF) | 0x40;        /* e373 b796(C21C) */
   REG_PHY_LINK_CTRL_C208 = REG_PHY_LINK_CTRL_C208 & 0xBF;                 /* e379 C208 &= ~0x40 */
-  PR(0xC2C3) = PR(0xC2C3) & 0x7F;                 /* e380 b73b: C2C3 &= 0x7F */
+  REG_PHY_ORIENT_C2C3 = REG_PHY_ORIENT_C2C3 & 0x7F;                 /* e380 b73b: C2C3 &= 0x7F */
   REG_VENDOR_CTRL_C343 = REG_VENDOR_CTRL_C343 & 0x7F;                 /* e380 b73b: C343 &= 0x7F */
   SB_CLR(0x1D, 0x02);                             /* e387 SB[0x1D] &= ~0x02 (DPX=1) */
 

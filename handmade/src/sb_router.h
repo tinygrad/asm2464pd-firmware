@@ -579,15 +579,15 @@ static void sb_con_consequence(void) {
    * 0x06ED==0 first-arm). With ec51 never armed, CCE4:CCE5 (HW lane-train counter) never started ->
    * b0b4 WIDGATE-abort forever. Inline ec51 here (bare stores, stack-cliff safe) so it arms at [SB Con]
    * BEFORE state-4's width gate. CCE1=0 initially -> condition fires once; CCE1=1 after -> no re-arm. */
-  if (!(PR(0xCCE1) & 0x01) || (PR(0xCCE1) & 0x02)) {
-    PR(0xCCE1) = 0x04; PR(0xCCE1) = 0x02;      /* ec51: CCE1 strobe 4 then 2 */
-    PR(0xCCE0) = (PR(0xCCE0) & 0xF8) | 0x04;   /* CCE0 bits2:0 = 4 */
-    PR(0xCCE2) = 0xFF; PR(0xCCE3) = 0xFF;       /* CCE2=CCE3=0xFF */
-    PR(0xCCE1) = 0x01;                          /* CCE1=1 (arm the trigger) */
+  if (!(REG_LANE_TRAIN_ARM & 0x01) || (REG_LANE_TRAIN_ARM & 0x02)) {
+    REG_LANE_TRAIN_ARM = 0x04; REG_LANE_TRAIN_ARM = 0x02;      /* ec51: CCE1 strobe 4 then 2 */
+    REG_LANE_TRAIN_CTRL = (REG_LANE_TRAIN_CTRL & 0xF8) | 0x04;   /* CCE0 bits2:0 = 4 */
+    REG_LANE_TRAIN_MASK_LO = 0xFF; REG_LANE_TRAIN_MASK_HI = 0xFF;       /* CCE2=CCE3=0xFF */
+    REG_LANE_TRAIN_ARM = 0x01;                          /* CCE1=1 (arm the trigger) */
     PR(0x0774) = PR(0x0774) ^ 0x01;             /* 0x0774 ^= 1 */
   }
-  PR(0x0768) = PR(0xCCE4);                      /* 98ec: lane-width snapshot hi (GAP1) */
-  PR(0x0769) = PR(0xCCE5);                      /* 98ec: lane-width snapshot lo (GAP1) */
+  PR(0x0768) = REG_LANE_WIDTH_CNT_HI;                      /* 98ec: lane-width snapshot hi (GAP1) */
+  PR(0x0769) = REG_LANE_WIDTH_CNT_LO;                      /* 98ec: lane-width snapshot lo (GAP1) */
   /* drive bank0_8a89 from the super-loop ONCE (the connect edge re-fires; we want one drive). */
   if (!sb_8a89_done) sb_run_8a89_pending = 1;
   /* DEADLOCK-BREAK: the C80A.5 storm is so tight the super-loop never runs even ONE iteration after

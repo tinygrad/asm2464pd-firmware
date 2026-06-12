@@ -2497,4 +2497,14 @@
 #define TIMEOUT_NVME            5000
 #define TIMEOUT_DMA             10000
 
+/* --- USB4 lane-train / PHY-orient / lane-rate discrete registers (handmade RE) --- */
+#define REG_PHY_ORIENT_C2C3      XDATA_REG8V(0xC2C3)
+#define REG_LANE_RATE_C8FF       XDATA_REG8V(0xC8FF)
+#define REG_LANE_TRAIN_CTRL      XDATA_REG8V(0xCCE0)
+#define REG_LANE_TRAIN_ARM       XDATA_REG8V(0xCCE1)
+#define REG_LANE_TRAIN_MASK_LO   XDATA_REG8V(0xCCE2)
+#define REG_LANE_TRAIN_MASK_HI   XDATA_REG8V(0xCCE3)
+#define REG_LANE_WIDTH_CNT_HI    XDATA_REG8V(0xCCE4)
+#define REG_LANE_WIDTH_CNT_LO    XDATA_REG8V(0xCCE5)
+
 #endif /* __REGISTERS_H__ */

@@ -903,7 +903,7 @@ void main(void) {
      * negotiated rate) -- nothing in stock writes it (verified). E751 (USB4 link arm) is gated on
      * 0x0AA0.0, which bank0_8a89 sets to 1 only when C8FF>=6 (else 0x0AA0=0x0A). So lane TRAINING
      * to Gen3 is a PHY/host outcome we observe, not a register we can poke. */
-    uart_puts("[LANE c8ff=");   uart_puthex(XDATA_REG8V(0xC8FF));
+    uart_puts("[LANE c8ff=");   uart_puthex(REG_LANE_RATE_C8FF);
     uart_puts(" aa0=");          uart_puthex(XDATA_REG8V(0x0AA0));
     uart_puts(" sba0=");         uart_puthex(SB_RD(0xA0));
     uart_puts(" sba1=");         uart_puthex(SB_RD(0xA1));
@@ -931,7 +931,7 @@ void main(void) {
     uart_puts(" 777=");          uart_puthex(XDATA_REG8V(0x0777));   /* host connect-descriptor confirm gate (==0x0C) */
     uart_puts(" sb18=");         uart_puthex(SB_RD(0x18));           /* host connect descriptor (cd3f) */
     uart_puts(" sb28=");         uart_puthex(SB_RD(0x28));           /* cd3f 0x4E source; bit4 gates eaac */
-    uart_puts(" cce4=");         uart_puthex(XDATA_REG8V(0xCCE4));   /* HW lane-width counter */
+    uart_puts(" cce4=");         uart_puthex(REG_LANE_WIDTH_CNT_HI);   /* HW lane-width counter */
     uart_puts("]\n");
     /* HOST-DRIVEN 0x0777 question: does the host post the SB-plane-2 (0x2a00) connect descriptor
      * that eaac relays into 0x0777? Dump SB-plane-2[0x2a00..0x2a0F] + 0x0775 from the super-loop

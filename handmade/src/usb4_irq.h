@@ -103,7 +103,7 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   PR(0xC28C) = PR(0xC28C) & 0xFD;                 /* 8e9d */
   C351(0xC29C); C351(0xC2AC);                     /* 8ea4/8eaa */
   PR(0xC2BC) = PR(0xC2BC) & 0xFD;                 /* 8eb0 */
-  PR(0xC2C3) = (PR(0xC2C3) & 0xC3) | 0x1C;        /* 8eb7 */
+  REG_PHY_ORIENT_C2C3 = (REG_PHY_ORIENT_C2C3 & 0xC3) | 0x1C;        /* 8eb7 */
   PR(0xC2C9) = (PR(0xC2C9) & 0x80) | 0x41;        /* 8ec0 */
   C335(0xC2A5);                                   /* 8ec9 */
   C30E(0xC2CA);                                   /* 8ecf */
@@ -247,14 +247,14 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   PR(0xC31B) = PR(0xC31B) & 0xC0;                 /* 9214 */
 
   /* 921b: if (C8FF >= 5) extra lane-rate cfg */
-  if (PR(0xC8FF) >= 0x05) {
+  if (REG_LANE_RATE_C8FF >= 0x05) {
     PR(0xC294) = (PR(0xC294) & 0xF0) | 0x06;      /* 9224 */
     C374(0xC297);                                  /* 922d */
     PR(0xC314) = (PR(0xC314) & 0xF0) | 0x06;      /* 9233 */
     C374(0xC317);                                  /* 923c */
   }
   /* 9242: if (C8FF >= 6) further cfg */
-  if (PR(0xC8FF) >= 0x06) {
+  if (REG_LANE_RATE_C8FF >= 0x06) {
     PR(0xC283) = PR(0xC283) & 0xF3;               /* 924b */
     PR(0xC303) = PR(0xC303) & 0xF3;               /* 9252 */
   }

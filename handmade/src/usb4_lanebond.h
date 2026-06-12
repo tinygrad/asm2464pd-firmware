@@ -436,10 +436,10 @@ static void u4lb_d3b0(uint8_t rate) {
 /* ---- ec51 Trig-arm: CCE1=4 then 2 (97f2 strobe); CCE0=(CCE0&0xF8)|0x04; CCE2=CCE3=0xFF; CCE1=0x01;
  * 0x0774 ^= 1. Arms the lane-train trigger that state 5 fires as [Trig]. Verbatim CODE_BANK1::ec51. */
 static void u4lb_ec51(void) {
-  PR(0xCCE1) = 0x04; PR(0xCCE1) = 0x02;             /* ec54 97f2(DPTR=CCE1): strobe 4 then 2 */
-  PR(0xCCE0) = (PR(0xCCE0) & 0xF8) | 0x04;          /* ec57-ec5f: CCE0 bits2:0 = 4 */
-  PR(0xCCE2) = 0xFF; PR(0xCCE3) = 0xFF;             /* ec60-ec67: CCE2=CCE3=0xFF */
-  PR(0xCCE1) = 0x01;                                /* ec68-ec6d: CCE1=1 (arm) */
+  REG_LANE_TRAIN_ARM = 0x04; REG_LANE_TRAIN_ARM = 0x02;             /* ec54 97f2(DPTR=CCE1): strobe 4 then 2 */
+  REG_LANE_TRAIN_CTRL = (REG_LANE_TRAIN_CTRL & 0xF8) | 0x04;          /* ec57-ec5f: CCE0 bits2:0 = 4 */
+  REG_LANE_TRAIN_MASK_LO = 0xFF; REG_LANE_TRAIN_MASK_HI = 0xFF;             /* ec60-ec67: CCE2=CCE3=0xFF */
+  REG_LANE_TRAIN_ARM = 0x01;                                /* ec68-ec6d: CCE1=1 (arm) */
   PR(0x0774) = PR(0x0774) ^ 0x01;                   /* ec6e-ec74: 0x0774 ^= 1 */
 }
 
@@ -454,7 +454,7 @@ static void u4lb_ee57(void) {
    * — fires the lane-train Trig-arm when CCE1.0 is CLEAR (e.g. CCE1=0 initial) OR CCE1.1 set. The old
    * `(CCE1.0 && CCE1.1)` only fired at CCE1=0x03, so ec51 NEVER armed the trigger at db7a -> the lanes
    * never trained -> CCE4:CCE5 (read-only HW train counter) stayed 0 -> b0b4 WIDGATE-abort. */
-  if (!(PR(0xCCE1) & 0x01) || (PR(0xCCE1) & 0x02)) u4lb_ec51();  /* ee5a-ee62 */
+  if (!(REG_LANE_TRAIN_ARM & 0x01) || (REG_LANE_TRAIN_ARM & 0x02)) u4lb_ec51();  /* ee5a-ee62 */
   /* ee65-ee6d: returns R6=CCE4, R7=CCE5 to the caller (98ec consumes them). */
 }
 
@@ -466,8 +466,8 @@ static void u4lb_ee57(void) {
 static void u4lb_98ec(void) {
   PR(0x0758) = 0x10;                 /* 98ec-98f1: 0x758 = 0x10 (cm_conn_routing_setup state arm) */
   u4lb_ee57();                       /* 98f2: ee57 (Trig-arm gate + CCE4/CCE5 read) */
-  PR(0x0768) = PR(0xCCE4);           /* 98f5-98f9: 0x768 = CCE4 (R6) */
-  PR(0x0769) = PR(0xCCE5);           /* 98fa-98fc: 0x769 = CCE5 (R7) */
+  PR(0x0768) = REG_LANE_WIDTH_CNT_HI;           /* 98f5-98f9: 0x768 = CCE4 (R6) */
+  PR(0x0769) = REG_LANE_WIDTH_CNT_LO;           /* 98fa-98fc: 0x769 = CCE5 (R7) */
 }
 
 /* ====================================================================================
@@ -499,9 +499,9 @@ static void u4lb_state4_b0b4(void) {
 
   /* --- (B) lane-width ready gate (b10f-b12d): (0x0768:0x0769)-(CCE4:CCE5) < 0x38 -> abort --- */
   { uint16_t width = ((uint16_t)PR(0x0768) << 8) | PR(0x0769);
-    uint16_t neg   = ((uint16_t)PR(0xCCE4) << 8) | PR(0xCCE5);
+    uint16_t neg   = ((uint16_t)REG_LANE_WIDTH_CNT_HI << 8) | REG_LANE_WIDTH_CNT_LO;
     uart_puts("[b4:wid="); uart_puthex(PR(0x0768)); uart_puthex(PR(0x0769));
-    uart_puts(" neg="); uart_puthex(PR(0xCCE4)); uart_puthex(PR(0xCCE5));
+    uart_puts(" neg="); uart_puthex(REG_LANE_WIDTH_CNT_HI); uart_puthex(REG_LANE_WIDTH_CNT_LO);
     uart_puts(" 765="); uart_puthex(PR(0x0765)); uart_puthex(PR(0x0766));
     /* DIAG (state-5 lane-present): 0x0819/0x081A (lane-present + device lane-cap) + 0x077A (host width). */
     uart_puts(" 819="); uart_puthex(PR(0x0819)); uart_puts(" 81A="); uart_puthex(PR(0x081A));
@@ -584,8 +584,8 @@ static void u4lb_state4_b0b4(void) {
   u4lb_ec51();
 
   /* --- latch negotiated width 0x074E:0x074F = CCE4:CCE5 (b20f-b21d) --- */
-  PR(0x074E) = PR(0xCCE4);
-  PR(0x074F) = PR(0xCCE5);
+  PR(0x074E) = REG_LANE_WIDTH_CNT_HI;
+  PR(0x074F) = REG_LANE_WIDTH_CNT_LO;
 
   /* --- eb62(0,5) -> [SB P05] -> state 5 (b21e-b222) --- */
   u4lb_eb62(0, 5);
@@ -740,7 +740,7 @@ static void u4lb_lp1_width_settle(uint8_t lane) {
   wB   = (uint16_t)(((uint16_t)PR(0x0770 + 2*lane) << 8) | PR(0x0771 + 2*lane));
   c774 = PR(0x0774);
   if ((uint8_t)wB == c774 && (uint8_t)(wB >> 8) == 0) { u4lb_lp1_finalize(lane); return; }  /* 81a6 */
-  neg = (uint16_t)(((uint16_t)PR(0xCCE4) << 8) | PR(0xCCE5));
+  neg = (uint16_t)(((uint16_t)REG_LANE_WIDTH_CNT_HI << 8) | REG_LANE_WIDTH_CNT_LO);
   if ((uint16_t)((wA - 1) - neg) >= 0x00C8) { u4lb_lp1_finalize(lane); return; }            /* 81b7 */
   /* 81d1: not settled -> leave state 0x40, retry next pass. */
 }
@@ -791,7 +791,7 @@ static void u4lb_walk_8000(void) {
         }
         PR(0x081C + lane) |= 0x40;                   /* 8108-8117: shadow |= 0x40 */
         PR(0x081C + lane) = 0x00;                    /* 811a-811b CLR A;MOVX (verbatim post-OR write) */
-        if ((PR(0xC2C3) & 0x01) || (REG_VENDOR_CTRL_C343 & 0x01)) {  /* 811c-8127: orientation gate */
+        if ((REG_PHY_ORIENT_C2C3 & 0x01) || (REG_VENDOR_CTRL_C343 & 0x01)) {  /* 811c-8127: orientation gate */
           if ((PR(0x0819) & 0x03) != 0) {            /* 812d-8137: 0x0819 lane bits */
             PR(0x081C + lane) = (uint8_t)((PR(0x081C + lane) | 0x40) & 0x7F);  /* 813f-8152 */
             PR(0x081D + lane) = (uint8_t)(((PR(0x081D + lane) | 0x10) + 1) & 0x7F);  /* 8157-816b */
@@ -814,8 +814,8 @@ static void u4lb_walk_8000(void) {
           if (PR(0x0AB3)) u4lb_e9e7();               /* 8283-8289 */
           SB_WR(0x40, (uint8_t)(lane ? 2 : 1));      /* 828c-8298 */
           u4lb_ee57();                               /* 829b: ec51 Trig-arm; CCE4/CCE5 read */
-          PR(0x076C + 2*lane) = PR(0xCCE4);          /* 829e-82a2: width pair A lo = CCE4 */
-          PR(0x076D + 2*lane) = PR(0xCCE5);          /* 82a3-82a5: = CCE5 */
+          PR(0x076C + 2*lane) = REG_LANE_WIDTH_CNT_HI;          /* 829e-82a2: width pair A lo = CCE4 */
+          PR(0x076D + 2*lane) = REG_LANE_WIDTH_CNT_LO;          /* 82a3-82a5: = CCE5 */
           PR(0x0770 + 2*lane) = 0x00;                /* 82a6-82af: width pair B lo = 0 */
           PR(0x0771 + 2*lane) = PR(0x0774);          /* 82b0-82b2: width pair B hi = 0x0774 */
           PR(0x0759 + lane) = 0x80;                  /* 82b5-82b7: state advance -> 0x80 */
