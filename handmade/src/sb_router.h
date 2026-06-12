@@ -336,19 +336,27 @@ static void sb_edd9_receive_ack(void) {
   }
 }
 static void sb_d4cd_transport_edges(void);   /* fwd: faithful stock d4cd transport-edge dispatch (below) */
+/* port: 0/1 = transport edges (SB[0x28]/[0x2A]); 2/3 = link edges (SB[0x81]/[0x83]). The cdaa-cdcb gate is
+ * PORT-AWARE: ports 0/1 require 0x752.4 CLEAR (cdb3 JB), ports 2/3 require it SET (cdc7 JNB). The route-query
+ * RESPONSE arrives on the LINK edges (port 2/3) -> must reach eaac (0x752.0==0) to set 0x0775. (CL0 wf) */
 static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
   uint8_t desc4e;
   uint8_t d752;
+  uint8_t port = PR(0x06F0);                 /* the caller pinned 0x06F0 to the port; stock cd3f reads it too */
   sb_edd9_receive_ack();                     /* edd9: cd3f's first action (device->host receive-ACK) */
-  desc4e = SB_RD(desc4e_off);                /* cd42-cd55: 0x4E (IRAM scratch) = SB[0x28+port] */
-  PR(0x0752) = SB_RD(desc752_off);           /* cd57-cd6a: 0x752 = SB[0x18+port] */
+  desc4e = SB_RD(desc4e_off);                /* cd42-cd55: 0x4E (IRAM scratch) = SB[desc4e_off] per ROM 0x2135 */
+  PR(0x0752) = SB_RD(desc752_off);           /* cd57-cd6a: 0x752 = SB[desc752_off] per ROM 0x2125 */
   d752 = PR(0x0752);
   /* ---- dispatch (cd86-cdf4) ---- */
   if (PR(0x0765) != 0 && (d752 & 0x60) == 0x60) return;  /* cd86-cd94: already present */
   if (!(desc4e & 0x10)) return;              /* cd96-cd9a: need 0x4E.4 (descriptor valid) */
   if ((d752 & 0xC0) != 0x40) {               /* cd9b-cda4 */
     if (!(d752 & 0x04)) return;              /* cda6-cda9: need 0x752.2 */
-    if (d752 & 0x10) return;                 /* cdb3-cdb9 (port 0/1): 0x752.4 set -> no connect */
+    if (port == 0 || port == 1) {            /* cdaa-cdb2 -> cdb3 */
+      if (d752 & 0x10) return;               /* cdb3-cdb9 JB: ports 0/1 need 0x752.4 CLEAR */
+    } else if (port == 2 || port == 3) {     /* cdba-cdc4 -> cdc7 */
+      if (!(d752 & 0x10)) return;            /* cdc7-cdcb JNB: ports 2/3 need 0x752.4 SET */
+    }
   }
   /* cdce-cdf4 dispatch tail (BYTE-EXACT from the raw cd3f disasm, the FAITHFUL 3-WAY):
    *   (0x752 & 0x60)==0x60                    -> ebb5  (0x0765=1)                 [cdd6/cdd9]
@@ -432,33 +440,45 @@ static void sb_connect_present_poll(void) {
  * runs it in the SUPER-LOOP instead (the a066 ISR can't afford cd3f's stack depth -- sp=0x7F cliff), so
  * the ISR's sb_transport_substate_poll below does NOT touch the transport edges (leaves them for here).
  * Called from sb_connect_present_poll (super-loop). */
-static volatile uint8_t __xdata sb_d4cd_log_budget;   /* DIAG: seeded in main() */
 static void sb_d4cd_transport_edges(void) {
-  uint8_t s28 = SB_RD(0x28), s2a = SB_RD(0x2A);
-  if (((s28 | s2a) & 0x08) && sb_d4cd_log_budget) {  /* DIAG: log every pending transport edge + alt state */
-    sb_d4cd_log_budget--;
-    uart_puts("\r\n[d4cd 28="); uart_puthex(s28); uart_puts(" 2A="); uart_puthex(s2a);
-    uart_puts(" EE="); uart_puthex(PR(0x06EE)); uart_puts(" F0="); uart_puthex(PR(0x06F0));
-    uart_puts(" ED="); uart_puthex(PR(0x06ED)); uart_putc(']');
+  /* ---- transport edges SB[0x28]/[0x2A].3 (0x06EE toggle, ports 0/1). 9746 ack = W1C 0x10,0x20,0x40,0x08. */
+  if (SB_RD(0x28) & 0x08) {                          /* SB[0x28].3 (port0 transport edge) */
+    if (PR(0x06EE) == 0) {
+      PR(0x06F0) = 0; sb_cd3f_dispatch(0x28, 0x18);
+      SB_WR(0x28, 0x10); SB_WR(0x28, 0x20); SB_WR(0x28, 0x40); SB_WR(0x28, 0x08);  /* 9746(0x28) */
+      PR(0x06EE) = 1;
+    }
   }
-  if (s28 & 0x08) {                                  /* SB[0x28].3 (port0 transport edge) */
-    if (PR(0x06EE) == 0) { PR(0x06F0) = 0; sb_cd3f_dispatch(0x28, 0x18); SB_WR(0x28, 0x08); PR(0x06EE) = 1; }
+  if (SB_RD(0x2A) & 0x08) {                          /* SB[0x2A].3 (port1 transport edge) */
+    if (PR(0x06EE) == 1) {
+      PR(0x06F0) = 1; sb_cd3f_dispatch(0x2A, 0x19);
+      SB_WR(0x2A, 0x10); SB_WR(0x2A, 0x20); SB_WR(0x2A, 0x40); SB_WR(0x2A, 0x08);  /* 9746(0x2A) */
+      PR(0x06EE) = 0;
+    }
   }
-  if (s2a & 0x08) {                                  /* SB[0x2A].3 (port1 transport edge) */
-    if (PR(0x06EE) == 1) { PR(0x06F0) = 1; sb_cd3f_dispatch(0x2A, 0x19); SB_WR(0x2A, 0x08); PR(0x06EE) = 0; }
+  /* ---- LINK edges SB[0x81]/[0x83].3 (0x06EF toggle, ports 2/3). The state-5 route-query RESPONSE arrives
+   * HERE -> cd3f (port 2/3, 0x752.4 SET gate) -> eaac -> 0x0775=1 -> walker past 0x30. d54c sets 0x06F0=2/3
+   * then cd3f; 974a ack = W1C 0x10,0x20,0x40,0x08 (NOT |0x02). Plane offsets: ROM 0x2135 desc4e = SB[0x81]/
+   * SB[0x83]; ROM 0x2125 0x752 = SB[0x08]/SB[0x09]. (CL0 workflow, adversarially verified) */
+  if (SB_RD(0x81) & 0x08) {                          /* SB[0x81].3 (port2 link edge) */
+    if (PR(0x06EF) == 0) {
+      PR(0x06F0) = 2; sb_cd3f_dispatch(0x81, 0x08);
+      SB_WR(0x81, 0x10); SB_WR(0x81, 0x20); SB_WR(0x81, 0x40); SB_WR(0x81, 0x08);  /* 974a(0x81) */
+      PR(0x06EF) = 1;
+    }
+  }
+  if (SB_RD(0x83) & 0x08) {                          /* SB[0x83].3 (port3 link edge) */
+    if (PR(0x06EF) == 1) {
+      PR(0x06F0) = 3; sb_cd3f_dispatch(0x83, 0x09);
+      SB_WR(0x83, 0x10); SB_WR(0x83, 0x20); SB_WR(0x83, 0x40); SB_WR(0x83, 0x08);  /* 974a(0x83) */
+      PR(0x06EF) = 0;
+    }
   }
 }
-/* sb_transport_substate_poll: the a066-ISR-side d4cd tail -- SB[0x81]/[0x83] LINK edges only (0x06EF).
- * The transport edges (SB[0x28]/[0x2A].3) are handled by sb_d4cd_transport_edges in the super-loop, so
- * this is kept lightweight + stack-safe for the ISR. */
-static void sb_transport_substate_poll(void) {
-  if (SB_RD(0x81) & 0x08) {
-    if (PR(0x06EF) == 0) { SB_WR(0x81, SB_RD(0x81) | 0x02); PR(0x06EF) = 1; }
-  }
-  if (SB_RD(0x83) & 0x08) {
-    if (PR(0x06EF) == 1) { SB_WR(0x83, SB_RD(0x83) | 0x02); PR(0x06EF) = 0; }
-  }
-}
+/* sb_transport_substate_poll: now a NO-OP. Both the transport (0x28/0x2A, 0x06EE) and link (0x81/0x83,
+ * 0x06EF) edges are processed by sb_d4cd_transport_edges (the full d4cd) so the 0x06EE/0x06EF alternation
+ * stays consistent across all call sites, matching stock d4cd. Kept as a stub so existing callers compile. */
+static void sb_transport_substate_poll(void) { }
 
 /* ---- edd9: SB[0x09] poll prelude (c3b2 head). reads SB[0x09]; if bit0 set, 98b7 (per-ch arm). ---- */
 static void sb_chan_prelude(void) {

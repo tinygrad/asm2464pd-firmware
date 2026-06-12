@@ -637,27 +637,22 @@ static uint8_t u4lb_e461(void) {
     PR(0x0AAB) = 0;
     return 1;
   }
-  /* LIVE PATH = faithful e2b9(p1=0x04, p2=0x0D, p3=0x0718=4) (audit #15). KEY FIXES vs the old push:
-   *  (1) status byte 8 -> SB[0x0D|0x0E] (port-sel), NOT SB[0x0C]. The old push wrote the status to the
-   *      WRONG register, so the host never saw a valid route-query and never posted the eaac-routed
-   *      response (the descriptor with 0x752.0==0) that sets 0x0775 -> the walker stalled at LOOP1 0x30.
-   *      Stock e2b9: bVar1=9923(); if(bVar1==0){9695(); status=8;} r3_write(status, SB[0x0D|0x0E]); since
-   *      9960 set 0xAAB=0, 9923 returns 0 -> status=8.
+  /* LIVE PATH = faithful e2b9(p1=0x04, p2=0x0D, p3=0x0718=4) (audit #15, CL0-workflow verified). KEY FIXES:
+   *  (1) status byte -> SB[0x0C] = (SB[0x0C]&0x80)|8. Stock e2b9: 9695 reads SB[0x0C] (R1=0x0C,R2=0x28),
+   *      9923 returns 0xAAB (=0, 9960 cleared it) so the JZ branch runs (SB[0x0C]&0x80)|8 and r3_writes it
+   *      back to SB[0x0C] (NOT SB[0x0D|0x0E] -- the in_R2R1 left by 9695 IS SB[0x0C]).
    *  (2) token 0x0719 = d5da_ret - 1 (d5da returns SB[0x0C]-7), NOT hardcoded 0x0D.
-   *  (3) FULL d4cd (transport+link) before the push (stock e2b9 head sb_transport_substate_poll(p1,p1)). */
+   *  (3) FULL d4cd (transport+link, now both in sb_d4cd_transport_edges) before the push. */
   {
-    uint8_t soff = (PR(0x06F0) == 0) ? 0x0D : 0x0E;
     uint8_t dc;
     PR(0x0AAB) = 0;                                /* 9960: 0xAAB = 0 */
     PR(0x0AA8) = PR(0x0718);                       /* p3 -> SB[0x15] (=4 ROUTE-ENABLE) */
     PR(0x0AA9) = 0x0D;                             /* p2 -> SBTX[0] */
     PR(0x0AAA) = 0x04;                             /* p1 -> SBTX[1] */
-    sb_d4cd_transport_edges();                     /* e2b9 head: FULL d4cd -- transport edges ... */
-    sb_transport_substate_poll();                  /*                      ... + link edges */
+    sb_d4cd_transport_edges();                     /* e2b9 head: FULL d4cd (transport 0x28/0x2A + link 0x81/0x83) */
     SBTX_WR(0, PR(0x0AA9));                         /* 997e: SBTX[0] = 0x0D */
     SBTX_WR(1, (uint8_t)(PR(0x0AAA) | ((PR(0x0AAB) & 1) << 7)));   /* 9923: SBTX[1] = 0x04 | (0xAAB.0<<7) */
-    (void)SB_RD(0x0C);                             /* 9695: discard read (0xAAB==0 -> status = 8) */
-    SB_WR(soff, 0x08);                             /* r3_write status = 8 -> SB[0x0D|0x0E] (port-sel) */
+    SB_WR(0x0C, (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08));   /* 9695 read + status = (SB[0x0C]&0x80)|8 -> SB[0x0C] */
     SB_WR(0x15, PR(0x0AA8));                        /* 96f7: SB[0x15] = 4 */
     /* d5da(0): the bounded SB-transport TX trigger; stock returns cVar5 = SB[0x0C] - 7. */
     PR(0x0AAC) = 0;

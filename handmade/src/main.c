@@ -701,7 +701,6 @@ void main(void) {
   sb_con_print_budget = 6;
   sb_eaac_print_budget = 0;   /* [EAAC] dump OFF (cd3f now runs in the a066 ISR -- keep it light) */
   sb_af38_print_budget = 0;   /* [AF38] dump OFF (ISR safety) */
-  sb_d4cd_log_budget = 40;    /* DIAG: log transport-edge alternation through connect -> route-query */
   sb_af38_force_budget = 0;   /* PROBE off by default (HW-answered: host doesn't respond to af38 TX);
                                * set =8 to re-run the chicken-and-egg test (sb_router.h @0x8817) */
   u4lb_edf5_print_budget = 40; /* [EDF5] route-query dump budget (usb4_lanebond.h @0x8818) */
