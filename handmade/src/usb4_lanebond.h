@@ -522,13 +522,31 @@ static void u4lb_state4_b0b4(void) {
     REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;               /* b159-b15b: CA06=(CA06&0x1F)|0x60 */
   }
 
-  /* --- e305: [PcieTunnel-PwrOn] (ROUND B placeholder) (b15c) --- */
+  /* --- e305: [PcieTunnel-PwrOn] -> cdc6 E764 0x14->0x19 PHY train (CL0 wf iter6, adversarially verified).
+   * THE BOND FIX: handmade ran e57d (an E764 RESET pulse) where stock runs cdc6 (the E764 TRAIN), so E764
+   * never reached 0x19 -- the stock trace proves E764=0x19 is the precondition for the host to move the
+   * lanes SB[0xA0]/[0xA1] 07->01->02. e305 -> e26a(1,1) -> cdc6(1). The CA06 mode-next select (e305 prologue)
+   * is kept; the e57d reset is replaced with the real e7d4 + cdc6 train. (verbatim CODE:cdc6/e7d4/cc8b). */
   uart_puts("[PcieTunnel-PwrOn]");
-  /* ROUND B: real e305/e26a/cdc6 tunnel-power + E764 0x14->0x19 train TBD. As a clearly-commented
-   * stand-in for the E764 train-arm, reuse the EXISTING e57d reset pulse + the connect-head CA06 RMW
-   * (already in handmade). The real ee29/a840/b8db SERDES/link-speed bodies are NOT fabricated. */
-  boot_phy_e57d_e764_reset_pulse(0x01);             /* e57d E764 reset pulse (Round B stand-in) */
-  REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x20;          /* connect-head CA06 RMW (Round B stand-in) */
+  REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x20;          /* e305 prologue: CA06 mode-next select */
+  if (PR(0x09FA) & 0x81) {                            /* d17e gate (e305/e26a passed it; param hardcoded 1) */
+    REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xF7) | 0x08;  /* e7d4: set bit3 */
+    REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFB;            /* e7d4: clr bit2 */
+    REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFE;            /* cdc6 pre: clr bit0 */
+    REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFD) | 0x02;   /* cdc6 pre: set bit1 */
+    phy_cc10_cmd_wait(1, 7, 0xCF);                    /* cde2-cde8: THE TRAIN (e80a CC10 subcmd1, CC12=7, CC13=0xCF) */
+    if (PR(0xE762) & 0x10) {                          /* E762.4 RXPLL ready -> DONE -> E764 = 0x19 */
+      REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFE) | 0x01; /* cc8b: set bit0 */
+      REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFD;          /* cc8b: clr bit1 */
+      PR(0x06E9) = 0;
+    } else {                                          /* not ready -> START (clear the train bits) */
+      REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xF7;
+      REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFB;
+      REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFE;
+      REG_PHY_TIMER_CTRL_E764 = REG_PHY_TIMER_CTRL_E764 & 0xFD;
+      PR(0x06E9) = 1;
+    }
+  }
 
   /* --- L0 OS-arm (b15f-b176), gated 0x0819.0 --- */
   if (PR(0x0819) & 0x01) {
