@@ -52,6 +52,13 @@ static void P1_REG8_wr(uint16_t off, uint8_t v) {
 #define SB_CLR(off, m)  SB_WR((off), SB_RD(off) & (uint8_t)~(m))
 #define SB_SET(off, m)  SB_WR((off), SB_RD(off) | (uint8_t)(m))
 
+/* SB descriptor-ENGINE plane: page-1 0x011200 + off (the stock cursor a2ff latches R2=0x12). This is
+ * the CONTROL/COMMIT plane the HW arms SB[0x2C] (channel-READY) from — NOT the 0x2800 SB readback
+ * plane. Stock a480 -> ccb3/c270 program descriptors HERE; the act of committing the engine
+ * (ENGINE[0x37].7=1 + ENGINE[0x38] kick/poll) is what HW-arms SB[0x2C].4-7. */
+#define P12_RD(off)     P1_REG8_rd((uint16_t)(0x1200u + (off)))
+#define P12_WR(off, v)  P1_REG8_wr((uint16_t)(0x1200u + (off)), (uint8_t)(v))
+
 /* ROM table CODE 0x21B4[0x10] — the C8FF==4 lane-rate SB[0x3e..0x4d] descriptor (b230 tail).
  * read_memory byte-exact. */
 static __code const uint8_t sb_flip_rom_21b4[0x10] = {
@@ -134,10 +141,15 @@ static void sb_lane_flip_init(void) {
   PR(0xC809) = (PR(0xC809) & 0xF7) | 0x08;       /* *** C809.3 SET (SB-PHY RX/INT unmask) *** */
   SB_CLR(0x67, 0x40);                            /* SB[0x67] &= ~0x40 */
   PR(0x072B) = 0x07; PR(0x072C) = 0x07;          /* lane-state latches */
-  /* if C8FF==4 (lane-rate gate): ROM-copy CODE 0x21b4[0x10] -> SB[0x3e..0x4d] */
+  /* if C8FF==4 (lane-rate gate): ROM-copy CODE 0x21b4[0x10] -> XDATA 0x073E..0x074D.
+   * FIX 2026-06-12: stock b230's destination is CONCAT11(0x07, 0x3E+i) = plain XDATA 0x073E+i (DPX=0),
+   * NOT SB[0x3E] (page1 0x283E). The old SB_WR(0x3E+k) CLOBBERED the SB[0x40-0x4D] descriptor window
+   * (the A5/02 marker descriptor the engine/b7a4 own) that HW reads to arm SB[0x2C] bits 5,4. Verified
+   * vs CODE_BANK1::b230: the lane_port_map_b copy targets 0x07:(0x3E+i). (SB-page diff confirmed
+   * handmade clobbered SB[0x40-0x4D] with these ROM bytes.) */
   if (PR(0xC8FF) == 0x04) {
     uint8_t k;
-    for (k = 0; k < 0x10; k++) SB_WR((uint8_t)(0x3E + k), sb_flip_rom_21b4[k]);
+    for (k = 0; k < 0x10; k++) PR((uint16_t)(0x073E + k)) = sb_flip_rom_21b4[k];
   }
 }
 
@@ -169,10 +181,14 @@ static void sb_rom_descriptor_load(void) {
   /* if not USB4-cap (0x09F9.7 clear): clear DROM[0x1B].1 */
   if (!(PR(0x09F9) & 0x80)) PR(0x081B) = PR(0x081B) & ~0x02;
   for (i = 0; i < 0x10; i++) PR(0x0700 + i) = sb_lane_desc_21d4[i];
-  /* if 0x09F5 set: DROM[0x1A].5 = 1 (the richer stock guard is gated on 0x07BA/0x07CC/0x07B9/0x07CF
-   * connect substate -- reproduce the leading set; the conditional clear-back is a no-op on the
-   * happy connect path). */
-  if (PR(0x09F5)) PR(0x081A) = (PR(0x081A) & 0xDF) | 0x20;
+  /* b7a4 0x081A.5 (20G lane-present bit): if 0x09F5 set, SET bit5.
+   * NOTE: stock ALSO has a conditional clear-back here: clear bit5 if
+   *   (0x07BA!=0 && 0x07CC<3) || (0x07B9!=0 && 0x07CF in {1,2}).
+   * That clear-back is INTENTIONALLY OMITTED for now: HW-tested it fires NON-DETERMINISTICALLY because
+   * 0x07CC at b7a4 time is itself not faithfully initialized in handmade (varies 0..>=3 per connect),
+   * which spuriously forced 10G and destabilized the deterministic 20G connect. TODO(0x07CC): RE the
+   * stock writers of 0x07CC/0x07BA before b7a4 and reproduce them, THEN restore the clear-back. */
+  if (PR(0x09F5)) PR(0x081A) = (uint8_t)((PR(0x081A) & 0xDF) | 0x20);
   /* if 0x09F6 == 0: DROM[0x1A] &= 0xED */
   if (PR(0x09F6) == 0) PR(0x081A) = PR(0x081A) & 0xED;
 
@@ -210,9 +226,12 @@ static void sb_rom_descriptor_load(void) {
 static void sb_block_init(void) {
   uart_puts("[SB Init]");
 
-  /* e0d9 PHY descriptor seed (DPX=0 plain XDATA) */
-  PR(0xC20E) = 0x3E; PR(0xC20F) = 0x08; PR(0xC210) = 0x08; PR(0xC211) = 0x2E; PR(0xC212) = 0x3E;
-  PR(0xC214) = 0x00; PR(0xC215) = 0x20; PR(0xC216) = 0x00; PR(0xC217) = 0x3F;
+  /* e0d9 PHY descriptor seed — FIXED 2026-06-12: stock bb37 calls e0d9(0), NOT e0d9(4). e0d9(0) (verified
+   * disasm CODE_BANK1::e0d9 e11d branch) = c306(0xC20E) zeroes C20E/C20F/C210 + c307(0,0xC214) zeroes
+   * C214/C215/C216; C211/C212/C217 are NOT written (left at default). Handmade had hardcoded the e0d9(4)
+   * RXPLL variant (C20E=0x3E,C20F=8,C210=8,C211=0x2E,C212=0x3E,C215=0x20,C217=0x3F) = WRONG PHY seed. */
+  PR(0xC20E) = 0; PR(0xC20F) = 0; PR(0xC210) = 0;   /* c306(0xC20E) */
+  PR(0xC214) = 0; PR(0xC215) = 0; PR(0xC216) = 0;   /* c307(0, 0xC214) */
 
   /* page-1 0x010100 head: clear bits 0,4,6,7 (net &= ~0xD1) */
   P1_CLR(0x0100, 0x10);
@@ -295,17 +314,49 @@ static void sb_pcie_width_ramp(uint8_t width) {
  * lane/tunnel-train sub-blocks the host CM needs after connect. Stock addr per block below.
  * ====================================================================================
  *
- * SB descriptor-engine note: stock ccb3/c270/d556 program the SB lane/PID descriptor RAM through a
- * cursor-based write engine (a2ff reads the cursor @0x1234; a30c/a2df/a369/a31c/a348/a327 prep the
- * control plane; 0x0be6 writes the data byte to SB[R1] in the R3=2 plane = page1 0x2800+R1; e7fb
- * strobes the SB[0x37].7 commit). The DATA bytes land at SB[0x3C..0x3F] (lane cfg) and SB[0x3C..]
- * /[0x3E]=PID (c270). We reproduce the resolved net SB-page DATA writes via SB_WR at the exact
- * offsets + the e7fb-equivalent SB[0x37].7 commit strobe; the cursor control-plane RMWs are the
- * descriptor-engine's internal latches (not separately observable). Stock addrs cited per write. */
+ * SB descriptor-engine (FIXED 2026-06-12): stock ccb3/c270 program the descriptor via a CURSOR-based
+ * write engine on the 0x12 ENGINE plane (physical 0x01_1200), NOT the 0x2800 SB plane. The cursor a2ff
+ * = {R1=0x34;R3=2;R2=0x12; read 0x011234} latches R2=0x12 so every subsequent r3 write inherits the
+ * engine plane. Control prims (a30c/a308/a2df/a31c/a348/a327) RMW ENGINE[0x34..0x36]; data bytes land
+ * at ENGINE[0x3C..0x3F]; COMMIT = e7fb (ENGINE[0x37].7=1 GO) + e83d (ENGINE[0x38]=1 kick, poll bit0,
+ * e711 cleanup). The COMMIT is what HW-arms SB[0x2C].4-7 (channel-READY). The OLD handmade wrote the
+ * 0x28 SB plane + SB_WR(0x37) (a no-op for the engine) -> SB[0x2C] never armed -> host link=none. */
 
-/* e7fb-equivalent: strobe the SB descriptor commit (SB[0x37] bit7 set). */
+/* engine control primitives (verbatim CODE:a30c/a308/a2df/a31c/a348/a327; cursor offset passed in). */
+static void eng_a30c(uint8_t cur, uint8_t v) {           /* [cur]=v ; [cur+1]=(rd&0x3F)|0x80 */
+  P12_WR(cur, v); P12_WR((uint8_t)(cur + 1), (uint8_t)((P12_RD((uint8_t)(cur + 1)) & 0x3F) | 0x80));
+}
+static void eng_a308(uint8_t cur, uint8_t v) {           /* [cur]=(v&0xF0)|0xF ; [cur+1]=(rd&0x3F)|0x80 */
+  P12_WR(cur, (uint8_t)((v & 0xF0) | 0x0F));
+  P12_WR((uint8_t)(cur + 1), (uint8_t)((P12_RD((uint8_t)(cur + 1)) & 0x3F) | 0x80));
+}
+static void eng_a2df(uint8_t cur, uint8_t v) {           /* [cur]=v ; [cur+1]=rd&0xE0 */
+  P12_WR(cur, v); P12_WR((uint8_t)(cur + 1), (uint8_t)(P12_RD((uint8_t)(cur + 1)) & 0xE0));
+}
+static void eng_a31c(uint8_t cur, uint8_t v) {           /* [cur]=v ; [cur+1]=(rd&0xC0)|4 ; [cur+1]=(rd&0x3F)|0x40 */
+  P12_WR(cur, v);
+  P12_WR((uint8_t)(cur + 1), (uint8_t)((P12_RD((uint8_t)(cur + 1)) & 0xC0) | 0x04));
+  P12_WR((uint8_t)(cur + 1), (uint8_t)((P12_RD((uint8_t)(cur + 1)) & 0x3F) | 0x40));
+}
+static void eng_a348(uint8_t cur, uint8_t v) {           /* [cur]=v ; dummy read [cur+1] */
+  P12_WR(cur, v); (void)P12_RD((uint8_t)(cur + 1));
+}
+static void eng_a327(uint8_t cur, uint8_t v) {           /* [cur]=v ; [cur]=(rd&0x3F)|0x40 */
+  P12_WR(cur, v); P12_WR(cur, (uint8_t)((P12_RD(cur) & 0x3F) | 0x40));
+}
+
+/* COMMIT (verbatim e7fb -> e83d -> e711): set ENGINE[0x37].7 (GO), kick ENGINE[0x38]=1, poll bit0
+ * (BOUNDED), then the e711 cleanup. THIS arms SB[0x2C].4-7. */
 static void u4c_sb_desc_commit(void) {
-  SB_WR(0x37, (SB_RD(0x37) & 0x7F) | 0x80);
+  uint8_t cval; uint16_t g;
+  cval = (uint8_t)((P12_RD(0x37) & 0x7F) | 0x80);    /* e7fb/a33d: read ENGINE[0x37], set bit7 */
+  P12_WR(0x37, cval);                                 /* e7fb: GO */
+  P12_WR(0x38, 0x01);                                 /* e83d/a38b: kick */
+  for (g = 0; (P12_RD(0x38) & 0x01) && g < 0x2000; g++) { }  /* e83d/a336: poll bit0 (bounded) */
+  (void)P12_RD(0x35);                                 /* e711/a301: read ENGINE[0x35] */
+  P12_WR(0x35, (uint8_t)(cval & 0xC0));               /* e711: ENGINE[0x35] = cval & 0xC0 */
+  P12_WR(0x3C, 0x00); P12_WR(0x3D, 0x00);             /* e711/a367(0): ENGINE[0x3C]=[0x3D]=0 */
+  P12_WR(0x35, 0x00); P12_WR(0x36, 0x00);             /* e711: ENGINE[0x35]=[0x36]=0 */
 }
 
 /* edbd (bank1 @CODE_BANK1::edbd): SB[0x1C] (page1 0x281C) bit0 = !connect.
@@ -315,61 +366,80 @@ static void u4c_edbd(void) {
   else                 SB_CLR(0x1C, 0x01);
 }
 
-/* e5b0 (bank1 @CODE_BANK1::e5b0): clear 0x097A; SB[0x4C] &= ~1 (via c208 read); SB[0x03]=0x80;
- *   SB[0x90] &= ~4; SB[0x8F]=0x80; SB[0x90+1=0x91] &= ~0x20; SB[0x90]=0x20; clear 0x09F0-0x09F3.
- * The pbVar1 cursor walks 0x4C,0x03,0x90,0x8F,0x90,0x91,0x90 in the SB page (R3=2 plane). */
+/* e5b0 (CODE_BANK1::e5b0) — engine pre-config, FIXED 2026-06-12 to the 0x12 ENGINE plane (its cursor
+ * c208 = {R3=2;R2=0x12;LJMP 0bc8} latches R2=0x12, NOT the 0x28 SB plane). Walk (verbatim disasm):
+ * ENGINE[0x4C]&=~1, [0x03]=0x80, [0x90]&=~4, [0x8F]=0x80, [0x90]&=~0x20, [0x8F]=0x20. (No 0x91 write —
+ * the old handmade SB-plane version + the SB[0x91] write were both wrong.) This sets up the engine
+ * BEFORE ccb3/c270 program descriptors; without it the commit only partially armed SB[0x2C] (0xC2). */
 static void u4c_e5b0(void) {
   PR(0x097A) = 0;
-  SB_CLR(0x4C, 0x01);                 /* r3[0x4C] = c208() & 0xFE */
-  SB_WR(0x03, 0x80);                  /* r3[0x03] = 0x80 */
-  SB_CLR(0x90, 0x04);                 /* r3[0x90] &= ~4 */
-  SB_WR(0x8F, 0x80);                  /* r3[0x8F] = 0x80 (pbVar1-1) */
-  SB_CLR(0x91, 0x20);                 /* r3[0x91] &= ~0x20 (pbVar1+1) */
-  SB_WR(0x90, 0x20);                  /* r3[0x90] = 0x20 (pbVar1-1) */
+  P12_WR(0x4C, (uint8_t)(P12_RD(0x4C) & 0xFE));   /* c208: ENGINE[0x4C] &= ~1 */
+  P12_WR(0x03, 0x80);                              /* ENGINE[0x03] = 0x80 */
+  P12_WR(0x90, (uint8_t)(P12_RD(0x90) & 0xFB));    /* ENGINE[0x90] &= ~4 */
+  P12_WR(0x8F, 0x80);                              /* DEC R1->0x8F: ENGINE[0x8F] = 0x80 */
+  P12_WR(0x90, (uint8_t)(P12_RD(0x90) & 0xDF));    /* INC R1->0x90: ENGINE[0x90] &= ~0x20 */
+  P12_WR(0x8F, 0x20);                              /* DEC R1->0x8F: ENGINE[0x8F] = 0x20 */
   PR(0x09F0) = 0; PR(0x09F1) = 0; PR(0x09F2) = 0; PR(0x09F3) = 0;
 }
 
-/* ccb3 (@0xccb3): lane-config descriptor write. SB[0x3C]=0, SB[0x3D]=1, SB[0x3E]=0; then per
- *   0x09FB.0 clear -> SB[0x3D].(masked 7)|... commit; per 0x09FB.1 clear -> another lane.
- * Net resolved SB DATA: SB[0x3C]=0 SB[0x3D]=1 SB[0x3E]=0 + the e7fb commit. The a30c/a31c/a348/a327
- * masked-RMWs are the descriptor-engine control plane. */
-static void u4c_ccb3(void) {
-  /* a2ff/a30c head (control-plane prep) then 0x0be6 data writes at R1=0x3C.. */
-  SB_WR(0x3C, 0x00);                  /* ccc5: clr A -> SB[0x3C]=0 */
-  SB_WR(0x3D, 0x01);                  /* ccca a369(1): SB[0x3D]=1 */
-  SB_WR(0x3E, 0x00);                  /* ccce: clr A -> SB[0x3E]=0 */
-  u4c_sb_desc_commit();               /* ccd1 e7fb */
-  if (!(PR(0x09FB) & 0x01)) {         /* ccd8 JB 0x9FB.0 -> skip */
-    SB_WR(0x3E, 0x02);                /* cce8 a2df(2) at R1=0x3E */
-    u4c_sb_desc_commit();             /* cceb e7fb */
+/* ccb3 (CODE:ccb3) lane-config descriptor, verbatim on the 0x12 ENGINE plane. p1 = a480's width byte
+ * (= 0x09FA, high nibble masked). Main descriptor (always) + two 0x09FB-gated sub-descriptors. */
+static void u4c_ccb3(uint8_t p1) {
+  uint8_t t;
+  (void)P12_RD(0x34);                              /* a2ff: cursor reset+read ENGINE[0x1234] */
+  eng_a30c(0x34, (uint8_t)((p1 & 0xF0) | 0x0E));   /* a30c(p1&0xF0|0xE): ENGINE[0x34],[0x35] */
+  eng_a2df(0x35, 0x01);                            /* a2df(1): ENGINE[0x35]=1,[0x36] */
+  P12_WR(0x3C, 0x00); P12_WR(0x3D, 0x01);          /* data: [0x3C]=0 ; a369(1): [0x3D]=1,[0x3E]=1 */
+  P12_WR(0x3E, 0x01); P12_WR(0x3F, 0x00);          /* [0x3F]=0 */
+  u4c_sb_desc_commit();                            /* ccd1 e7fb */
+  t = PR(0x09FB);
+  if (!(t & 0x01)) {                               /* ccd8 JB 0x9FB.0 -> sub-descriptor 1 */
+    (void)P12_RD(0x34);                            /* a2ff */
+    eng_a31c(0x34, (uint8_t)((t & 0xF0) | 0x07));  /* a31c((0x9FB&0xF0)|7): [0x34],[0x35] */
+    eng_a2df(0x35, 0x02);                          /* a2df(2): [0x35]=2,[0x36] */
+    u4c_sb_desc_commit();                          /* cceb e7fb */
   }
-  if (!(PR(0x09FB) & 0x02)) {         /* ccf2 JB 0x9FB.1 -> skip */
-    SB_WR(0x3F, 0x02);                /* cd09 a2df(2) at R1=0x3F */
-    u4c_sb_desc_commit();             /* cd0c e7fb */
+  t = PR(0x09FB);
+  if (!((t >> 1) & 0x01)) {                        /* ccf2 JB 0x9FB.1 -> sub-descriptor 2 */
+    (void)P12_RD(0x34);                            /* a2ff */
+    eng_a348(0x34, (uint8_t)((t & 0xF0) | 0x07));  /* a348((0x9FB&0xF0)|7): [0x34], read [0x35] */
+    eng_a327(0x35, (uint8_t)((t & 0xC0) | 0x03));  /* a327((0x9FB&0xC0)|3): [0x35] RMW */
+    eng_a2df(0x35, 0x02);                          /* a2df(2): [0x35]=2,[0x36] */
+    u4c_sb_desc_commit();                          /* cd0c e7fb */
   }
 }
 
-/* c270 (@0xc270): DROM PID latch into the SB descriptor. The load-bearing DATA bytes:
- *   SB[0x3D] = 0x0B1A, SB[0x3E] = 0x0A57 (PID low), then 0x0A58 (PID high);
- *   SB[0x3D] = 0x0B17, SB[0x3E] = 0x0B18; SB[0x3C..0x3F] = 0x0B13..0x0B16. (R1 reused per a2df.)
- * 0x0A57/0x0A58 are the DROM product-ID the host CM reads back. */
-static void u4c_c270(void) {
-  /* first descriptor (a2df(0), R1=0x3C; a3cb writes 0x0B19 to SB[0x3C]) */
-  SB_WR(0x3C, PR(0x0B19));            /* a3cb: SB[0x3C] = 0x0B19 */
-  SB_WR(0x3D, PR(0x0B1A));            /* SB[0x3D] = 0x0B1A */
-  SB_WR(0x3E, PR(0x0A57));            /* SB[0x3E] = 0x0A57 (PID low) */
-  SB_WR(0x3F, PR(0x0A58));            /* a2f8(0x0A58): SB[0x3F] = 0x0A58 (PID high) */
+/* c270 (CODE:c270) DROM PID descriptors, verbatim on the 0x12 ENGINE plane. Three descriptors; each
+ * = a308(width) + a2df(slot) control, four data bytes ENGINE[0x3C..0x3F], commit. 0x0A57/0x0A58 are
+ * the DROM product-ID the host CM reads back. p1 = a480's width byte. */
+static void u4c_c270(uint8_t p1) {
+  /* --- descriptor 1 (slot 0) --- */
+  (void)P12_RD(0x34);                /* a2ff */
+  eng_a308(0x34, p1);                /* a308(p1) */
+  eng_a2df(0x35, 0x00);              /* a2df(0) */
+  P12_WR(0x3C, PR(0x0B19));          /* a3cb: ENGINE[0x3C] = XDATA[0x0B19] */
+  P12_WR(0x3D, PR(0x0B1A));
+  P12_WR(0x3E, PR(0x0A57));          /* PID low */
+  P12_WR(0x3F, PR(0x0A58));          /* a2f8: ENGINE[0x3F] = PID high */
   u4c_sb_desc_commit();
-  /* second descriptor (a2df(7), R1=0x3C reused) */
-  SB_WR(0x3C, PR(0x0B17));            /* SB[0x3C] = 0x0B17 */
-  SB_WR(0x3D, PR(0x0B18));            /* SB[0x3D] = 0x0B18 */
+  (void)P12_RD(0x34);                /* a2f8 tail: re-read cursor */
+  /* --- descriptor 2 (slot 7) --- */
+  eng_a308(0x34, PR(0x0A58));        /* a308(0x0A58) */
+  eng_a2df(0x35, 0x07);              /* a2df(7) */
+  P12_WR(0x3C, PR(0x0B17));
+  P12_WR(0x3D, PR(0x0B18));
+  P12_WR(0x3E, PR(0x0B19));          /* a3cb */
+  P12_WR(0x3F, PR(0x0B1A));          /* a2f8 */
   u4c_sb_desc_commit();
-  /* third descriptor (a2df(8)): SB[0x3C..0x3F] = 0x0B13..0x0B16 */
-  SB_WR(0x3C, PR(0x0B13));
-  SB_WR(0x3D, PR(0x0B14));
-  SB_WR(0x3E, PR(0x0B15));
-  SB_WR(0x3F, PR(0x0B16));
-  u4c_sb_desc_commit();
+  (void)P12_RD(0x34);
+  /* --- descriptor 3 (slot 8) --- */
+  eng_a308(0x34, PR(0x0B1A));        /* a308(0x0B1A) */
+  eng_a2df(0x35, 0x08);              /* a2df(8) */
+  P12_WR(0x3C, PR(0x0B13));
+  P12_WR(0x3D, PR(0x0B14));
+  P12_WR(0x3E, PR(0x0B15));
+  P12_WR(0x3F, PR(0x0B16));
+  u4c_sb_desc_commit();              /* c2e3 e7fb */
 }
 
 /* d556 (bank1 @CODE_BANK1::d556): per-route descriptor copy.
@@ -413,7 +483,7 @@ static void u4c_bcd7_tail(void) {
 /* M1' diagnostic: set once the SB assert has run, so the super-loop can switch to the post-SB
  * E302-poll diagnostic (the un-W1C'd C80A.5 SB-router source storms INT1 and starves the loop
  * until the a066/M2 handler exists; the diagnostic masks EX1 to read the trained E302). */
-static volatile uint8_t __xdata __at(0x880B) sb_asserted;   /* IRAM-HEADROOM FIX: relocated to XDATA */
+static volatile uint8_t __xdata __at(0x0B4B) sb_asserted;   /* IRAM-HEADROOM FIX: relocated to XDATA */
 
 /* ============================ SB-assert entry (usb4_connect_u4 tail) ============================
  * The synchronous tail reached at 0xa51b/0xa51e after the route latch, gated on 0x07BA!=0.
@@ -436,8 +506,10 @@ static void sb_assert(void) {
     }
   }
 
-  u4c_ccb3();                   /* a50e: ccb3  -> SB[0x3C..0x3F] lane-config descriptor */
-  u4c_c270();                   /* a511: c270  -> SB DROM PID latch (0x0A57/0x0A58) */
+  PR(0x09FB) = 0x02;            /* a480 head: 0x09FB=2 (ccb3 sub-descriptor lane-gate selector) */
+  u4c_ccb3(0x81);               /* a50e: ccb3 -> ENGINE(0x12)-plane lane descriptor + commit (ARMS SB[0x2C]).
+                                 * p1=0x81 = a480's 0x09FA width byte (high nibble 0x80 used by a30c). */
+  u4c_c270(0x81);               /* a511: c270 -> ENGINE(0x12)-plane DROM PID descriptors + commit */
   u4c_d556();                   /* a514: d556  -> per-route descriptor latch */
   PR(0x07FF) = 0;               /* a517: 0x07FF=0 (stock clears just before b230) */
   sb_lane_flip_init();          /* a51b: b230 — FIRST */
@@ -460,6 +532,7 @@ static void sb_assert(void) {
   uart_puts(" sb01=");  uart_puthex(SB_RD(0x01));
   uart_puts(" sb2d=");  uart_puthex(SB_RD(0x2D));
   uart_puts(" sbc9=");  uart_puthex(SB_RD(0xC9));
+  uart_puts(" sb2c=");  uart_puthex(SB_RD(0x2C));   /* ENGINE-fix: did the commit arm SB[0x2C].4-7? */
   uart_puts("]");
 
   /* Full SB-page + gating-reg snapshot for the STOCK-vs-handmade diff. Format mirrors the stock

@@ -37,7 +37,7 @@ static void phy_cc10_cmd(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
 
 /* Print budget for the [===SB Con===] edge so the C80A.5 re-assert can't saturate the UART and
  * starve the super-loop diagnostics. The functional W1C/consequence still runs every edge. */
-static volatile uint8_t __xdata __at(0x880C) sb_con_print_budget;   /* IRAM-HEADROOM FIX: relocated to XDATA; seeded =6 in main() */
+static volatile uint8_t __xdata __at(0x0B4C) sb_con_print_budget;   /* IRAM-HEADROOM FIX: relocated to XDATA; seeded =6 in main() */
 
 /* SESSION 2026-06-11i DEADLOCK-BREAK: the Intel MTL TB4 host HOLDS connect (SB[0x2C].0=1, level)
  * after [SB Init] until it sees [ConnRout]. C80A.5 is level -> INT1 re-fires on every IRET ->
@@ -48,7 +48,7 @@ static volatile uint8_t __xdata __at(0x880C) sb_con_print_budget;   /* IRAM-HEAD
  * for ONE pumped window: with INT1 off the loop runs cb10->e672->[ConnRout]/[SB P04] uninterrupted,
  * the host releases connect (C80A.5 de-asserts), then the loop re-enables IE_EX1 so the next
  * connect/lane events are serviced. Set in the ISR; consumed+cleared by the super-loop. */
-static volatile uint8_t __xdata __at(0x8813) sb_ex1_mask_pending;
+static volatile uint8_t __xdata __at(0x0B53) sb_ex1_mask_pending;
 
 /* RE-AUDIT chicken-and-egg fix: the Intel MTL TB4 host raises C80A.5 (SB-router connect) but NEVER
  * drives the INT0 link-events (0x9101/0x91D1/0x9302), so c9a8 -> bank0_8a89 (the USB4 lane-MODE
@@ -56,8 +56,8 @@ static volatile uint8_t __xdata __at(0x8813) sb_ex1_mask_pending;
  * the SB-router CONNECT itself. So on [===SB Con===] we set this flag and the super-loop runs
  * bank0_c9a8(0) (gate now fully open: 0x09FA.2/0x0AF1.0/0x07E8 all set) to drive bank0_8a89 ONCE.
  * Deferred to the super-loop because 8a89 runs long PHY-lock waits unsafe inside the INT1 ISR. */
-static volatile uint8_t __xdata __at(0x880D) sb_run_8a89_pending;   /* IRAM-HEADROOM FIX: relocated to XDATA */
-static volatile uint8_t __xdata __at(0x880E) sb_8a89_done;     /* set by the super-loop after the one-shot 8a89 run */
+static volatile uint8_t __xdata __at(0x0B4D) sb_run_8a89_pending;   /* IRAM-HEADROOM FIX: relocated to XDATA */
+static volatile uint8_t __xdata __at(0x0B4E) sb_8a89_done;     /* set by the super-loop after the one-shot 8a89 run */
 
 /* sb_write_c9_ack (0x9a5a): SB[0xC9] = (1 << pos) — W1C one connect bit. (a09c-a0a7 builds 1<<idx
  * via RLC then 0x9a5a writes it to SB[0xC9].) */
@@ -101,7 +101,7 @@ static void sb_write_c9_ack(uint8_t pos) {
 
 /* Print budget for the [EAAC] dump so the super-loop poll can't saturate the UART. Seeded =6 in
  * main()'s 0x8800.. zero-init window (extended below). */
-static volatile uint8_t __xdata __at(0x8815) sb_eaac_print_budget;
+static volatile uint8_t __xdata __at(0x0B55) sb_eaac_print_budget;
 
 /* The eaac base hi byte, selected by the cd3f substate port (0x06F0): port0 -> 0x2a00, port1 ->
  * 0x2b00. (cd3f/eaac both derive it from 0x06F0 via 9a3e + ROM 0x212d.) */
@@ -121,11 +121,14 @@ static void sb_eaac_populate_0777(void) {
   if (sb_eaac_print_budget) {
     sb_eaac_print_budget--;
     uart_puts("\r\n[EAAC 777="); uart_puthex(PR(0x0777));
-    uart_puts(" p2=");
-    for (i = 0; i < 0x10; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i)));
+    uart_puts(" 6F0="); uart_puthex(PR(0x06F0));                 /* active port: 0=>0x2a00, 1=>0x2b00 */
+    uart_puts(" 77A="); uart_puthex(PR(0x077A));                 /* what the copy actually wrote (vs 2a03) */
+    uart_puts(" p2a=");
+    for (i = 0; i < 0x08; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i)));
+    uart_puts(" p2b=");                                          /* the OTHER plane (port1) */
+    for (i = 0; i < 0x08; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2b00u + i)));
     uart_puts(" 775="); uart_puthex(PR(0x0775));
     uart_puts(" 758="); uart_puthex(PR(0x0758));
-    uart_puts(" 6ed="); uart_puthex(PR(0x06ED));
     uart_puts("]\r\n");
   }
 }
@@ -176,13 +179,14 @@ static __code const uint8_t sb_af38_rom21a1[0x12] = {
 
 /* IRAM scratch the stock af38 uses (IDATA 0x4e-0x53). Use locals + a couple of statics to mirror
  * exactly. DAT50=descriptor type byte, DAT51/52 = second byte split, DAT53 = ROM 0x21a1 const. */
-static volatile uint8_t __xdata __at(0x8816) sb_af38_print_budget;   /* seeded =6 in main() */
-static volatile uint8_t __xdata __at(0x8817) sb_af38_force_budget;   /* PROBE: forced-af38 one-shots (=8) */
+static volatile uint8_t __xdata __at(0x0B56) sb_af38_print_budget;   /* seeded =6 in main() */
+static volatile uint8_t __xdata __at(0x0B57) sb_af38_force_budget;   /* PROBE: forced-af38 one-shots (=8) */
 
 static void sb_af38_descriptor_response(void) {
   uint16_t src = (PR(0x06F0) == 0) ? 0x2a00u : 0x2b00u;   /* 0x0755 tuple: port0=0x2a00, port1=0x2b00 */
-  uint8_t  dat50, dat51, dat52, dat53 = 0, r7, i;
+  uint8_t  dat50, dat51, dat52, dat53 = 0, r7, i, dat4f, lut;
   uint8_t  desc752 = PR(0x0752);
+  uint8_t  soff = (PR(0x06F0) == 0) ? 0x0D : 0x0E;   /* b02d: SB[0x0D] port0 else SB[0x0E] */
 
   /* af38-af3f: 0x0753 = 0x0752 & 0xDE (clear bits 0,5 -> the descriptor written to SB[0x15] TX cmd) */
   PR(0x0753) = (uint8_t)(desc752 & 0xDE);
@@ -197,37 +201,52 @@ static void sb_af38_descriptor_response(void) {
   SBTX_WR(0, dat50);
   SBTX_WR(1, dat52);
 
-  /* af6d-af89: if DAT50 < 0x12: DST[1] |= ROM-LUT(0x06f2+DAT50); DAT53 = ROM_21a1[DAT50] */
-  if (dat50 < 0x12) {
-    uint8_t lut = PR((uint16_t)(0x06F2u + dat50));     /* 976e: XDATA[0x0600 + (0xf2+A)] */
+  /* af6d-af89: if DAT50 < 0x13: DST[1] |= ROM-LUT 976e(DAT50-0xe); DAT53 = lane_port_map[DAT50].
+   * NOTE 976e does `CLR A; ADDC A,#6; DPH=A` with the CY from the caller's `ADD A,#0xf2` (=DAT50-0xe):
+   * for DAT50>=0x0e CY=1 (DPH=7) -> reads 0x0700+(DAT50-0xe); for DAT50<0x0e CY=0 (DPH=6) -> 0x0600+...
+   * Both collapse to XDATA[0x06F2+DAT50], so PR(0x06F2+DAT50) is byte-exact. (stock: af6d-af89) */
+  if (dat50 < 0x13) {
+    lut = PR((uint16_t)(0x06F2u + dat50));              /* 976e(DAT50-0xe) == XDATA[0x06F2+DAT50] */
     SBTX_WR(1, (uint8_t)(SBTX_RD(1) | lut));
-    dat53 = sb_af38_rom21a1[dat50];                    /* ROM 0x21a1 (movc), embedded below */
+    dat53 = sb_af38_rom21a1[dat50];                    /* lane_port_map_a (movc), embedded below */
   }
 
-  if (dat52 == 0) {
-    /* ---- BRANCH A (afed-b017): RX-plane (0x2a00 SRC) -> 0x0800 work buffer ----
-     * af92: 0x0754 = 1. afed-b017: for i in [0..DAT51): R7 = SRC[2+i] (0x2a00 plane, reloaded via
-     * 9a38 each iter); work[0x0800 + DAT53 + i] = R7 (98fe = DPTR 0x0800+A). The af98-afe0 block
-     * computes a tighter cap (LUT/99b5 bounds) but on the happy path the loop bound is DAT51. */
+  /* af8b-af8f: A=DAT_52; JNZ af92 (DAT_52!=0 -> BRANCH A); else LJMP b024 (DAT_52==0 -> BRANCH B).
+   * BOTH copy arms are GATED in stock (DAT_50 in [0x0e,0x13) + per-branch conditions); on a gate FAIL
+   * stock calls 9988 (SBTX[1] &= 0x80) and does NOT copy. The host's 0x0C routing descriptor has
+   * DAT_50=0x0C < 0x0e, so it FAILS the gate -> NO copy -> af38 must NOT touch 0x0819/081A (the 20G
+   * lane-present bit is owned by b7a4/eaac, not af38). DAT_4f = (SB[0x0D|0x0E]&0x7f)-5 (99b5). */
+  dat4f = (uint8_t)((SB_RD(soff) & 0x7F) - 5);
+  if (dat52 != 0) {
+    /* ---- BRANCH A (af92-b022): RX-plane SRC -> 0x0800 work buffer. 0x0754=1; DST[2]=0 ---- */
     PR(0x0754) = 1;
-    {
-      uint8_t n = dat51; if (n > 0x40) n = 0x40;
-      for (i = 0; i < n; i++) {
+    SBTX_WR(2, 0);                                      /* af9a: r3_write 0 -> SBTX[2] */
+    if (dat50 >= 0x0e && dat50 < 0x13 &&                /* gate bit7 = (0x0e<=DAT50<0x13) */
+        PR((uint16_t)(0x06F2u + dat50)) != 0 &&         /* 976e(DAT50-0xe) != 0 */
+        dat51 == dat4f &&                               /* afc6: DAT_51 == DAT_4f (status-5) */
+        PR((uint16_t)(0x0705u + dat50)) != 0 &&         /* afca: XDATA[0x0700+DAT50+5] != 0 */
+        dat51 <= PR((uint16_t)(0x06F2u + dat50))) {     /* afd9: DAT_51 <= LUT width */
+      for (i = 0; i < dat51; i++)                       /* afed-b017: SRC[2+i] -> work[0x0800+DAT53+i] */
         PR((uint16_t)(0x0800u + (uint8_t)(dat53 + i))) = SBP2_RD(src, (uint8_t)(2 + i));
-      }
+      if (dat50 == 8) { uart_puts("\r\n[af38-A:cm8]"); }  /* b01f: cm_command_dispatch (not the routing desc) */
+    } else {
+      SBTX_WR(1, (uint8_t)(SBTX_RD(1) & 0x80));         /* 9988: SBTX[1] &= 0x80 */
+      SBTX_WR(2, 1);                                    /* b056: r3_write 1 -> SBTX[2] */
+      /* af38-A gate FAIL is normal for the routing descriptor (DAT_50<0x0e); silent (host retries pre-CL0) */
     }
   } else {
-    /* ---- BRANCH B (b024-b094): 0x0800 work buffer -> RX/DST plane (the response payload) ----
-     * b024: 0x0754 = DAT51. b076-b094: for i in [0..DAT51): R7 = work[0x0800 + DAT53 + i];
-     * DST[2+i] (0x2900 plane via 99e7 = 0x2900 + (i+2)) = R7. (b01f d283 only if DAT50==8 -- a
-     * rare lane-bond sub-path; reproduced as the bounded copy, d283 itself is the [SB P03] helper
-     * gated on DAT50==8 which the routing descriptor is not.) */
+    /* ---- BRANCH B (b024-b094): 0x0800 work buffer -> 0x2900 TX plane. 0x0754=DAT_51 ---- */
     PR(0x0754) = dat51;
-    {
-      uint8_t n = dat51; if (n > 0x40) n = 0x40;
-      for (i = 0; i < n; i++) {
+    if (dat50 >= 0x0e && dat50 < 0x13 &&                /* gate bit7 = (0x0e<=DAT50<0x13) */
+        (lut = PR((uint16_t)(0x06F2u + dat50))) != 0 && /* 976e(DAT50-0xe) != 0 */
+        dat4f == 0) {                                   /* b040: DAT_4f (status-5) == 0 */
+      if ((uint8_t)(lut + 1) <= PR(0x0754)) PR(0x0754) = lut;   /* b060-b072: clamp 0x0754 to LUT width */
+      for (i = 0; i < PR(0x0754); i++)                  /* b076-b094: work[0x0800+DAT53+i] -> SBTX[2+i] */
         SBTX_WR((uint8_t)(2 + i), PR((uint16_t)(0x0800u + (uint8_t)(dat53 + i))));
-      }
+    } else {
+      SBTX_WR(1, (uint8_t)(SBTX_RD(1) & 0x80));         /* 9988: SBTX[1] &= 0x80 */
+      PR(0x0754) = 0;
+      /* af38-B gate FAIL is normal for the routing descriptor (DAT_50<0x0e); silent (host retries pre-CL0) */
     }
   }
 
@@ -236,8 +255,9 @@ static void sb_af38_descriptor_response(void) {
    *   block (R2=0x28 in BOTH branches: A uses afaf R2=0x28 / afa8 DEC 0x29->0x28; B uses b030 R2=0x28).
    *   The offset is port-selected: port0 -> SB[0x0D], port!=0 -> SB[0x0E] (b02d/b034 R1=0x0d/0x0e). */
   {
-    uint8_t status = (uint8_t)((PR(0x0754) + 8) | (SB_RD(0x0C) & 0x80));
-    uint8_t soff   = (PR(0x06F0) == 0) ? 0x0D : 0x0E;   /* b02d: port0->0x0d else 0x0e */
+    uint8_t status;
+    (void)SB_RD(0x0C);                         /* b096 9695: discarded read of SB[0x0C] before status */
+    status = (uint8_t)((PR(0x0754) + 8) | (SB_RD(0x0C) & 0x80));
     SB_WR(soff, status);                       /* b09c-b0a3: status/length byte (TX ready) */
     /* b0a6-b0ac: SB[0x15] = 0x0753 = THE SB-TRANSPORT TX COMMAND (descriptor w/ bits 0,5 cleared) */
     SB_WR(0x15, PR(0x0753));
@@ -245,22 +265,24 @@ static void sb_af38_descriptor_response(void) {
 
   /* b0af-b0b1: d5da(0) = SB-transport TX trigger. Reproduce its load-bearing arm + bounded poll
    * (the stock d5da busy-polls SB[0x2C].2 forever; bound it so the super-loop can't hang). */
+  /* d5da(0): FIXED 2026-06-12 to the faithful u4lb_d5da (was a STRIPPED repro). The host now reaches
+   * af38 on the live cd3f path, so its TX must be byte-correct to drive the host to climb SB[0x18]. */
   PR(0x0AAC) = 0;                              /* d5da head: 0x0AAC = R7(=0) */
-  { uint8_t t = SB_RD(0x00); SB_WR(0x00, (uint8_t)(t & 0xFE)); }   /* d5ea 9777/&0xfe writeback */
-  SB_WR(0x04, 0x01);                           /* d5f2-d5f6: SB[0x04] = 1 */
-  SB_WR(0x10, 0x01);                           /* d5f9-d5fd: SB[0x10] = 1 (TX go) */
-  { uint16_t g = 0; while (((SB_RD(0x2C) >> 2) & 0x3F) == 0 && ++g < 0x0400) { } }  /* d600 bounded */
+  P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE)); /* d5ea 9777: P1[0x0100]&=0xFE (FIX: was SB[0x00]) */
+  SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));  /* d5f2 98c7: SB[0x04]&=~2 (FIX: was =1) */
+  SB_WR(0x10, 0x01);                           /* d5f9: SB[0x10]=1 (TX go) */
+  { uint16_t g = 0; while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { } }  /* d600 poll bit2 */
+  SB_WR(0x2C, 0x04);                           /* d60d 9799: W1C SB[0x2C].2 (FIX: was missing) */
+  phy_cc10_cmd(1, 0, 0x0B);                    /* d614 e80a: CC10 0x0B settle (FIX: was missing) */
+  SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));  /* d61d 96ee: SB[0x0F]&=~1 (FIX: was missing) */
 
   if (sb_af38_print_budget) {
     sb_af38_print_budget--;
-    uart_puts("\r\n[AF38 752="); uart_puthex(desc752);
-    uart_puts(" 50="); uart_puthex(dat50);
-    uart_puts(" 51="); uart_puthex(dat51);
-    uart_puts(" 52="); uart_puthex(dat52);
-    uart_puts(" tx="); for (i = 0; i < 0x08; i++) uart_puthex(SBTX_RD(i));
-    uart_puts(" sb15="); uart_puthex(SB_RD(0x15));
-    uart_puts(" sb2c="); uart_puthex(SB_RD(0x2C));
-    uart_puts("]\r\n");
+    uart_puts("\r\n[AF38 6F0="); uart_puthex(PR(0x06F0));   /* which port/plane af38 ran for */
+    uart_puts(" src3="); uart_puthex(SBP2_RD(src, 3));      /* plane[3] (the F3/C0 lane byte af38 copies) */
+    uart_puts(" 81A="); uart_puthex(PR(0x081A));            /* af38 dest (after the copy) */
+    uart_puts(" 50="); uart_puthex(dat50); uart_puts(" 52="); uart_puthex(dat52);
+    uart_putc(']');
   }
 }
 
@@ -296,9 +318,29 @@ static void sb_set_connect_present_ebb5(void) {
  * lanes (SB[0x18]->0x752 / SB[0x28]->0x753 for L0, SB[0x19]/SB[0x29] for L1) and runs the cd3f
  * dispatch -> ebb5 (0x0765=1) when the host presents connect. No stack locals beyond the scratch
  * XDATA so it adds ~nothing to main's overlay. Called from the super-loop gated post-connect. */
+/* sb_edd9_receive_ack (CODE_BANK1::edd9) — cd3f's FIRST action on every transport edge: the device's
+ * receive-ACK to the host. Gate = P1[0x0109].0 (9779(9), page1 0x0109 bit0 — NOT SB[0x09]). When set:
+ * clear it (98b7 RMW), strobe SB[0xD8]=2 (973d), reset+restart the E716 PHY link to mode 3 (9789).
+ * [Stock edd9 also does eb62(0,3)+98ec here, but handmade's db7a tail already sets 0x06ED=3/0x0758=0x10
+ * net, so we OMIT those to avoid resetting the route-query sub-FSM from the super-loop.]
+ * handmade had DROPPED this entirely on the cd3f path (sb_chan_prelude was a gutted (void)SB_RD(0x09)
+ * stub with the WRONG address, wired only into c3b2). The host may poll for this ACK before posting the
+ * routing descriptor. The [edd9] UART marker tells us whether the host ever sets P1[0x0109].0. */
+static void sb_edd9_receive_ack(void) {
+  if (P1_RD(0x0109) & 0x01) {                  /* 9779(9): page1 0x0109 bit0 host-request gate */
+    P1_WR(0x0109, P1_RD(0x0109) & 0xFE);       /* 98b7: ACK/clear the request bit */
+    SB_WR(0xD8, 0x02);                         /* 973d: SB[0xD8] (page1 0x28D8) = 2 (receipt strobe) */
+    PR(0xE716) = PR(0xE716) & 0xFC;            /* 9789: E716 PHY link reset */
+    PR(0xE716) = (PR(0xE716) & 0xFC) | 0x03;   /* 9789: restart to mode 3 */
+    uart_puts("\r\n[edd9]");                    /* DIAG: edd9 fired (host had set P1[0x0109].0) */
+  }
+}
+static void sb_d4cd_transport_edges(void);   /* fwd: faithful stock d4cd transport-edge dispatch (below) */
 static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
-  uint8_t desc4e = SB_RD(desc4e_off);        /* cd42-cd55: 0x4E (IRAM scratch) = SB[0x28+port] */
+  uint8_t desc4e;
   uint8_t d752;
+  sb_edd9_receive_ack();                     /* edd9: cd3f's first action (device->host receive-ACK) */
+  desc4e = SB_RD(desc4e_off);                /* cd42-cd55: 0x4E (IRAM scratch) = SB[0x28+port] */
   PR(0x0752) = SB_RD(desc752_off);           /* cd57-cd6a: 0x752 = SB[0x18+port] */
   d752 = PR(0x0752);
   /* ---- dispatch (cd86-cdf4) ---- */
@@ -334,10 +376,18 @@ static void sb_connect_present_poll(void) {
    * handshake advances and the HW fills the 0x2a00 RX plane that eaac relays into 0x0777. Re-running
    * is harmless once latched (the cd3f gates re-guard each branch). Stop only once state-3 confirms
    * (0x06ED!=3, i.e. cm_conn_routing_setup passed -> the engine moved to b0b4). */
-  sb_cd3f_dispatch(0x28, 0x18);              /* L0 (port 0): 0x4E=SB[0x28], 0x752=SB[0x18] */
-  sb_cd3f_dispatch(0x2A, 0x19);              /* L1 (port 1): 0x4E=SB[0x2A] (FIX #9: ROM 0x2135
-                                              * {28 28, 28 2a} -> port1=SB[0x2a] NOT SB[0x29]),
-                                              * 0x752=SB[0x19] (ROM 0x2125 {28 18, 28 19}) */
+  /* FAITHFUL to stock d4cd (CODE_BANK1::d4cd): it sets 0x06F0 = port IMMEDIATELY before each cd3f
+   * call (SB[0x28].3 edge -> 0x06F0=0 -> cd3f; SB[0x2A].3 edge -> 0x06F0=1 -> cd3f), so cd3f and the
+   * eaac/af38 it dispatches read the descriptor from the plane that MATCHES the port (9a3e: plane =
+   * ROM 0x212d[0x06F0] = {0x2a00, 0x2b00}). cd3f's gate then filters on 0x752.4 vs 0x06F0 so only the
+   * port carrying the lane-present descriptor dispatches. The prior handmade "probe both planes + pin
+   * 0x06F0" hack ran BOTH dispatches with ONE 0x06F0 -> eaac(0x077A) and af38(0x081A) could read
+   * different planes -> the latch 0x0819.0 = (0x077A.0 && 0x081A.0) was non-deterministic (F3 vs C0).
+   * Setting 0x06F0 per-port (stock-exact) makes each port's eaac+af38 coherent and the connect
+   * deterministic. Keep the 0x0777!=0x0C gate (stop once the route descriptor is confirmed; stock stops
+   * naturally when the transport edges cease). */
+  /* d4cd transport-edge dispatch now runs in the a066 ISR (sb_d4cd_transport_edges), faithful to
+   * stock -- so cd3f/eaac/af38 sample the host descriptor event-driven, not by super-loop polling. */
   if (PR(0x0765)) return;
   /* DOCUMENTED-EQUIVALENT (per the unblock spec): on the Intel MTL TB4 host the SB-router CONNECT
    * engages (C80A.5 / [===SB Con===] -> sb_con_consequence set 0x06EC=1) but the host never drives
@@ -375,22 +425,36 @@ static void sb_connect_present_poll(void) {
  * latch. Pure event tracking driven by HW-set SB bits — reproduced as the bit-3 W1C acks + latch
  * advance. The cd3f connect-descriptor read is reproduced in the SUPER-LOOP (sb_connect_present_poll)
  * NOT here, to keep this a066/INT1 path byte-identical to HEAD (the C80A.5 stack cliff). */
+/* d4cd transport-edge dispatch (SB[0x28].3/SB[0x2A].3 -> 0x06F0=port -> cd3f -> W1C, 0x06EE toggle).
+ * FAITHFUL to stock CODE_BANK1::d4cd: the descriptor dispatch (cd3f -> eaac/af38) runs PER-EDGE with
+ * 0x06F0 set to the matching port ATOMICALLY before cd3f, so eaac(0x077A) and af38(0x081A) read the
+ * SAME plane (the one whose transport edge fired). Stock runs this inside a066 (the INT1 ISR); handmade
+ * runs it in the SUPER-LOOP instead (the a066 ISR can't afford cd3f's stack depth -- sp=0x7F cliff), so
+ * the ISR's sb_transport_substate_poll below does NOT touch the transport edges (leaves them for here).
+ * Called from sb_connect_present_poll (super-loop). */
+static volatile uint8_t __xdata sb_d4cd_log_budget;   /* DIAG: seeded in main() */
+static void sb_d4cd_transport_edges(void) {
+  uint8_t s28 = SB_RD(0x28), s2a = SB_RD(0x2A);
+  if (((s28 | s2a) & 0x08) && sb_d4cd_log_budget) {  /* DIAG: log every pending transport edge + alt state */
+    sb_d4cd_log_budget--;
+    uart_puts("\r\n[d4cd 28="); uart_puthex(s28); uart_puts(" 2A="); uart_puthex(s2a);
+    uart_puts(" EE="); uart_puthex(PR(0x06EE)); uart_puts(" F0="); uart_puthex(PR(0x06F0));
+    uart_puts(" ED="); uart_puthex(PR(0x06ED)); uart_putc(']');
+  }
+  if (s28 & 0x08) {                                  /* SB[0x28].3 (port0 transport edge) */
+    if (PR(0x06EE) == 0) { PR(0x06F0) = 0; sb_cd3f_dispatch(0x28, 0x18); SB_WR(0x28, 0x08); PR(0x06EE) = 1; }
+  }
+  if (s2a & 0x08) {                                  /* SB[0x2A].3 (port1 transport edge) */
+    if (PR(0x06EE) == 1) { PR(0x06F0) = 1; sb_cd3f_dispatch(0x2A, 0x19); SB_WR(0x2A, 0x08); PR(0x06EE) = 0; }
+  }
+}
+/* sb_transport_substate_poll: the a066-ISR-side d4cd tail -- SB[0x81]/[0x83] LINK edges only (0x06EF).
+ * The transport edges (SB[0x28]/[0x2A].3) are handled by sb_d4cd_transport_edges in the super-loop, so
+ * this is kept lightweight + stack-safe for the ISR. */
 static void sb_transport_substate_poll(void) {
-  /* SB[0x28].3 (L0 transport) */
-  if (SB_RD(0x28) & 0x08) {
-    if (PR(0x06EE) == 0) { PR(0x06F0) = 0; SB_WR(0x28, SB_RD(0x28) & 0xF7); PR(0x06EE) = 1; }
-  } else if (PR(0x06EE) == 1) {
-    PR(0x06F0) = 1; SB_WR(0x28, SB_RD(0x28) & 0xF7); PR(0x06EE) = 0;
-  }
-  /* SB[0x2A].3 (L1 transport) — symmetric on the same 0x06EE latch */
-  if (SB_RD(0x2A) & 0x08) {
-    if (PR(0x06EE) == 1) { PR(0x06F0) = 1; SB_WR(0x2A, SB_RD(0x2A) & 0xF7); PR(0x06EE) = 0; }
-  }
-  /* SB[0x81].3 (L0 link) -> 0x06EF latch */
   if (SB_RD(0x81) & 0x08) {
     if (PR(0x06EF) == 0) { SB_WR(0x81, SB_RD(0x81) | 0x02); PR(0x06EF) = 1; }
   }
-  /* SB[0x83].3 (L1 link) -> 0x06EF latch */
   if (SB_RD(0x83) & 0x08) {
     if (PR(0x06EF) == 1) { SB_WR(0x83, SB_RD(0x83) | 0x02); PR(0x06EF) = 0; }
   }
@@ -490,6 +554,18 @@ static void sb_con_consequence(void) {
    * super-loop's `if(0x06ED==0)` first-arm + [LB arm] print is now redundant (kept harmless). */
   PR(0x06ED) = 3;                              /* eb62(0,3): FSM -> state 3 (ConnRout) */
   PR(0x0758) = 0x10;                           /* 98ec: cm_conn_routing_setup sub-FSM entry */
+  /* 98ec->ee57: arm the lane-train trigger ec51 if ((CCE1&1)==0 || (CCE1&2)). FIX 2026-06-12: the old
+   * db7a tail INLINED only the snapshot and DROPPED ec51 (it lived only in u4lb_98ec @ main.c's dead
+   * 0x06ED==0 first-arm). With ec51 never armed, CCE4:CCE5 (HW lane-train counter) never started ->
+   * b0b4 WIDGATE-abort forever. Inline ec51 here (bare stores, stack-cliff safe) so it arms at [SB Con]
+   * BEFORE state-4's width gate. CCE1=0 initially -> condition fires once; CCE1=1 after -> no re-arm. */
+  if (!(PR(0xCCE1) & 0x01) || (PR(0xCCE1) & 0x02)) {
+    PR(0xCCE1) = 0x04; PR(0xCCE1) = 0x02;      /* ec51: CCE1 strobe 4 then 2 */
+    PR(0xCCE0) = (PR(0xCCE0) & 0xF8) | 0x04;   /* CCE0 bits2:0 = 4 */
+    PR(0xCCE2) = 0xFF; PR(0xCCE3) = 0xFF;       /* CCE2=CCE3=0xFF */
+    PR(0xCCE1) = 0x01;                          /* CCE1=1 (arm the trigger) */
+    PR(0x0774) = PR(0x0774) ^ 0x01;             /* 0x0774 ^= 1 */
+  }
   PR(0x0768) = PR(0xCCE4);                      /* 98ec: lane-width snapshot hi (GAP1) */
   PR(0x0769) = PR(0xCCE5);                      /* 98ec: lane-width snapshot lo (GAP1) */
   /* drive bank0_8a89 from the super-loop ONCE (the connect edge re-fires; we want one drive). */
@@ -518,7 +594,7 @@ static void sb_lane_bonded_consequence(void) {
  * eb0a; if 0x09FA.1: (0x0B41 gate) pcie_downstream_link_bringup(0x0AEF); CA60 &= ~0x08; if 0x0AF1.0 04f3.
  * The downstream link bring-up == handmade pcie_power_on(). pcie_power_on() uses sleep()/long polls,
  * so we DEFER it to the super-loop (set sb_tunnel_up_pending) rather than run it inside the INT1 ISR. */
-static volatile uint8_t __xdata __at(0x880F) sb_tunnel_up_pending;   /* IRAM-HEADROOM FIX: relocated to XDATA */
+static volatile uint8_t __xdata __at(0x0B4F) sb_tunnel_up_pending;   /* IRAM-HEADROOM FIX: relocated to XDATA */
 static void sb_lane_bond_complete_tunnel_up(void) {
   sb_rom_descriptor_load();                  /* b7a4: re-seed the router DROM tables */
   if (PR(0x09FA) & 0x02) {                    /* 0x09FA.1 tunnel route */
@@ -597,8 +673,23 @@ static void sb_channel_connect_service(void) {
  * PART 1 (a066-a0d5): per-channel connect poll over idx 0..3.
  * PART 2 (a0d7-a31d): connect/disconnect edge + lane CL0/event servicing, all W1C.
  * ==================================================================================== */
+static volatile uint8_t a066_dbg_budget = 30;     /* auto __xdata -> chip-CM XSEG (state-5 safe) */
+static volatile uint8_t a066_dbg_ret_budget = 30;
 static void sb_router_event_handler(void) {
   uint8_t idx, bm, cs;
+
+  /* TRIAGE: a066 entered at state-5? which event bits? (the post-walker hang suspect) */
+  if (a066_dbg_budget && PR(0x06ED) == 5) {
+    a066_dbg_budget--;
+    uart_puts("\r\n[a66 2d="); uart_puthex(SB_RD(0x2D));
+    uart_puts(" 2c="); uart_puthex(SB_RD(0x2C));
+    uart_puts(" 66="); uart_puthex(SB_RD(0x66));
+    uart_puts(" 9e="); uart_puthex(SB_RD(0x9E));
+    uart_puts(" 26="); uart_puthex(SB_RD(0x26));
+    uart_puts(" c9="); uart_puthex(SB_RD(0xC9));
+    uart_puts(" 109="); uart_puthex(P1_RD(0x0109));
+    uart_putc(']');
+  }
 
   /* ---- PART 1: per-channel connect poll (a066-a0d5) ---- */
   for (idx = 0; idx < 4; idx++) {
@@ -615,7 +706,10 @@ static void sb_router_event_handler(void) {
   }
 
   /* ---- PART 2: connect/disconnect edge + lane events (a0d7+) ---- */
-  sb_transport_substate_poll();                /* a0d7: d4cd */
+  sb_d4cd_transport_edges();                   /* a0d7: d4cd transport edges (cd3f per-port 0x06F0) -- in
+                                                * the ISR like stock, so af38/eaac sample the host's
+                                                * descriptor at the right (event-driven) moment */
+  sb_transport_substate_poll();                /* a0d7: d4cd link edges (SB[0x81]/[0x83]) */
 
   /* a0da: SB[0x2D] active-low connect/disconnect status */
   cs = SB_RD(0x2D);
@@ -726,6 +820,7 @@ static void sb_router_event_handler(void) {
   }
 
   (void)SB_RD(0xF6);                           /* a317-a31d: tail status latch read */
+  if (a066_dbg_ret_budget && PR(0x06ED) == 5) { a066_dbg_ret_budget--; uart_putc('@'); }  /* a066 returned cleanly */
 }
 
 /* ====================================================================================
@@ -746,7 +841,7 @@ static void sb_router_event_handler(void) {
  * [0xA1] read 0x07 (NOT CL0=2) and never change, and 0x072B/0x072C are seeded 0x07, so this advance
  * is a correct NO-OP here — the host stalls at SB-connect and the lanes never reach CL0. It is wired
  * faithfully so that IF a host ever drives the lanes to CL0, the advance fires. ==================*/
-static volatile uint8_t __xdata __at(0x8810) cb10_seen;     /* IRAM-HEADROOM FIX: relocated to XDATA; sticky: did SB[0xA0]/[0xA1] ever change */
+static volatile uint8_t __xdata __at(0x0B50) cb10_seen;     /* IRAM-HEADROOM FIX: relocated to XDATA; sticky: did SB[0xA0]/[0xA1] ever change */
 static void sb_cb10_lane_advance(void) {
   uint8_t a5b, lat;
   /* lane A: SB[0xA0] low nibble vs 0x072B */
