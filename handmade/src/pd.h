@@ -1,21 +1,14 @@
 #ifndef PD_H
 #define PD_H
 /*
- * USB-PD / Type-C CC-controller keystone driver.
+ * USB-PD / Type-C CC-controller driver.
  *
  * Faithful reimplementation of the ASM2464PD stock firmware (fw_tinygrad.bin) PD attach +
- * power-contract bring-up, reverse-engineered from the Ghidra decompilation. See
- * handmade/USB4_RE.md for the full phase reference. Every function cites the stock body
- * offset it mirrors (Ghidra addr == fw_tinygrad body offset).
+ * power-contract bring-up. See handmade/USB4_RE.md for the phase reference. Each function
+ * cites the stock body offset it mirrors (Ghidra addr == fw_tinygrad body offset).
  *
- * Goal of this first milestone: get the TB4 host to engage USB-PD with the handmade fw —
- * i.e. make the PD-interrupt source (C80A bit6) fire and the host send a Source_Cap. Basic
- * PD power negotiation runs over the Type-C CC lines and is independent of USB4 data mode,
- * so this path is exercised before any PHY/VDM/tunnel work. Success = "[PD_int:" on UART.
- *
- * Additive to the USB3 firmware: touches only the PD engine (E4xx), CC controller (CCxx),
- * the interrupt-enable group (C800/C801/CA60/C809) and PD state RAM (0x07xx) — none of which
- * the USB3 device path uses.
+ * Touches only the PD engine (E4xx), CC controller (CCxx), the interrupt-enable group
+ * (C800/C801/CA60/C809) and PD state RAM (0x07xx) — none of which the USB3 device path uses.
  */
 #include "types.h"
 #include "registers.h"
@@ -23,14 +16,12 @@
 /* Volatile MMIO accessor (polling loops must not be optimised away). */
 #define PR(a) XDATA_REG8V(a)
 
-/* Set once the host actually engages PD (a PD message is received).
- * IRAM-HEADROOM FIX: persistent state relocated to XDATA scratch (0x8800..); seeded in main(). */
+/* Set once the host actually engages PD (a PD message is received). XDATA scratch (IRAM cliff). */
 static volatile uint8_t __xdata __at(0x0B45) pd_seen;
 
 /* PD message dispatcher (defined in pd_dispatch.h, #included after pd.h). */
 static void pd_rx_message_dispatch(void);
-/* Set if any CC-controller command wait timed out (the CC engine isn't responding — most
- * likely the boot-time Type-C/CC PHY setup is still missing). Surfaced on the status line. */
+/* Set if any CC-controller command wait timed out (CC engine not responding). Shown on status line. */
 static volatile uint8_t __xdata __at(0x0B46) pd_cc_timeout;
 
 #define PD_WAIT_LIMIT 0x4000u
@@ -48,22 +39,21 @@ static void pd_wait(uint16_t reg, uint8_t mask, uint8_t set) {
 /* E402 status: bits1-3 busy, (&0x1F)|0x20=start TX                                           */
 /* E403/E404/E405 TX command descriptor                                                       */
 /* E409 mode; E40A=0x0F; E40B sub-block enables (bits1-3 = RX/TX enable mask 0x0E)            */
-/* E40D=0x28; E40E=0x8A; E411=0xA1/E412=0x79 Rp/Rd CC comparator thresholds (REQUIRED)        */
+/* E40D=0x28; E40E=0x8A; E411=0xA1/E412=0x79 Rp/Rd CC comparator thresholds                   */
 /* E413 RX/TX enable (&0x8F)|0x60; E40F RX-event status (bit0=msg, W1C); E410 RX-event 2      */
-/* E41C TX trigger/busy (bit0); E420.. PD TX message buffer (0xE420-0xE43F)                   */
 /* E401/E406/E407/E408 RDO/CRC timing constants (set by pd_da51)                              */
 
 /* ---- CC controller command interface (0xCCxx) ---- */
 /* CC88 low3=opcode (2=hard-reset-TX); CC89 bit0=go / bit1=done / write2=ack; CC8A param;     */
 /* CC8B value/timeout. CC80/CC98 event-enable; CC81 attach-edge / CC99 role event (bit1, W1C) */
 
-/* ---- PD state RAM (stock globals; free in handmade — SDCC owns only 0x0000-0x000F) ---- */
+/* ---- PD state RAM (stock globals) ---- */
 /* 0x07BC PD role/contract state; 0x07BD PD msg substate (1=init); 0x07D5 from E400.6;        */
 /* 0x07DA..0x07E2 PD timers; 0x07DF hard-reset-done flag                                       */
 
 /* ---- interrupt routing / global mode ---- */
 /* C800 sys int status/enable (bit0,bit2); C801 int enable (bit4); CA60 clk/pwr int           */
-/* C809 PD interrupt enable (bit5 = 0x20, REQUIRED); 0x09F9 USB4 mode flag (1=USB4)           */
+/* C809 PD interrupt enable (bit5 = 0x20); 0x09F9 USB4 mode flag (1=USB4)                      */
 
 /* da51: RDO/CRC timing constants for the PD engine. */
 static void pd_da51(void) {
@@ -78,8 +68,8 @@ static void pd_da51(void) {
   }
 }
 
-/* cc_pd_phy_term_init @0xAE87 — program CC Rp/Rd termination + arm the PD command/RX engine.
- * This is what makes the host see a PD-capable Type-C sink attach and lets the device RX. */
+/* cc_pd_phy_term_init @0xAE87 — program CC Rp/Rd termination + arm the PD command/RX engine,
+ * so the host sees a PD-capable Type-C sink attach and the device can RX. */
 static void cc_pd_phy_term_init(void) {
   REG_CMD_CONFIG = (REG_CMD_CONFIG & 0xBF) | 0x40;
   REG_CMD_CFG_E40A = 0x0F;
@@ -100,21 +90,21 @@ static void cc_pd_phy_term_init(void) {
   pd_wait(0xE402, 0x08, 0);                   /* wait engine idle */
   REG_CMD_CTRL_E409 &= 0xFE;
   REG_CMD_CTRL_E409 = (REG_CMD_CTRL_E409 & 0xBF) | 0x40;
-  REG_CMD_TRIGGER = 0x40;                          /* 9713(0x40): seed TX buf[0] */
+  REG_CMD_TRIGGER = 0x40;                          /* 9713: seed TX buf[0] */
   REG_CMD_CTRL_E409 = (REG_CMD_CTRL_E409 & 0xF1) | 0x06;
   REG_CMD_CTRL_E400 = (REG_CMD_CTRL_E400 & 0xBF) | 0x40;    /* CC orientation bit6 */
-  REG_CMD_CFG_E411 = 0xA1;                          /* Rp/Rd comparator thresholds (REQUIRED) */
+  REG_CMD_CFG_E411 = 0xA1;                          /* Rp/Rd comparator thresholds */
   REG_CMD_CFG_E412 = 0x79;
-  REG_CMD_CTRL_E400 = (REG_CMD_CTRL_E400 & 0xC3) | 0x3C;    /* enable CC drive/termination (host sees attach) */
+  REG_CMD_CTRL_E400 = (REG_CMD_CTRL_E400 & 0xC3) | 0x3C;    /* enable CC drive/termination */
   REG_CMD_CTRL_E409 &= 0x7F;
-  REG_INT_CTRL = (REG_INT_CTRL & 0xDF) | 0x20;    /* enable PD interrupt source (REQUIRED) */
+  REG_INT_CTRL = (REG_INT_CTRL & 0xDF) | 0x20;    /* enable PD interrupt source */
   pd_da51();
   REG_CMD_CFG_E40E = 0x8A;
-  REG_CMD_CTRL_E400 = (REG_CMD_CTRL_E400 & 0x7F) | 0x80;    /* PD engine enable (REQUIRED) */
+  REG_CMD_CTRL_E400 = (REG_CMD_CTRL_E400 & 0x7F) | 0x80;    /* PD engine enable */
   REG_CMD_CONFIG &= 0xFE;
   REG_PD_CTRL_E66A &= 0xEF;
   REG_CMD_CFG_E40D = 0x28;
-  REG_CMD_CFG_E413 = (REG_CMD_CFG_E413 & 0x8F) | 0x60;    /* RX+TX enable (REQUIRED) */
+  REG_CMD_CFG_E413 = (REG_CMD_CFG_E413 & 0x8F) | 0x60;    /* RX+TX enable */
   PR(0xCAC4) &= 0xFE;
   REG_CMD_CONFIG &= 0xDF;
   PR(0xC698) &= 0xDF;
@@ -161,7 +151,7 @@ static void pd_internal_state_init(void) {
 }
 
 /* pd_drive_hard_reset / Drive_HardRst @0xBE8B — transmit a USB-PD HARD RESET ordered set to
- * force the host to drop its PD contract and re-send Source_Cap. No-op (print only) once USB4
+ * force the host to drop its PD contract and re-send Source_Cap. Print-only no-op once USB4
  * is already established ((E302>>4)&3 == 3). */
 static void pd_drive_hard_reset(void) {
   uint8_t lm = (REG_PHY_MODE_E302 & 0x30) >> 4;
@@ -198,7 +188,7 @@ static void pd_drive_hard_reset(void) {
 }
 
 /* init_sys_flags @0x4BE6 (subset) — route the C806/C80A PD/system interrupt aggregate to the
- * 8051 EX1 line so INT1 actually fires. Without this the PD-RX ISR never runs. */
+ * 8051 EX1 line so INT1 fires. Without this the PD-RX ISR never runs. */
 static void pd_int1_enable_group(void) {
   REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x10;
   REG_INT_STATUS_C800 = (REG_INT_STATUS_C800 & 0xFB) | 0x04;
@@ -208,23 +198,21 @@ static void pd_int1_enable_group(void) {
 }
 
 /* Top-level keystone bring-up. Mirrors pd_cc_attach_term_setup @0xBAA0 (minus the boot
- * mode-decision, which we short-circuit by forcing the USB4 mode flag for now). */
+ * mode-decision, short-circuited by forcing the USB4 mode flag). */
 static void pd_keystone_init(void) {
   pd_int1_enable_group();
-  /* 0x09F9 runtime mode flag. bit7 = VDM-ACK enable (Discover and EnterMode ACK gates); bits1:0
-   * = route -> 0x09FA. 0x87 = VDM-ACK + route 3 (USB4 tunnel): (0x09FA&0x81)!=0 selects the
-   * tunnel route and 0x09FA.1 fires SB[0xD8]=2 + E716 reflip in usb4_connect_u4. (Was 0x01, which
-   * clears bit7 -> all VDM NAK and mis-selects route 1.) See USB4_TUNNEL_PLAN.md sec 4. */
+  /* 0x09F9 runtime mode flag. bit7 = VDM-ACK enable (Discover/EnterMode ACK gates); bits1:0
+   * route -> 0x09FA. 0x87 = VDM-ACK + route 3 (USB4 tunnel): (0x09FA&0x81)!=0 selects the
+   * tunnel route and 0x09FA.1 fires SB[0xD8]=2 + E716 reflip in usb4_connect_u4. */
   PR(0x09F9) = 0x87;           /* VDM-ACK + USB4 tunnel route (TODO: real mode-decision @0xB1CB) */
   cc_pd_phy_term_init();
   pd_internal_state_init();
 }
 
-/* pd_rx_isr — the C80A.6 PD-interrupt handler body @0xAF5E. A priority demux over the PD RX
- * event registers E40F/E410: EACH event bit must be W1C-acked or the interrupt re-fires
- * forever. E40F.7=Soft_Rst_Int, E40F.0=message received, E40F.5=Hard_Rst_Int; E410.x are
- * secondary PD engine events. Ends by servicing the E314 PHY-completion bit.
- * (Full PD message decode + power contract — the 0x83d6 dispatcher — is the next milestone.) */
+/* pd_rx_isr — the C80A.6 PD-interrupt handler @0xAF5E. Priority demux over the PD RX event
+ * registers E40F/E410: each event bit must be W1C-acked or the interrupt re-fires forever.
+ * E40F.7=Soft_Rst_Int, E40F.0=message received, E40F.5=Hard_Rst_Int; E410.x are secondary
+ * PD engine events. Ends by servicing the E314 PHY-completion bit. */
 static void pd_rx_isr(void) {
   uint8_t e40f = REG_PHY_EVENT_E40F;
   uart_puts("\n[PD_int:");
@@ -237,7 +225,7 @@ static void pd_rx_isr(void) {
     REG_PHY_EVENT_E40F = 0x80;
   } else if (e40f & 0x01) {          /* message received */
     REG_PHY_EVENT_E40F = 0x01;
-    pd_seen = 1;                     /* host is doing PD — the keystone is cracked */
+    pd_seen = 1;
     pd_rx_message_dispatch();        /* @0x83d6 — Source_Cap -> Request -> power contract */
   } else if (e40f & 0x20) {          /* Hard_Rst_Int (e419) */
     REG_PHY_EVENT_E40F = 0x20;
@@ -254,76 +242,59 @@ static void pd_rx_isr(void) {
   if (REG_DEBUG_STATUS_E314 & 0x01) REG_DEBUG_STATUS_E314 = 0x01;    /* E314 PHY-completion W1C */
 }
 
-/* ====================================================================================
- * cc_pd_timer_tick @0xB4BA — the C806.0 INT1 timer-tick = PD/USB4 policy-engine tick.
- * Forward declarations for usb4_mode_entry_commit (vdm.h, #included AFTER pd.h) and the
- * deeper PD-state helpers. usb4_mode_entry_commit is the USB4 mode-entry latch the host
- * waits on (CC91.1 -> it). pd_drive_hard_reset is defined above.
- * ==================================================================================== */
+/* cc_pd_timer_tick @0xB4BA — the C806.0 INT1 timer-tick = PD/USB4 policy-engine tick.
+ * Forward decl of usb4_mode_entry_commit (vdm.h, #included AFTER pd.h): the USB4 mode-entry
+ * latch the host waits on (CC91.1 -> it). pd_drive_hard_reset is defined above. */
 static uint8_t usb4_mode_entry_commit(void);          /* vdm.h @0xD78A; returns mode in R7 */
 
-/* cc_cc23_reinit_event @0xE3D8 — CC23.1 re-init / SB-reconnect event. Stock body chains into
- * banked helpers (e3b7 if 0x0B41, 3578(0x0AEE), d810 link re-prep) then 0x07E8=0, 0x0B2F=1.
- * The 3578/d810 chain is a large banked re-prep path (CM-owned); transcribe the two verified
- * XDATA seeds and NOTE the banked chain. W1C of CC23 is done by the caller. */
+/* cc_cc23_reinit_event @0xE3D8 — CC23.1 re-init / SB-reconnect event. Stock also chains into
+ * banked link re-prep (3578(0x0AEE)+d810, CM-owned) before these XDATA seeds; banked chain not
+ * transcribed. W1C of CC23 is done by the caller. */
 static void cc_cc23_reinit_event(void) {
-  /* NOTE: stock also calls 3578(0x0AEE)+d810 (banked link re-prep) before these writes; not
-   * transcribed (deep/banked, CM-owned). The verified tail state-seeds are kept. */
   PR(0x07E8) = 0x00;                                  /* e3f2 */
   PR(0x0B2F) = 0x01;                                  /* e3f7 */
 }
 
 /* cc_state_full_reset @0xD676 — Type-C error-recovery. Stock body is a single banked uart_puts
- * (R3:R2:R1=0xFF:0x23:0x4B -> string "[Error_Recovery]" via the r3_read_dispatch print routine
- * @0x538d->0x0bc8); it is a diagnostic print, NOT a HW register op. */
+ * of "[Error_Recovery]" (via r3_read_dispatch print @0x538d->0x0bc8); diagnostic print, no HW op. */
 static void cc_state_full_reset(void) {
   uart_puts("[Error_Recovery]\n");                    /* d676: 538d print of 0x234B string */
 }
 
-/* pd_cc81_hard_reset_4 @0xE90B — CC81 |= 4 then pd_drive_hard_reset (LJMP 0xBE8B). Verbatim. */
+/* pd_cc81_hard_reset_4 @0xE90B — CC81 |= 4 then pd_drive_hard_reset (LJMP 0xBE8B). */
 static void pd_cc81_hard_reset_4(void) {
   REG_CPU_INT_CTRL = 0x04;                                  /* e910 (MOV #4, not RMW per disasm) */
   pd_drive_hard_reset();                              /* e911 LJMP 0xBE8B */
 }
 
-/* pd_queue_ctrl_msg @0xE529 — enqueue a PD control message (code in `code`). Stock: 0x0AA3=code;
- * dd42(0); if e6d2() (mailbox build/send, banked: e396/0dc5/d17a) returns nonzero then
- * 0x7000=0x0AA3 + e478() (banked send: 0d84/b851/b104). The e6d2/e478 mailbox path is deep and
- * banked (CM/PD TX engine); transcribe the two verified XDATA writes (0x0AA3 record + dd42(0))
- * and NOTE the banked send. The timer-tick's MUST-BE-CORRECT branches (CC91 commit, CC81
- * hard/full reset) do not depend on this deep path; e529 is reached only when 0x07BC!=0. */
+/* pd_queue_ctrl_msg @0xE529 — enqueue a PD control message. Stock: 0x0AA3=code; dd42(0); if
+ * e6d2() returns nonzero then 0x7000=0x0AA3 + e478(). The e6d2/e478 mailbox send path is deep and
+ * banked (CM/PD TX engine, not transcribed); the two verified XDATA writes are kept. e529 is
+ * reached only when 0x07BC!=0, off the timer-tick's must-be-correct branches. */
 static void pd_queue_ctrl_msg(uint8_t code) {
   PR(0x0AA3) = code;                                  /* e52d: record ctrl-msg code */
-  REG_PHY_LINK_CTRL = 0x00;                                  /* e530: dd42(0) with param 0 -> E7E3=0 */
-  /* NOTE: stock e533 e6d2()/e541 e478() PD-TX mailbox send not transcribed (deep banked). */
+  REG_PHY_LINK_CTRL = 0x00;                                  /* e530: dd42(0) -> E7E3=0 */
 }
 
-/* cc_cc99_default_event @0xE883 — CC99 default branch. Stock: e73a (clear PD TX buf), then
- * 95e1(R5=0,R7=0x10) + LJMP e1c6 (PD-TX engine drain). Both are banked PD-TX helpers; the
- * channel's required side effect for the timer-tick is the CC99 W1C ack (done by the caller).
- * NOTE the banked TX drain. */
+/* cc_cc99_default_event @0xE883 — CC99 default branch. Stock: e73a (clear PD TX buf) + 95e1/e1c6
+ * (banked PD-TX drain, not transcribed). The CC99 W1C ack is performed by the caller. */
 static void cc_cc99_default_event(void) {
-  /* NOTE: stock e73a (TX buf clear) + 95e1/e1c6 (banked PD-TX drain) not transcribed. The CC99
-   * W1C ack is performed by the caller so the source can't storm. */
 }
 
-/* cc_ccf9_subdemux @0xDF79 — CCF9.1 sub-demux on 0x0A9D (copied from 0x0B1B). Stock: e74e then
- * dispatch on 0x0A9D: ==1 -> e374; ==2 && 0x07FF==0x69 -> e545; ==3 -> 0x055c. All banked CM
- * sub-handlers. Transcribe the verified 0x0A9D<-0x0B1B copy and NOTE the banked dispatch. */
+/* cc_ccf9_subdemux @0xDF79 — CCF9.1 sub-demux on 0x0A9D (copied from 0x0B1B). Stock then
+ * dispatches: ==1->e374, ==2&&0x07FF==0x69->e545, ==3->055c (banked CM sub-handlers, not
+ * transcribed). The verified 0x0A9D<-0x0B1B copy is kept. */
 static void cc_ccf9_subdemux(void) {
   PR(0x0A9D) = PR(0x0B1B);                             /* df7c-df80 */
-  /* NOTE: stock e74e + (0x0A9D==1->e374 / ==2&&0x07FF==0x69->e545 / ==3->055c) banked CM
-   * sub-handlers not transcribed. */
 }
 
 /* cc_pd_timer_tick @0xB4BA — INT1 C806.0 timer-tick = PD/USB4 policy-engine tick. Services 6
  * Type-C/CC controller per-channel event regs (CC23/CC81/CC91/CC99/CCD9/CCF9), bit1=event,
- * W1C by writing 2. CC91.1 -> usb4_mode_entry_commit (USB4 mode-entry latch the host waits on);
- * CC81.1 -> hard/full reset re-elicitation of Source_Cap. Verbatim from stock disasm @0xB4BA. */
-/* Instrumentation (decision-rule diagnostic): tick_seen counts C806.0 timer-tick entries;
- * cc_hit is a bitmask of which CC channels ever showed bit1 (1=CC23,2=CC81,4=CC91,8=CC99,
- * 0x10=CCD9,0x20=CCF9). Surfaced on the [U ...] status line. */
-static volatile uint8_t __xdata __at(0x0B47) tick_seen;   /* IRAM-HEADROOM FIX: relocated to XDATA */
+ * W1C by writing 2. CC91.1 -> usb4_mode_entry_commit (USB4 mode-entry latch); CC81.1 ->
+ * hard/full reset re-elicitation of Source_Cap. */
+/* Instrumentation: tick_seen counts C806.0 timer-tick entries; cc_hit is a bitmask of which CC
+ * channels ever showed bit1 (1=CC23,2=CC81,4=CC91,8=CC99,0x10=CCD9,0x20=CCF9). On [U ...] line. */
+static volatile uint8_t __xdata __at(0x0B47) tick_seen;   /* XDATA scratch (IRAM cliff) */
 static volatile uint8_t __xdata __at(0x0B48) cc_hit;
 
 static void cc_pd_timer_tick(void) {
