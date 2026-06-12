@@ -102,10 +102,14 @@ static void sb_write_c9_ack(uint8_t pos) {
 /* Print budget for the [EAAC] dump so the super-loop poll can't saturate the UART. Seeded =6 in
  * main()'s 0x8800.. zero-init window (extended below). */
 
-/* The eaac base hi byte, selected by the cd3f substate port (0x06F0): port0 -> 0x2a00, port1 ->
- * 0x2b00. (cd3f/eaac both derive it from 0x06F0 via 9a3e + ROM 0x212d.) */
+/* The per-port SB-RX descriptor plane base, selected by the cd3f substate port (0x06F0): the connect
+ * edges use port 0/1 (0x2a00/0x2b00); the LINK edges (SB[0x81]/[0x83], where the route-query RESPONSE
+ * with the CL snap arrives) use port 2/3 (0x2c00/0x2d00). ROM CODE 0x212d = {2a00,2b00,2c00,2d00}
+ * (read_memory byte-exact); cd3f/eaac/af38 all derive the plane from 0x06F0 via 9a3e + ROM 0x212d. */
+static __code const uint16_t sb_rxplane_212d[4] = { 0x2a00u, 0x2b00u, 0x2c00u, 0x2d00u };
+
 static void sb_eaac_populate_0777(void) {
-  uint16_t base = (PR(0x06F0) == 0) ? 0x2a00u : 0x2b00u;   /* ROM 0x212d {2a00, 2b00}, plane DPX=1 */
+  uint16_t base = sb_rxplane_212d[PR(0x06F0) & 3];          /* ROM 0x212d[0x06F0], plane DPX=1 (was a 2-way 2a00/2b00 select -> read the WRONG plane on ports 2/3) */
   uint8_t i;
   PR(0x0775) = 1;                                          /* eaac-eab1: 0x0775 = 1 */
   for (i = 0; i < 0x40; i++) {                             /* eab3-ead4: 0x0777+i = SBP2[base+i] */
@@ -162,7 +166,7 @@ static __code const uint8_t sb_af38_rom21a1[0x12] = {
  * exactly. DAT50=descriptor type byte, DAT51/52 = second byte split, DAT53 = ROM 0x21a1 const. */
 
 static void sb_af38_descriptor_response(void) {
-  uint16_t src = (PR(0x06F0) == 0) ? 0x2a00u : 0x2b00u;   /* 0x0755 tuple: port0=0x2a00, port1=0x2b00 */
+  uint16_t src = sb_rxplane_212d[PR(0x06F0) & 3];         /* 0x0755 tuple plane: ROM 0x212d[0x06F0] = {2a00,2b00,2c00,2d00} */
   uint8_t  dat50, dat51, dat52, dat53 = 0, r7, i, dat4f, lut;
   uint8_t  desc752 = PR(0x0752);
   uint8_t  soff = (PR(0x06F0) == 0) ? 0x0D : 0x0E;   /* b02d: SB[0x0D] port0 else SB[0x0E] */
