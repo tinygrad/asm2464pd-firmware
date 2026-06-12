@@ -66,7 +66,7 @@ static void u4c_e7ae_bounded(void) {
 
 /* indicates the engine ran (instrumentation, read from the super-loop)
  * IRAM-HEADROOM FIX: relocated to XDATA scratch (0x8800..); seeded in main(). */
-static volatile uint8_t __xdata __at(0x8811) bank0_8a89_entered;
+static volatile uint8_t __xdata __at(0x0B51) bank0_8a89_entered;
 
 /* ==================================================================================== */
 /* bank0_8a89 @0x8A89 — verbatim. param = USB4 link mode (0=?,1=USB3.2-tunnel,2=USB4). */

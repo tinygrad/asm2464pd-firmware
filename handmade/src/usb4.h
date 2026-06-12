@@ -102,7 +102,7 @@ static void usb4_connect_u4(void) {
 
 /* Sticky bitmap of USB4 INT sources seen (printed from the super-loop, not the ISR, to keep the
  * ISR short): bit0=C80A.5 SB, bit1=C80A.4 evt, bit2=EC06.0 routerop, bit3=C80A.0-3 tunnel. */
-static volatile uint8_t __xdata __at(0x8809) usb4_int_seen;   /* IRAM-HEADROOM FIX: relocated to XDATA */
+static volatile uint8_t __xdata __at(0x0B49) usb4_int_seen;   /* IRAM-HEADROOM FIX: relocated to XDATA */
 
 /* M2: the SB-router event handler (a066) is implemented in sb_router.h and W1C-acks the C80A.5
  * source, so the int1 demux no longer needs the M1 one-shot latch (it can service every ISR
@@ -111,7 +111,7 @@ static volatile uint8_t __xdata __at(0x8809) usb4_int_seen;   /* IRAM-HEADROOM F
 static void sb_router_event_handler(void);
 
 /* Sticky accumulator of every C80A value seen in the ISR (catches a transient C80A.5). */
-static volatile uint8_t __xdata __at(0x880A) c80a_acc;   /* IRAM-HEADROOM FIX: relocated to XDATA */
+static volatile uint8_t __xdata __at(0x0B4A) c80a_acc;   /* IRAM-HEADROOM FIX: relocated to XDATA */
 
 /* ====================================================================================
  * cm_routerop_mailbox (CODE_BANK1::c0a5) — the EC06.0 config-space router-op dispatcher (RE-AUDIT
@@ -140,8 +140,11 @@ static void cm_routerop_mailbox(void) {
       PR(0x0B03) = PR(0xEA80);               /* read opcode/path from EA80 into the working buf */
       /* movc func_0def(0x0B03) @c0c2 dispatches the config read/write/link-control op into 0x0B0A..;
        * the deep d945/ceab/e21b/e4a6/e2b9 bodies are banked router-config state machines (not
-       * reproduced — no host op to validate against on this HW). The reply is signalled below. */
-      PR(0xC805) = PR(0xC805) | 0x02;         /* reply trigger: C805 |= 0x02 */
+       * reproduced — no host op to validate against on this HW).
+       * NOTE: stock state-0 does NOT touch C805 here. The send-engine trigger is cf35's RMW
+       * (C805 = (C805 & 0xF9) | 0x02) called only from the per-opcode send-resp helpers, and only
+       * after a response is actually built. Asserting it here (with no response) was a fabricated
+       * trigger — removed. Restore it inside the per-opcode bodies if/when func_0def is ported. */
     } else if (state == 1) {
       if (PR(0x0B03) == 0xE2) {               /* read-resp pending */
         /* cm_routerop_send_read_resp() + addr-in-bounds check; banked. */

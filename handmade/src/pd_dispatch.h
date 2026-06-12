@@ -203,12 +203,15 @@ static void pd_build_send_request_rdo(void) {
 
 /* ====================================================================================
  * CONTROL-message handlers (NumObj==0). Stock dispatches these via a movc jump-table at
- * CODE:0x850A [hi,lo,key]; decoded here into a clean switch on MessageType. Table:
- *   key1=GoodCRC@0x870B key2..@0x8706(NAK) key3=Accept@0x8550 key4=Reject@0x8641
- *   key5@0x8693 key6=PS_RDY@0x8591 key7@0x8706 key8=Get_Source_Cap@0x8686
- *   key9=Get_Sink_Cap@0x86F3 keyA@0x8706 keyB@0x8706 keyC=Wait@0x860E
- *   keyE=Soft_Reset@0x869A keyF@0x86AA key10@0x86BE  (default -> 0x8706 NAK = FUN_962e)
- * ==================================================================================== */
+ * CODE:0x850A [hi,lo,key]; decoded here into a clean switch on MessageType. Stock table (verified
+ * against the 0x850A movc records — earlier labels here were WRONG; corrected 2026-06-11):
+ *   key1=GoodCRC@0x870B  key3=Accept@0x8550  key4=Reject@0x8641  key5@0x8693
+ *   key6=PS_RDY@0x8591   key8=Get_Sink_Cap@0x8686  key9=DR_Swap@0x86F3  keyC=Wait@0x860E
+ *   keyE=Data_Reset@0x869A  keyF=Data_Reset_Complete@0x86AA  key10=Not_Supported@0x86BE
+ *   key16@0x86E9  key18@0x86FC   (all other keys + default -> 0x871A pd_rx_nak_send)
+ * NOTE: stock has NO 0x0D entry; handmade's 0x0D Soft_Reset below is a DELIBERATE addition, not a
+ * transcription of stock. Handmade folds the un-ported keys (5/8/9/E/F/10/16/18) into default NAK,
+ * which is faithful for the contract milestone (those are benign post-contract requests). */
 
 /* GoodCRC @0x870B: 96bf (advance MessageID-expected: 0x07C1=(0x07C1+1)&(0x07D5-1)); if a pending
  * TX is staged (0x07B7!=0) commit it. */
