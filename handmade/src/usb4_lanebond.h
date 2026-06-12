@@ -727,7 +727,9 @@ static void u4lb_s5_diag(void) {
   u4lb_s5_seen = 1; u4lb_s5_last759 = a; u4lb_s5_last75b = b; u4lb_s5_lasta0 = a0; u4lb_s5_last775 = h;
   uart_puts("\r\n[s5 9="); uart_puthex(a); uart_putc('/'); uart_puthex(b);
   uart_puts(" A="); uart_puthex(a0); uart_puthex(SB_RD(0xA1));
-  uart_puts(" 775="); uart_puthex(h); uart_putc(']');
+  uart_puts(" 775="); uart_puthex(h);
+  uart_puts(" E764="); uart_puthex(REG_PHY_TIMER_CTRL_E764); uart_puts(" E762="); uart_puthex(PR(0xE762));
+  uart_puts(" ED="); uart_puthex(PR(0x06ED)); uart_putc(']');
 }
 
 /* ---- 8501: e80a(R5R4=0x0065,R7=2) via trampoline 0x051b -- a banked SB-transport drain/poll. The FSM
