@@ -101,7 +101,6 @@ static void sb_write_c9_ack(uint8_t pos) {
 
 /* Print budget for the [EAAC] dump so the super-loop poll can't saturate the UART. Seeded =6 in
  * main()'s 0x8800.. zero-init window (extended below). */
-static volatile uint8_t __xdata __at(0x0B55) sb_eaac_print_budget;
 
 /* The eaac base hi byte, selected by the cd3f substate port (0x06F0): port0 -> 0x2a00, port1 ->
  * 0x2b00. (cd3f/eaac both derive it from 0x06F0 via 9a3e + ROM 0x212d.) */
@@ -112,25 +111,7 @@ static void sb_eaac_populate_0777(void) {
   for (i = 0; i < 0x40; i++) {                             /* eab3-ead4: 0x0777+i = SBP2[base+i] */
     PR(0x0777 + i) = SBP2_RD(base, i);
   }
-  /* ead7 97ef: CCD9 mailbox strobe (4 then 2) */
-  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;
-
-  /* INSTRUMENT (the host-driven question): after the eaac copy, dump 0x0777, SB-plane-2
-   * [0x2a00..0x2a0F], 0x0775, 0x0758, 0x06ED. This tells us whether the Intel host posts a 0x0C
-   * descriptor (gate passes -> FSM advances) or 00 (host-driven wall like SB[0x18]). */
-  if (sb_eaac_print_budget) {
-    sb_eaac_print_budget--;
-    uart_puts("\r\n[EAAC 777="); uart_puthex(PR(0x0777));
-    uart_puts(" 6F0="); uart_puthex(PR(0x06F0));                 /* active port: 0=>0x2a00, 1=>0x2b00 */
-    uart_puts(" 77A="); uart_puthex(PR(0x077A));                 /* what the copy actually wrote (vs 2a03) */
-    uart_puts(" p2a=");
-    for (i = 0; i < 0x08; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i)));
-    uart_puts(" p2b=");                                          /* the OTHER plane (port1) */
-    for (i = 0; i < 0x08; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2b00u + i)));
-    uart_puts(" 775="); uart_puthex(PR(0x0775));
-    uart_puts(" 758="); uart_puthex(PR(0x0758));
-    uart_puts("]\r\n");
-  }
+  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;   /* ead7 97ef: CCD9 mailbox strobe */
 }
 
 /* ====================================================================================
@@ -179,8 +160,6 @@ static __code const uint8_t sb_af38_rom21a1[0x12] = {
 
 /* IRAM scratch the stock af38 uses (IDATA 0x4e-0x53). Use locals + a couple of statics to mirror
  * exactly. DAT50=descriptor type byte, DAT51/52 = second byte split, DAT53 = ROM 0x21a1 const. */
-static volatile uint8_t __xdata __at(0x0B56) sb_af38_print_budget;   /* seeded =6 in main() */
-static volatile uint8_t __xdata __at(0x0B57) sb_af38_force_budget;   /* PROBE: forced-af38 one-shots (=8) */
 
 static void sb_af38_descriptor_response(void) {
   uint16_t src = (PR(0x06F0) == 0) ? 0x2a00u : 0x2b00u;   /* 0x0755 tuple: port0=0x2a00, port1=0x2b00 */
@@ -273,17 +252,8 @@ static void sb_af38_descriptor_response(void) {
   SB_WR(0x10, 0x01);                           /* d5f9: SB[0x10]=1 (TX go) */
   { uint16_t g = 0; while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { } }  /* d600 poll bit2 */
   SB_WR(0x2C, 0x04);                           /* d60d 9799: W1C SB[0x2C].2 (FIX: was missing) */
-  phy_cc10_cmd(1, 0, 0x0B);                    /* d614 e80a: CC10 0x0B settle (FIX: was missing) */
-  SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));  /* d61d 96ee: SB[0x0F]&=~1 (FIX: was missing) */
-
-  if (sb_af38_print_budget) {
-    sb_af38_print_budget--;
-    uart_puts("\r\n[AF38 6F0="); uart_puthex(PR(0x06F0));   /* which port/plane af38 ran for */
-    uart_puts(" src3="); uart_puthex(SBP2_RD(src, 3));      /* plane[3] (the F3/C0 lane byte af38 copies) */
-    uart_puts(" 81A="); uart_puthex(PR(0x081A));            /* af38 dest (after the copy) */
-    uart_puts(" 50="); uart_puthex(dat50); uart_puts(" 52="); uart_puthex(dat52);
-    uart_putc(']');
-  }
+  phy_cc10_cmd(1, 0, 0x0B);                    /* d614 e80a: CC10 0x0B settle */
+  SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));  /* d61d 96ee: SB[0x0F] &= ~1 */
 }
 
 /* ====================================================================================
@@ -408,22 +378,6 @@ static void sb_connect_present_poll(void) {
   if (PR(0x06EC)) {                            /* the SB-router connect consequence has run */
     PR(0x0752) = SB_RD(0x18);                  /* ebb5's gate input = the host SB[0x18] descriptor */
     sb_set_connect_present_ebb5();             /* ebb5: SB[0x57]/[0x61]|=8 if (0x752>>1)&0xF; 0x765=1 */
-  }
-
-  /* PROBE (task Q4 -- the chicken-and-egg test, HW-ANSWERED 2026-06-11): on this Intel MTL TB4 host
-   * SB[0x18]/[0x28] stay 00 after [===SB Con===], so cd3f's valid gate (SB[0x28].4) never opens and
-   * af38 never runs via the faithful dispatch. The forced-af38 experiment below tested whether af38's
-   * SB-transport TX response ELICITS the host to begin posting SB[0x18]. RESULT (captured): af38 runs
-   * (reads SB[0x18]=00 / 0x2a00=all-zero, TXes an all-zero descriptor, writes SB[0x15]=0, d5da sees
-   * SB[0x2C]=03) but the host STILL posts NOTHING -- SB[0x18] stays 00, 0x2a00 stays all-zero, 0x0777
-   * stays 0x55. So the host descriptor IS host-elicited by something upstream of af38 (NOT a missing
-   * device-side write). The probe is kept (budget=8, off by default-seed 0 in main()) as a documented
-   * one-shot test, NOT a fix -- it must NOT TX a garbage all-zero descriptor on the live path. */
-  if (sb_af38_force_budget && PR(0x06EC) && PR(0x06ED) == 3 && PR(0x0777) != 0x0C) {
-    sb_af38_force_budget--;
-    PR(0x06F0) = 0;                            /* port 0 */
-    PR(0x0752) = SB_RD(0x18);                  /* feed af38 the (currently 00) host descriptor */
-    sb_af38_descriptor_response();             /* send the device's SB-transport connect response */
   }
 }
 

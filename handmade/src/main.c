@@ -699,11 +699,7 @@ void main(void) {
    * uses those cells LIVE (e869/d47f/ee29 recovery); is_usb2/dma_dwords moved to the XSEG. (audit C2) */
   { uint8_t z; for (z = 0; z <= (0x0B58 - 0x0B45); z++) XDATA_REG8V(0x0B45 + z) = 0; }
   sb_con_print_budget = 6;
-  sb_eaac_print_budget = 0;   /* [EAAC] dump OFF (cd3f now runs in the a066 ISR -- keep it light) */
-  sb_af38_print_budget = 0;   /* [AF38] dump OFF (ISR safety) */
-  sb_af38_force_budget = 0;   /* PROBE off by default (HW-answered: host doesn't respond to af38 TX);
-                               * set =8 to re-run the chicken-and-egg test (sb_router.h @0x8817) */
-  u4lb_edf5_print_budget = 40; /* [EDF5] route-query dump budget (usb4_lanebond.h @0x8818) */
+  u4lb_edf5_print_budget = 40; /* [EDF5] route-query dump budget */
   u4lb_s5_print_budget = 60;   /* [S5] state-5 CL-walker dump budget (XSEG now in chip-CM RAM) */
   isr_dbg_budget = 20; isr_dbg_budget2 = 20; isr_dbg_budget3 = 20;   /* TRIAGE: post-walker hang */
   u4lb_s5_seen = 0; u4lb_s5_last759 = 0; u4lb_s5_last75b = 0;        /* change-gated [s5] diag state */
