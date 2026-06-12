@@ -637,23 +637,25 @@ static uint8_t u4lb_e461(void) {
     PR(0x0AAB) = 0;
     return 1;
   }
-  /* LIVE PATH = faithful e2b9(p1=0x04, p2=0x0D, p3=0x0718=4) (audit #15, CL0-workflow verified). KEY FIXES:
-   *  (1) status byte -> SB[0x0C] = (SB[0x0C]&0x80)|8. Stock e2b9: 9695 reads SB[0x0C] (R1=0x0C,R2=0x28),
-   *      9923 returns 0xAAB (=0, 9960 cleared it) so the JZ branch runs (SB[0x0C]&0x80)|8 and r3_writes it
-   *      back to SB[0x0C] (NOT SB[0x0D|0x0E] -- the in_R2R1 left by 9695 IS SB[0x0C]).
-   *  (2) token 0x0719 = d5da_ret - 1 (d5da returns SB[0x0C]-7), NOT hardcoded 0x0D.
-   *  (3) FULL d4cd (transport+link, now both in sb_d4cd_transport_edges) before the push. */
+  /* LIVE PATH (CL0 workflow iter2, adversarially verified). Stock e461 (e487-e497) splits on 0x0776:
+   *   0x0776 == 0 -> e2b9(p1,p2,0x0718): SB[0x15] = 0xAA8 = 0x0718 (= 4).
+   *   0x0776 != 0 -> 9966(0xAAB); e1cb(p1=0x04,p2=0x0D,p3=0): SB[0x15] = (0xAA8<<1)|0x41 = 0x41 (0xAA8=0).
+   * b7a4 sets 0x0776=1, so the live AMD route-query is the e1cb form -- the host answers SB[0x15]=0x41, NOT
+   * 0x04. The handmade previously ALWAYS sent the e2b9 0x04 form, so the host never posted the eaac-routed
+   * response and the walker parked at 0x30. The ONLY functional difference is the SB[0x15] value.
+   * KEY (kept): status byte (SB[0x0C]&0x80)|8 -> SB[0x0C] (9695 leaves R1=0x0C); token 0x0719 = d5da_ret-1. */
   {
     uint8_t dc;
-    PR(0x0AAB) = 0;                                /* 9960: 0xAAB = 0 */
-    PR(0x0AA8) = PR(0x0718);                       /* p3 -> SB[0x15] (=4 ROUTE-ENABLE) */
+    PR(0x0AAB) = 0;                                /* 9960/9966: 0xAAB = 0 */
+    PR(0x0AA8) = PR(0x0776) ? 0 : PR(0x0718);      /* e1cb p3 = 0 (9966 CLR A); e2b9 p3 = 0x0718 (=4) */
     PR(0x0AA9) = 0x0D;                             /* p2 -> SBTX[0] */
     PR(0x0AAA) = 0x04;                             /* p1 -> SBTX[1] */
-    sb_d4cd_transport_edges();                     /* e2b9 head: FULL d4cd (transport 0x28/0x2A + link 0x81/0x83) */
+    sb_d4cd_transport_edges();                     /* e1d6/e2c4 head: FULL d4cd (transport + link) */
     SBTX_WR(0, PR(0x0AA9));                         /* 997e: SBTX[0] = 0x0D */
     SBTX_WR(1, (uint8_t)(PR(0x0AAA) | ((PR(0x0AAB) & 1) << 7)));   /* 9923: SBTX[1] = 0x04 | (0xAAB.0<<7) */
     SB_WR(0x0C, (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08));   /* 9695 read + status = (SB[0x0C]&0x80)|8 -> SB[0x0C] */
-    SB_WR(0x15, PR(0x0AA8));                        /* 96f7: SB[0x15] = 4 */
+    /* e461 e487 split: 0x0776!=0 -> e1cb SB[0x15]=(0xAA8<<1)|0x41=0x41; else e2b9 SB[0x15]=0xAA8=0x0718=4 */
+    SB_WR(0x15, PR(0x0776) ? (uint8_t)((PR(0x0AA8) << 1) | 0x41) : (uint8_t)PR(0x0AA8));
     /* d5da(0): the bounded SB-transport TX trigger; stock returns cVar5 = SB[0x0C] - 7. */
     PR(0x0AAC) = 0;
     P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
