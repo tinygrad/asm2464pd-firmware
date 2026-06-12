@@ -1,0 +1,713 @@
+{
+ "immediateBlocker": {
+  "stillNeeded": "NONE \u2014 the af38 gate + branch direction are now fully resolved from the raw CODE_BANK1::af38 disasm (af38-b0b3) and 99b5/976e/a7de. The fix is fully specified below.",
+  "confidence": "high",
+  "fix": "FILE handmade/src/sb_router.h FN sb_af38_descriptor_response (stock CODE_BANK1::af38). The device TXes a wrong connect-descriptor response, so the host posts C0 (not F3) into 0x081A and the a7de latch 0x0819.0 = (0x077A.0 && 0x081A.0) fails (0x077A=F3 from eaac has bit0=1; host's C0 has bit0=0). TWO concrete stock divergences cause it: (1) BRANCH DIRECTION IS INVERTED. Stock af8b-af8f: `MOV A,DAT_52; JNZ af92; LJMP b024` => DAT_52!=0 takes the af92 block (sets 0x0754=1, the RX-plane->0x0800 work-buffer copy), DAT_52==0 takes the b024 block (sets 0x0754=DAT_51, the work-buffer->0x2900 TX copy). Handmade has it backwards: it runs `if(dat52==0){0x0754=1; RX->work}else{0x0754=dat51; work->TX}`. SWAP the two arms so dat52!=0 => 0x0754=1 + RX->work, dat52==0 => 0x0754=dat51 + work->TX. (2) BOTH ARMS ARE GATED in stock; handmade copies unconditionally with no fail-response. Transcribe the gate. Resolved helper semantics: 99b5(R7) sets DAT_4f = R7-5 (R7 = SB[0x0D|0x0E]&0x7f, the per-port TX status read at afad-afb8/b02a-b03f, port0=SB[0x0D] R2=0x28 else SB[0x0E]) and returns CY=(DAT_50<0x12); 976e(A)=XDATA[0x0600+A] read with A=DAT_50-0xe i.e. the per-type width LUT PR(0x06F2+(DAT_50-0xe)). af92/BRANCH-A gate (afb9-afdf): PASS only if (DAT_50<0x12) AND (PR(0x06F2+(DAT_50-0xe))!=0) AND (DAT_51==DAT_4f i.e DAT_51==status-5) AND (CODE[0x0700+(DAT_50+5)]!=0 via movc) AND (DAT_51 <= LUTwidth); on FAIL jump afe1: call 9988() then SBTX[1]=1 (r3_write 1 to 0x2901) and FALL THROUGH to b096 WITHOUT the copy. b024/BRANCH-B gate (b040-b054): PASS only if (DAT_50<0x12) AND (PR(0x06F2+(DAT_50-0xe))!=0) AND (DAT_4f==0 i.e. status==5); on FAIL jump b056: 9988() + 0x0754=0 + skip copy. On PASS, b060-b072 CLAMPS 0x0754 to the 976e LUT width before the copy. Then the SHARED b096 tail (status byte = (0x0754+8)|(SB[0x0C]&0x80) to SB[0x0D|0x0E], SB[0x15]=0x0753, d5da(0) trigger) runs in ALL cases. Implement: read r7status=SB[port0?0x0D:0x0E]&0x7f; dat4f=r7status-5; gate as above per-branch; on fail do { (void)SBTX_RD(1); SBTX_WR(1,1); 0x0754=(branchB?0)(branchA leaves 0x0754=1 already); } and SKIP the copy; on pass clamp 0x0754 to PR(0x06F2+(dat50-0xe)) then copy. REMOVE the sb_af38_force_budget all-zero forced-TX probe entirely (it TXes garbage on the live path). Also: af38's diag label '81A= af38 dest' is FALSE (af38 never writes 0x081A); drop/relabel."
+ },
+ "orderedFixes": [
+  {
+   "order": 1,
+   "title": "af38 connect-descriptor TX: add the 3-condition gate + fix inverted DAT_52 branch direction + minimal fail-response; drop the forced-TX probe",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_af38_descriptor_response",
+   "stockAddr": "CODE_BANK1::af38 (af8b branch split; afb9/afc6/afca/afd9/afdf branch-A gate; b040/b04d/b054 branch-B gate; afe1/b056 9988 fail; b060-b072 width clamp; b096 shared tail)",
+   "change": "SWAP arms so DAT_52!=0 => 0x0754=1 + RX(0x2a00/2b00)->work[0x0800+dat53+i] for i in [0..DAT_51); DAT_52==0 => 0x0754=DAT_51 + work->SBTX[0x2900+2+i]. Add per-branch PASS gate (99b5: DAT_50<0x12; 976e LUT PR(0x06F2+(DAT_50-0xe))!=0; branch-A also DAT_51==status-5 && CODE[0x0700+DAT_50+5]!=0 && DAT_51<=LUTwidth; branch-B also status==5). On FAIL: (void)SBTX_RD(1); SBTX_WR(1,1); branch-B sets 0x0754=0; skip copy. On PASS branch-B clamp 0x0754=min(0x0754,LUTwidth). status = SB[0x0D|0x0E]&0x7f (port0=0x0D R2=0x28 else 0x0E). Remove sb_af38_force_budget probe + its garbage all-zero TX in sb_connect_present_poll. Relabel the false '81A=' diag.",
+   "priority": "blocker",
+   "tripwire": "[af38-Afail]/[af38-Bfail D50=..] on the FAIL path; must not print on the live connect once the host descriptor is well-formed. If it prints, the gate is rejecting the real host descriptor (a deeper upstream issue)."
+  },
+  {
+   "order": 2,
+   "title": "af38 d5da(0) TX trigger is faithful \u2014 keep; verify bounded SB[0x2C].2 poll never times out",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_af38_descriptor_response (d5da tail) / u4lb_d5da",
+   "stockAddr": "CODE_BANK1::d5da (d5da-d624)",
+   "change": "No structural change (verified byte-exact: 0x0AAC=0; P1[0x0100]&=0xFE; SB[0x04]&=~2; SB[0x10]=1; poll SB[0x2C].2; W1C SB[0x2C]=4; phy_cc10_cmd(1,0,0x0B); SB[0x0F]&=~1). Keep the 0x4000 bound; assert it never trips.",
+   "priority": "low",
+   "tripwire": "[d5da:TO] if the bounded SB[0x2C].2 poll hits its cap \u2014 must never print on a good TX."
+  },
+  {
+   "order": 3,
+   "title": "b7a4 0x081A.5 conditional clear-back (dropped) \u2014 directly relevant to the 0x081A=C0 latch",
+   "file": "handmade/src/sb.h",
+   "fn": "sb_rom_descriptor_load (0x081A guard)",
+   "stockAddr": "CODE_BANK1::b7a4",
+   "change": "After `if(0x09F5) 0x081A=(.&0xDF)|0x20;` add the dropped clear-back: `if((PR(0x07BA)&&PR(0x07CC)<3)||(PR(0x07B9)&&(PR(0x07CF)==1||PR(0x07CF)==2))) PR(0x081A)&=0xDF;` then keep `if(0x09F6==0) 0x081A&=0xED;`. 0x081B.1 clear gate `if(!(0x09F9&0x80))` is already equivalent \u2014 OK.",
+   "priority": "med",
+   "tripwire": "[b7a4 81A.5 CLR] when the clear-back fires; if it prints on the live path the omission was load-bearing for 0x081A."
+  },
+  {
+   "order": 4,
+   "title": "eaac 0x0777 populate \u2014 faithful; keep",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_eaac_populate_0777",
+   "stockAddr": "CODE_BANK1::eaac",
+   "change": "No change (byte-exact: 0x0775=1; copy 0x40 bytes SBP2[base+i]->0x0777+i; CCD9 4 then 2). Keep diag.",
+   "priority": "low",
+   "tripwire": ""
+  },
+  {
+   "order": 5,
+   "title": "cd3f dispatch \u2014 faithful; keep, but route it through real d4cd transport edges (already done)",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_cd3f_dispatch / sb_d4cd_transport_edges",
+   "stockAddr": "CODE_BANK1::cd3f / d4cd",
+   "change": "No change to the 3-way dispatch. Confirm cd3f calls edd9 first (it does via sb_edd9_receive_ack). Keep 0x06F0 set per-port atomically before each cd3f (stock-exact, eliminates the old probe-both-planes hack).",
+   "priority": "low",
+   "tripwire": ""
+  },
+  {
+   "order": 6,
+   "title": "edd9 receive-ACK: restore the dropped eb62(0,3)+98ec tail so a re-request re-arms the route-query sub-FSM",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_edd9_receive_ack",
+   "stockAddr": "CODE_BANK1::edd9 (edea-edf1)",
+   "change": "After the E716 mode-3 restart, call a shared helper that does eb62(0,3) (0x06ED=3) + 98ec (0x0758=0x10 + 0x0768=CCE4-snapshot via stored p1/p2 + ec51 arm). Factor the db7a-tail into one helper called from edd9, db7a, AND dea1->db7a \u2014 matching stock's three callers of 98ec.",
+   "priority": "med",
+   "tripwire": "[edd9] already present \u2014 tells whether the host ever sets P1[0x0109].0."
+  },
+  {
+   "order": 7,
+   "title": "sb_chan_prelude is a wrong-register stub \u2014 replace with the real edd9",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_channel_connect_service / sb_chan_prelude",
+   "stockAddr": "CODE_BANK1::c3b2 (head LCALL edd9)",
+   "change": "Make sb_channel_connect_service call sb_edd9_receive_ack() (real edd9, gate P1[0x0109].0) instead of sb_chan_prelude (the (void)SB_RD(0x09) stub reads the WRONG register). Delete sb_chan_prelude.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 8,
+   "title": "dea1 consequence: remove invented early-return, CC11 poll, IE_EX1 mask + 8a89-pending; keep only the stock SB RMW + db7a",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_con_consequence",
+   "stockAddr": "CODE_BANK1::dea1 (dea1-defe) + db7a",
+   "change": "Remove `if(PR(0x06EC)) return;` (stock dea1 runs every connect edge). Remove the invented CC11 poll + CC11=2 W1C between phy(2,0,0x15) and the P1[0x0100] set-bit6 (stock's wait is inside e80a). Remove the IE_EX1 mask (sb_ex1_mask_pending), sb_8a89_pending, and the inlined ec51/db7a-tail duplication \u2014 move the db7a tail into db7a (order 9). The C80A.5 storm must be cured by correctly W1C-ing/advancing the connect (af38 gate + cb10 e672 advance), NOT by gating dea1.",
+   "priority": "high",
+   "tripwire": "[dea1 re-entry] once per call; if it floods, the connect is not being consumed \u2014 fix the consumer, do not re-add the early-return."
+  },
+  {
+   "order": 9,
+   "title": "db7a route-arm: append the stock eb62(0,3)+98ec tail here (not inlined in dea1); resolve 984d/98e4/98de exact CA60/CA70 values",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_db7a_route_arm",
+   "stockAddr": "CODE_BANK1::db7a (dbdc-dbe3 tail)",
+   "change": "Keep the 0x07B9 branch bodies. Add eb62(0,3)+98ec at the END of db7a where stock has it. Resolve 984d/98e4/98de/975e to transcribe the exact CA60/CA70 RMW values instead of masked-self no-ops.",
+   "priority": "med",
+   "tripwire": ""
+  },
+  {
+   "order": 10,
+   "title": "98ec lane-width snapshot stores wrong cells (CCE4/CCE5) \u2014 store caller params p1/p2 to 0x0768/0x0769",
+   "file": "handmade/src/usb4_lanebond.h",
+   "fn": "u4lb_98ec",
+   "stockAddr": "CODE_BANK1::98ec",
+   "change": "98ec(p1,p2): 0x0768=p1; 0x0769=p2. db7a calls 98ec(0,3). Handmade writes CCE4/CCE5 (backwards), poisoning b0b4's width gate. Store p1/p2; fix db7a to pass (0,3).",
+   "priority": "blocker",
+   "tripwire": "[b4:wid=0000 ..] means CCE4:CCE5 read 0 / snapshot wrong \u2014 confirms 98ec mis-stored."
+  },
+  {
+   "order": 11,
+   "title": "d4cd SB[0x81]/[0x83] link edges: use 974a W1C of bit3 + d54c(2/3) substate advance (not |0x02, not dropped)",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_transport_substate_poll",
+   "stockAddr": "CODE_BANK1::d4cd (d50f-d543)",
+   "change": "Replace SB_WR(0x81,SB_RD(0x81)|0x02) with 974a-equivalent W1C of SB[0x81].3 / SB[0x83].3, and call d54c(2)/d54c(3) substate advance before the W1C. Resolve d54c body.",
+   "priority": "med",
+   "tripwire": "[d4cd-link81]/[d4cd-link83] \u2014 may never fire on this host; confirms the link-edge path is inert."
+  },
+  {
+   "order": 12,
+   "title": "a066 PART2 ordering + missing cbbe margining push",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_router_event_handler",
+   "stockAddr": "CODE_BANK1::a066 (a156 SB[0x26].1 a5d8 BEFORE a16a SB[0x9E].0; a184 cbbe)",
+   "change": "Reorder: run the SB[0x26].1 [Pend Int]/a5d8 responder BEFORE the SB[0x9E].0/.1 (L0:CL0). Add the 51c7/cbbe(0x21) margining push inside the L0:CL0 / L1:CL0 branches that handmade dropped.",
+   "priority": "med",
+   "tripwire": ""
+  },
+  {
+   "order": 13,
+   "title": "eed6: replace fabricated P1[0x01C8] RMW with 999e (0x06F1 = (SB[0x24]&6)>>1); keep SB[0xC9]=0xFF; optionally do the 0x05c0 notify",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_lane_bonded_consequence",
+   "stockAddr": "CODE_BANK1::eed6 + eeee + 999e",
+   "change": "Keep SB[0xC9]=0xFF. Replace P1_WR(0x01C8,(x&0xBF)|0x40) with `PR(0x06F1) = (SB_RD(0x24)&0x06)>>1;` (999e). There is NO 0x01C8 write in stock.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 14,
+   "title": "cb10: transcribe the 0x06ED!=0 substate block (ee57 + e672 walker advance) + cbbe + 981b/da9f + cdf5",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_cb10_lane_advance",
+   "stockAddr": "CODE_BANK1::cb10",
+   "change": "Add the 0x06ED!=0 block (gated ONLY on 0x06ED!=0, independent of lane nibbles): ee57() produces 0x076A/0x076B target deltas; compute (0x076B-0x074F),(0x076A-(0x074E-borrow)); when delta<3 call e672() (the state-5 route-up advance) then ee57() + store 0x076A/0x076B. Add cbbe(lane,0x21) margining on nibble!=2, cdf5() on 0x072A!=0, 981b/da9f on 0x074E/0x074F!=0. This is the 'walker parks at 0x30' fix. Resolve ee57/e672/cbbe/cdf5/981b.",
+   "priority": "high",
+   "tripwire": "[cb10 ED=.. 76A=.. 76B=..] gated on 0x06ED!=0; if 0x06ED stays 3/5 and 0x076A/0x076B never move, the ee57/e672 advance is the stall."
+  },
+  {
+   "order": 15,
+   "title": "e461: mirror stock shared e2b9(p1,p2,0x0718) push (token = d5da_ret-1) + 0x0776->e1cb arm; drop hardcoded SBTX0=0x0D/SBTX1=0x04/token=0x0D",
+   "file": "handmade/src/usb4_lanebond.h",
+   "fn": "u4lb_e461",
+   "stockAddr": "CODE_BANK1::e461",
+   "change": "Replace the hardcoded SBTX/token with the shared e2b9(p1,p2,0x0718) call (token from d5da return -1) and the 0x0776->e1cb arm. Transcribe e1cb/9960/97e8/97f9.",
+   "priority": "blocker",
+   "tripwire": "[e461:716]/[e461:e1cb] \u2014 confirms the real push path runs."
+  },
+  {
+   "order": 16,
+   "title": "walk_8000: walk 0x0800+lane_port_idx_map[lane] (map@0x21ad={0x19,0x1C}) gated on 9a11 bVar3, with the fixed e461/eda0 as side-effect-only",
+   "file": "handmade/src/usb4_lanebond.h",
+   "fn": "u4lb_walk_8000",
+   "stockAddr": "CODE_BANK1::8000 (+850b)",
+   "change": "Walk 0x0800+lane_port_idx_map[lane] (=0x0819/0x081C), NOT 0x0759/0x075B. Gate via 9a11 bVar3 (84fa/996d shift+mask), NOT 0x0819&(1<<lane). e461/eda0 are side-effect-only (their return is not the gate). Transcribe the 0x8174 width producer for the 0x50 state. 850b is dead \u2014 verify and drop.",
+   "priority": "blocker",
+   "tripwire": "[8000:e461gate] / [s5 759/75B parking at 0x30 775=00] \u2014 e461 push not eliciting host descriptor."
+  },
+  {
+   "order": 17,
+   "title": "lane_gate/edf5/b0b4/e07d/e9e7/d5da/e980/e672 micro-fidelity fixes",
+   "file": "handmade/src/usb4_lanebond.h",
+   "fn": "u4lb_lane_gate/u4lb_edf5_route_query/u4lb_state4_b0b4/u4lb_e07d/u4lb_e9e7/u4lb_d5da/u4lb_e980/u4lb_e672",
+   "stockAddr": "CODE_BANK1 (9a11; edf5; b0b4; e07d+9880; e9e7; d5da; e980; e672)",
+   "change": "lane_gate = 9a11 shift-gated (bVar3&R5)||(acc&R4), not 0x0819&(1<<lane). edf5 token tail 0x0719=d5da_ret-1, drop extra CCD9=1. b0b4: SB[0x0C]=(op&0x80)|3 per 970c. e07d: add the 9880() call. e9e7: e80a(0,3) not (1,0,0x14). d5da: return cVar5. e980: OR p2 (not overwrite). e672 already faithful \u2014 keep.",
+   "priority": "high",
+   "tripwire": "[b4:retrain];[edf5:99ac];[d5da:TO];[850b!]"
+  },
+  {
+   "order": 18,
+   "title": "a7de state-0x11 deep-PHY: implement e391 seed + conditional 0x0763/0x0764 dir-set (99f3->9a06-gated SB[0x65]/0x2865 RMW) + 0x21c4 copy + c586/e175/e282/c17f",
+   "file": "handmade/src/usb4_lanebond.h",
+   "fn": "u4lb_cm_conn_routing_setup",
+   "stockAddr": "CODE_BANK1::a7de (a863 e391; a872 dir-set; a95f c586/e175/e282/c17f; 0x0750==1 ROM 0x21c4)",
+   "change": "Replace the bare `0x0763=0; 0x0764=0;` with the full a863-a95f deep-PHY: e391 routing-descriptor seed (ROM 0x514c PHY load) when 0x0776==0; the 99f3->9a06-gated SB[0x65]/0x2865 direction RMW; the 0x0750==1 ROM-0x21c4 copy; c586 (C8FF rate descriptor) + bank0 e175/e282/c17f tunnel-adapter PHY cfg. Per USB4_STATE11_PLAN.md. These configure the adapter the host descriptor is read against.",
+   "priority": "high",
+   "tripwire": "[a7de:09];[a7de:dir1] \u2014 confirm the dir-set fires on the live route. [ConnRout] printing but no downstream link = adapter not configured (e391/c586 missing)."
+  },
+  {
+   "order": 19,
+   "title": "e552 lane-bond-complete -> tunnel-up: transcribe b031(05d4)+e06b(0598)+eb0a tunnel-ENABLE+e3b7/e96c/9a1c+8a89 tail (currently a stub setting only a pending flag)",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_lane_bond_complete_tunnel_up",
+   "stockAddr": "CODE_BANK1::e552 + eb0a",
+   "change": "Transcribe e552 fully: b031(05d4)+e06b(0598,0) setup; b7a4 (kept); eb0a() tunnel-ENABLE [ee29 + e26a(1,0) + d436(0xF) + 0xB2F=1 + d7cd + tunnel-print + e7ae]; if 0x09FA.1: 0x0B41->e3b7(04da), pcie_downstream_link_bringup(0x0AEF), e96c(04fd), 9a1c; CA60&=~8; if 0x0AF1.0 8a89(04f3). eb0a arms the adapter BEFORE the downstream link.",
+   "priority": "blocker",
+   "tripwire": "[Lane Bonded] printed but no [PcieTunnel-...]/eb0a markers and no GPU = tunnel adapter never enabled by eb0a."
+  },
+  {
+   "order": 20,
+   "title": "b0b4 state-4: transcribe real e305 PcieTunnel-PwrOn + e26a/cdc6 E764 train + b8db CDRV; remove the e57d/CA06 stand-in markers",
+   "file": "handmade/src/usb4_lanebond.h",
+   "fn": "u4lb_state4_b0b4 / e305 / e26a / b8db",
+   "stockAddr": "CODE_BANK1::b0b4 / e305 / e26a / b8db",
+   "change": "e305: d17e gate (0x09FA&0x81); REG_CPU_MODE_NEXT mode-bit select ((0x0AEC==3||(0x0750!=2||0x0751!=0)&&0x0750!=1)?&0x1F:&0x1F|0x20); ee29(0xCA06) [port e8a9/d185/ed44/e74e]; B402.1 clear; a840 SERDES; e26a(1,1). e26a(p1,p2): 0xAA1=p2,0xAA2=p1; d17e gate; 0xAA1==1->cdc6(0xAA2) [E764 0x14->0x19 train] else e57d; HDDPC=(.&0xDF)|(0xAA1<<5). b8db: c3a8 lock-poll + margin compare (C2D2/C2D9/C2DA + C352/C359/C35A) + e9e7 retry x10. Remove the [PcieTunnel-PwrOn]/[CDRV ok] bare markers + e57d/CA06 stand-ins.",
+   "priority": "blocker",
+   "tripwire": "[b4:WIDGATE-abort] (width delta <0x38, needs real 98ec snapshot); REG_CPU_MODE_NEXT never gets the 0x20 mode bit / B402.1 never clears / E764 never walks 0x14->0x19 = tunnel not powered."
+  },
+  {
+   "order": 21,
+   "title": "pcie_power_on: replace the from-scratch hand-written sequence with a faithful 3578 transcription",
+   "file": "handmade/src/main.c",
+   "fn": "pcie_power_on",
+   "stockAddr": "CODE:3578 (pcie_downstream_link_bringup)",
+   "change": "Replace the B403/REG_TUNNEL_LINK_STATUS/HDDPC sequence with stock 3578: 1743 cap probe; if cap==4: B455=2 then 4 (LTSSM speed) + B2D5=1 + B296=8; B220 cap-read TLP (0dc5); B480 PERST release; poll B455.1 then W1C B455=2; dd78(0x19); 0x0AA1 width branch -> e8a9(1)+d436(0xF) x4-width latch; state 0x0F.",
+   "priority": "blocker",
+   "tripwire": "[PCIe timeout]/LTSSM not reaching done in pcie_power_on's poll = wrong register set; stock success is B455.1 + state 0x0F."
+  },
+  {
+   "order": 22,
+   "title": "a5d8 [Pend Int] router-op responder: transcribe descriptor decode + e1cb/e2b9 answer + cm_command_dispatch (currently W1C+print only)",
+   "file": "handmade/src/sb_router.h",
+   "fn": "sb_router_event_handler (a5d8 marker)",
+   "stockAddr": "CODE_BANK1::a5d8",
+   "change": "On SB[0x26].1: copy page1 0x0998-0x099B router-op descriptor -> 0x0A9D-0x0AA0; if 0x0AA0.7: decode (aa4=lo&7, aa7=hi>>4, aa5=dir); dispatch READ via e1cb / WRITE via e2b9; cm_command_dispatch on op==8.",
+   "priority": "med",
+   "tripwire": "[Pend Int] printed (SB[0x26].1 set) but no follow-up router-op answer = a5d8 body missing; host config-space read/write unanswered."
+  },
+  {
+   "order": 23,
+   "title": "usb4_int_demux C80A.4 -> c105: transcribe the link-width/adapter event (a522 0x09FA|=4; P1[0x1603].0->0x0AE2=1/ca0d/e74e) \u2014 currently a no-op seen-flag",
+   "file": "handmade/src/usb4.h",
+   "fn": "usb4_int_demux (C80A.4 arm)",
+   "stockAddr": "CODE_BANK1::c105 via int1_isr 0x4486",
+   "change": "Implement c105: P1[0x1407].0->a522 (E710 recovery + 0x09FA|=4 + W1C P1[0x1203].7); P1[0x1407].3->d855; P1[0x1603].0-> if 0x09FA.1&92C2.6: 0x0AE2=1 + ca0d + e74e + 0x07FF=0x69. Then DELETE the fsm_stall>=6 bank0_c9a8(0) hack in main.c \u2014 8a89 will fire from the real link-width event.",
+   "priority": "blocker",
+   "tripwire": "[c80a4 1407=.. 1603=.. 9fa=..] \u2014 if it never prints on the live USB4 path the host is not raising C80A.4 and the whole c105/0x09FA|=4 path is dead."
+  },
+  {
+   "order": 24,
+   "title": "Remove the fsm_stall>=6 -> bank0_c9a8(0) force-drive of 8a89; keep c9a8's stock gate (09FA.2 && 0AF1.0 && (07E8||07EB))",
+   "file": "handmade/src/main.c",
+   "fn": "main super-loop (fsm_stall) / bank0_c9a8",
+   "stockAddr": "CODE:c9a8",
+   "change": "Delete the fsm_stall>=6 heuristic + the gate-fully-open forcing. After c105 (order 23) lands 0x09FA|=4, the existing int0 91D1.1->c9a8(0)/9302.2->c9a8(1) hooks suffice. Keep c9a8's real gate intact.",
+   "priority": "high",
+   "tripwire": "[c9a8 src=.. 9fa=.. af1=.. 7e8=..] \u2014 if 8a89 only ever runs via fsm_stall (never INT0/INT1), the host-event redrive is missing."
+  },
+  {
+   "order": 25,
+   "title": "usb4_int_demux C80A.0-3 -> e911: W1C E763.2/.3 + [PcieTunnel-PcieLinkUp/Dn] prints + C80A.0 gate (currently bare seen-flag)",
+   "file": "handmade/src/usb4.h",
+   "fn": "usb4_int_demux (C80A.0-3 / PcieLinkUp leg)",
+   "stockAddr": "CODE_BANK1::e911",
+   "change": "Add e911 body: gate C80A.0; if E763.2 -> PR(0xE763)=0x04 + [PcieTunnel-PcieLinkUp] + d17e read (discarded); else if E763.3 -> PR(0xE763)=0x08 + [PcieTunnel-PcieLinkDn]. Without the W1C the tunnel link-up re-storms.",
+   "priority": "med",
+   "tripwire": "[c80a03 e763=..] with E763.2 set but no ack = tunnel-linkup event being dropped."
+  },
+  {
+   "order": 26,
+   "title": "super-loop: add bank0_d7cd per-iteration USB4 tunnel/PCIe-gen housekeeping (c7a5 else-branch)",
+   "file": "handmade/src/main.c",
+   "fn": "main super-loop",
+   "stockAddr": "CODE:c7a5 -> bank0_d7cd",
+   "change": "On the USB4 path ((09FA&0x81)&&(09F9&0x81)) call d7cd once per iter: CA81.0 gate; B481 RMW; 0x0B2F/0x0B30 PCIe-gen/lane latch; c35b. Feeds the [*** PCIE Gen N xM] reporting.",
+   "priority": "high",
+   "tripwire": "[d7cd ca81=.. b481=.. b2f=..] \u2014 absence stalls PCIe-gen reporting after tunnel-up."
+  },
+  {
+   "order": 27,
+   "title": "PD: pd_arm_cc_timer final CC81 value",
+   "file": "handmade/src/pd.h",
+   "fn": "pd_arm_cc_timer",
+   "stockAddr": "CODE:e81b",
+   "change": "Final CC81 = p2-1, not 0x01.",
+   "priority": "blocker",
+   "tripwire": ""
+  },
+  {
+   "order": 28,
+   "title": "PD TX header: pd_tx_set_sop_header E421 nobj-only; MsgID into E420",
+   "file": "handmade/src/pd.h",
+   "fn": "pd_tx_set_sop_header",
+   "stockAddr": "CODE:dd12",
+   "change": "E421 = nobj only; put MsgID into E420.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 29,
+   "title": "PD soft-reset: remove non-stock 0x0D handler; fix dd12 MsgID",
+   "file": "handmade/src/pd_dispatch.h",
+   "fn": "pd_ctrl_soft_reset 0x0D",
+   "stockAddr": "CODE:850a",
+   "change": "Remove the invented 0x0D control handler; fix dd12 MsgID.",
+   "priority": "high",
+   "tripwire": "[NONSTOCK_SoftReset_0x0D] must never print."
+  },
+  {
+   "order": 30,
+   "title": "PD RX NAK: SOP1 type4 else type0x10 + 0x07BD=5",
+   "file": "handmade/src/pd_dispatch.h",
+   "fn": "pd_rx_nak_send",
+   "stockAddr": "CODE:871a",
+   "change": "SOP1 -> message type 4; else type 0x10 plus 0x07BD=5.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 31,
+   "title": "PD select-pdo: transcribe full PDO decode (currently jank heuristic)",
+   "file": "handmade/src/pd.h",
+   "fn": "pd_select_pdo",
+   "stockAddr": "CODE:abf5",
+   "change": "Transcribe the full stock PDO decode rather than the hand-reasoned selection.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 32,
+   "title": "PD control handlers 0x08/0x0E/0x0F/0x10 (0x0E DataReset load-bearing)",
+   "file": "handmade/src/pd_dispatch.h",
+   "fn": "control 0x08/0x0E/0x0F/0x10",
+   "stockAddr": "CODE:8686,869a,86aa,86be",
+   "change": "Port the four control handlers; 0x0E (Data_Reset) is load-bearing.",
+   "priority": "med",
+   "tripwire": "[DataReset_0x0E_NAKed] if 0x0E is being NAKed instead of handled."
+  },
+  {
+   "order": 33,
+   "title": "vdm_tx_dispatch: add cmd5 ca71 and cmd4/5 usb4_connect_u4 trigger 9bf6",
+   "file": "handmade/src/vdm.h",
+   "fn": "vdm_tx_dispatch",
+   "stockAddr": "CODE:9ac4",
+   "change": "Add the cmd5 ca71 path and the cmd4/cmd5 usb4_connect_u4 trigger (9bf6).",
+   "priority": "blocker",
+   "tripwire": ""
+  },
+  {
+   "order": 34,
+   "title": "sb_assert: transcribe a48c-a516 literally (token 0xff not 0x81; drop 0x09FB poke)",
+   "file": "handmade/src/usb4.h",
+   "fn": "sb_assert",
+   "stockAddr": "CODE_BANK1::a480 (a48c-a516)",
+   "change": "Transcribe FUN_CODE_a480 literally; use token 0xff not 0x81; drop the 0x09FB write (a480 sets 0x09FB=2 at its head). Re-annotate the fictional a460-a527 addresses.",
+   "priority": "blocker",
+   "tripwire": ""
+  },
+  {
+   "order": 35,
+   "title": "route-latch a42a: plain store 0x09FA = low2 of 0x09F9",
+   "file": "handmade/src/usb4.h",
+   "fn": "route-latch",
+   "stockAddr": "CODE_BANK1::a42a",
+   "change": "Plain store 0x09FA = (0x09F9 & 3); remove the jank.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 36,
+   "title": "pd_handle_enter_usb a108: drop 0x09FA bit2 + 0x07E8; add 0x07BE/0x07CC + e93a",
+   "file": "handmade/src/vdm.h",
+   "fn": "pd_handle_enter_usb",
+   "stockAddr": "CODE_BANK1::a108",
+   "change": "Drop the 0x09FA bit2 and 0x07E8 pokes; add 0x07BE, 0x07CC and the e93a call.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 37,
+   "title": "enter_mode_07BC b966: drop sop_header value1; emit bare header",
+   "file": "handmade/src/vdm.h",
+   "fn": "enter_mode_07BC",
+   "stockAddr": "CODE_BANK1::b966",
+   "change": "Drop the sop_header value-1 set; emit the bare header.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 38,
+   "title": "demux_MEC_e0d9 / 4486: port c105+e911, add E7E3 clears, bba8 zero C20E-C216",
+   "file": "handmade/src/usb4.h",
+   "fn": "demux_MEC_e0d9",
+   "stockAddr": "CODE:4486",
+   "change": "Port c105/e911 (overlaps orders 23/25), add the E7E3 clears and the bba8 C20E-C216 zero.",
+   "priority": "med",
+   "tripwire": ""
+  },
+  {
+   "order": 39,
+   "title": "bank0_8a89 cc10 call args + bd3a arm + dd42 head arg",
+   "file": "handmade/src/usb4_connect.h",
+   "fn": "bank0_8a89",
+   "stockAddr": "CODE:8a89 (8bc4/8cf4 cc10; 8b28 bd3a@0xbd3a; 8adb dd42)",
+   "change": "line~140 phy_cc10_cmd_wait(2,0,0x27); line~199 phy_cc10_cmd_wait(2,0,0x13) (subcmd 2 not 0). line~113 U4C_BD3A(0xC698) set bit6 (not u4c_bd14 CC3A/CC38). Head boot_phy_dd42(0xFF) hardcoded (not a9d-3, which leaves E7E3 unwritten for modes 0/1).",
+   "priority": "blocker",
+   "tripwire": ""
+  },
+  {
+   "order": 40,
+   "title": "usb4_irq_ef1e: transcribe d0ac + 9a63 straight-line (table of flat RMWs cannot match the stateful PHY-indirect chain)",
+   "file": "handmade/src/usb4_irq.h",
+   "fn": "usb4_irq_ef1e / usb4_rx_table.h",
+   "stockAddr": "CODE_BANK1::ef1e = d0ac + 9a63",
+   "change": "Replace the RMW table with a straight-line transcription of d0ac and 9a63 (like 8e31).",
+   "priority": "blocker",
+   "tripwire": ""
+  },
+  {
+   "order": 41,
+   "title": "int0_isr 91D1/9302 sub-handlers folded to generic W1C \u2014 keep 91D1.1/9302.2->c9a8, instrument the rest",
+   "file": "handmade/src/main.c",
+   "fn": "int0_isr",
+   "stockAddr": "CODE:0e5b",
+   "change": "Keep 91D1.1->c9a8(0) / 9302.2->c9a8(1). Add instrumentation to see if the host raises any OTHER 91D1/9302 bit on the live USB4 path; transcribe e941/e947/e92c if so.",
+   "priority": "med",
+   "tripwire": "[91D1=..]/[9302=..] \u2014 any bit other than 91D1.1/9302.2 = a dropped sub-handler."
+  },
+  {
+   "order": 42,
+   "title": "int1_isr CC33.2 -> cd10 stubbed body; C806.4 -> ef4e ack-only",
+   "file": "handmade/src/main.c",
+   "fn": "int1_isr",
+   "stockAddr": "int1_isr_orchestrator 0x4486 (cd10, ef4e)",
+   "change": "Verify cd10's body (bank0_cd10) does more than W1C CC33=4; transcribe if so. Confirm ef4e (system-event tail) is not load-bearing for USB4.",
+   "priority": "low",
+   "tripwire": "int1: print on CC33.2 / C806.4 to confirm frequency + whether the stubbed bodies matter."
+  },
+  {
+   "order": 43,
+   "title": "super-loop 0AE9!=0x0F -> e2ec recovery branch (omitted)",
+   "file": "handmade/src/main.c",
+   "fn": "main super-loop",
+   "stockAddr": "CODE:e2ec (-> e869 / e95f)",
+   "change": "Low urgency while 0x0AE9 stays 0x0F (seeded by 92c5). If 0x0AE9 drifts, transcribe e2ec/e95f/e869.",
+   "priority": "low",
+   "tripwire": "super-loop: ae9= dump; if ever !=0x0F the recovery branch is skipped."
+  },
+  {
+   "order": 44,
+   "title": "super-loop 541f-gated dee3/480c/d3a2 (post-tunnel link recovery) \u2014 omitted, defer",
+   "file": "handmade/src/main.c",
+   "fn": "main super-loop",
+   "stockAddr": "CODE:541f -> dee3/480c/d3a2",
+   "change": "Defer until E716&3 sets (tunnel up). Then transcribe dee3 (cb0f/cb23/cadf) + 480c; d3a2 is streaming-only, skip.",
+   "priority": "low",
+   "tripwire": "super-loop: e716= dump; when (E716&3)!=0 appears, the recovery branch is being skipped."
+  },
+  {
+   "order": 45,
+   "title": "BOOT: e25e banked-PHY descriptor + d996 page1 tail (0x7041/0x1507) omitted from d996",
+   "file": "handmade/src/boot_phy.h",
+   "fn": "boot_phy_d996_pcie_tunnel_boot",
+   "stockAddr": "0xD996",
+   "change": "Append the d996 tail: P1[0x7041]&=0xBF; P1[0x1507]=(.&0xFB)|0x04; P1[0x1507]=(.&0xFD)|0x02 (DPX=1/page1 plane). Transcribe e25e (d702 banked-PHY: cc92/cc56/cc60/cca2 + r3_write 0x7baf + cc62 x4). Resolve cc56/cc60/cc92/cca2 0x12xx engine-plane addrs first.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 46,
+   "title": "BOOT: d630 lane-power omits E76C/E774 cc69 PLL latch RMWs",
+   "file": "handmade/src/boot_phy.h",
+   "fn": "boot_phy_d630_lane_power",
+   "stockAddr": "0xD630",
+   "change": "Transcribe all three: E76C=(E76C&0xEF); E774=(E774&0xEF)|((E76C>>2&1)?0x10:0); E77C=(E77C&0xEF)|((E774>>3&1)?0x10:0). Re-disassemble D630 to pin the exact cc69 bit source before final transcription.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 47,
+   "title": "BOOT: d436 width \u2014 emit c089 B434 ramp + B436 high nibble (B404&0xF^0xF)<<4 + low nibble width&0xE",
+   "file": "handmade/src/boot_phy.h",
+   "fn": "boot_phy_d436_width",
+   "stockAddr": "0xD436",
+   "change": "Set 0x0AA8=0xF; e84d 0x0B44 latch; c089 B434 ramp (staged via 0x0AA8); B436=(B436&0xF0)|(0xF&0xE)=...|0x0E; B436=(B436&0x0F)|((B404&0x0F^0x0F)<<4). The high-nibble B436 (x4 lane map) is currently MISSING.",
+   "priority": "med",
+   "tripwire": ""
+  },
+  {
+   "order": 48,
+   "title": "BOOT: 92c5 seed omits the e957/db09 PIPE-lane staging loop (a83=0..5)",
+   "file": "handmade/src/boot_phy.h",
+   "fn": "bank0_92c5_seed",
+   "stockAddr": "0x92C5",
+   "change": "Add `for(a83=0;a83<=5;a83++) bank0_e957(a83);` before the 94c5 tail. Transcribe e957->db09 (0x213/intmem_4d + b8a2/b838/be02 PIPE/lane RAM staging). If db09 proves inert for this part, downgrade.",
+   "priority": "high",
+   "tripwire": "[92c5-e957 N] should print 6x at boot; if added and never appears, the loop was optimized out."
+  },
+  {
+   "order": 49,
+   "title": "BOOT ORDER in main(): add 5418(CC32.0), 5284(clock/analog), 4be6(C800/C801/CA60+ver), C6B3&0x30 PHY-ready WAIT, 8d77; fix 92c5 placement (inside boot_hw_init after 4c40)",
+   "file": "handmade/src/main.c",
+   "fn": "main() boot ordering",
+   "stockAddr": "main_boot_and_superloop 0x2FB4 / boot_hw_init_main 0x4FB6",
+   "change": "Insert in stock order: 5418 (CC32|=1) before ce79; 5284 (PHY_EXT_5B/HDDPC_CTRL/PHY_EXT_2D clock-analog) immediately after ce79 (ENTIRELY MISSING); 4c40-equiv (RAM reset + 0x09F9=4/0x09FA=4/0x09FB=0) + 4be6-equiv (C800/C801/CA60 + 7F0-7F5) before 92c5; the C6B3&0x30 PHY-ready WAIT after 92c5/8d77; call 8d77 after 92c5. Map de16/eef9/cd6c/d127/bf8e before deciding to add. 5284 + the C6B3 wait are highest value.",
+   "priority": "high",
+   "tripwire": "[5284 5B=..2D=..] once (0 proves clock-analog never ran); [C6B3wait + hex(C6B3)] so a never-ready PHY clock is visible."
+  },
+  {
+   "order": 50,
+   "title": "boot_phy_bank1_ed02: re-derive from the bank1 overlay (SB[0x05].7 plane + CA70/E780/P1[0] masks)",
+   "file": "handmade/src/boot_phy.h",
+   "fn": "boot_phy_bank1_ed02",
+   "stockAddr": "CODE_BANK1::ED02 (file_off ED02-0x8000+0xFF6F)",
+   "change": "Decompile/disassemble bank1 ED02 at the computed file offset; confirm SB[0x05].7 is r3=2/r2=0x28/r1=0x05 (page1 0x2805) and CA70/E780/P1[0] masks are byte-exact.",
+   "priority": "med",
+   "tripwire": ""
+  },
+  {
+   "order": 51,
+   "title": "sb.h engine descriptors: ccb3/c270 width arg must be read-back ENGINE[0x34], not 0x81/XDATA",
+   "file": "handmade/src/sb.h",
+   "fn": "u4c_ccb3 / u4c_c270",
+   "stockAddr": "CODE:ccb3 (a30c@ccba) / c270 (a308@c273/c296/c2ba)",
+   "change": "u4c_ccb3: a30c arg = (P12_RD(0x34)&0xF0)|0x0E (read-back, not (0x81&0xF0)|0xE). u4c_c270: all three a308 args = P12_RD(0x34) (read-back), not 0x81/PR(0x0A58)/PR(0x0B1A). Data bytes are faithful \u2014 keep.",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 52,
+   "title": "sb.h u4c_bcd7_tail: add the two leading RMWs (ENGINE 0x011504 &=0xF3; page1 0x010000 &=0xFB) before CA06",
+   "file": "handmade/src/sb.h",
+   "fn": "u4c_bcd7_tail",
+   "stockAddr": "bank0 a4af-a4e3",
+   "change": "Before PR(0xCA06)&=~0x10 add: P1_WR(0x1504, P1_RD(0x1504)&0xF3); P1_WR(0x0000, P1_RD(0x0000)&0xFB).",
+   "priority": "high",
+   "tripwire": ""
+  },
+  {
+   "order": 53,
+   "title": "sb.h u4c_d556: add d31e commit + the 0x09FA.7-gated nested staged-descriptor block + ed63",
+   "file": "handmade/src/sb.h",
+   "fn": "u4c_d556",
+   "stockAddr": "CODE_BANK1::d556",
+   "change": "After 0x250/0x251 write call d31e. For 0x09F9.7: set 0x0247/0x0248, call ed63(); then if 0x09FA.7: stage 0x0250-0x0253 into the route-indexed descriptor (base from 0x0440/0x0441) + d31e(). RE d31e/ed63.",
+   "priority": "high",
+   "tripwire": "[d556 NO9FA7 unexpected] must never print (0x09FA=0x81 on happy path)."
+  },
+  {
+   "order": 54,
+   "title": "sb.h b230/bb37 bit-clear corrections (invented bit6 clears; missing SB[0x2D]/[0x2C]/[0x67]/[0xC8] bits)",
+   "file": "handmade/src/sb.h",
+   "fn": "sb_lane_flip_init (b230) / sb_block_init (bb37)",
+   "stockAddr": "CODE_BANK1::b230 / bb37",
+   "change": "b230: remove invented P1_CLR(0x0100,0x40); SB[0x2D] set b0 then b1; SB[0x2C]=1 then 2; SB[0x67] clr b3 then b6; no-connect branch add P1_CLR(0x0101,0x20). bb37: remove invented P1_CLR(0x0100,0x40); SB[0xC8] clr mask 0xB0 not 0xF0.",
+   "priority": "med",
+   "tripwire": "[b230 NOCON] must never print on the live connect path."
+  },
+  {
+   "order": 55,
+   "title": "sb.h e0d9(0) PHY seed: add the missing C211=0 write",
+   "file": "handmade/src/sb.h",
+   "fn": "sb_block_init (e0d9(0))",
+   "stockAddr": "CODE_BANK1::e0d9",
+   "change": "Add PR(0xC211)=0 after the C210 zero (net: C20E,C20F,C210,C211,C214,C215,C216 all 0).",
+   "priority": "low",
+   "tripwire": ""
+  },
+  {
+   "order": 56,
+   "title": "sb.h e711 [0x35] mask: use fresh read-back & 0xC0 (not cval&0xC0); order before [0x3C]/[0x3D]=0",
+   "file": "handmade/src/sb.h",
+   "fn": "u4c_sb_desc_commit (e711)",
+   "stockAddr": "bank0 e711",
+   "change": "Replace (void)P12_RD(0x35);P12_WR(0x35,cval&0xC0) with P12_WR(0x35,P12_RD(0x35)&0xC0) ordered before [0x3C]/[0x3D]=0.",
+   "priority": "low",
+   "tripwire": ""
+  }
+ ],
+ "layoutFixes": [
+  "XDATA 0x0B40-0x0B44 (is_usb2/dma_dwords, main.c:58/61/683): stock uses these LIVE (e869 recovery, gate d47f, ee29). Handmade's relocation premise + zero-init collides. RELOCATE handmade's scratch off 0x0B40-0x0B44; 0x8800 is free per the Makefile audit. Do NOT zero 0x0B40-0x0B44. Keep the XSEG 0x0BC0-0xFF region.",
+  "XDATA 0x8000-0x8FFF mislabeled 'DMA' in handmade: stock 0x8000-0x8026 is the CM descriptor/ID block (CM desc + 0x8174 width producer the walker reads), NOT DMA scratch. RELABEL and ensure no handmade scratch overlaps 0x8000-0x8026 (the walk_8000 0x0800-shadow + 0x8174 producer live here).",
+  "walk_850b 0x0B26-0x0B2D handmade cells are invented on a dead path; stock state-5 uses 0x08xx. Drop the 0x0B26-0x0B2D cells once walk_850b is confirmed dead (order 16).",
+  "IRAM/stack: NO blocking overlap. crt0 sp=0x7F (stack 0x80-0xFF, 128B); DSEG top 0x7E; peak depth ~75B (int0_isr 43B + main non-FSM 32B). The FSM walker chain runs under EA=0 (main.c:724/747) so it cannot be preempted \u2014 KEEP that EA bracket (load-bearing for both deadlock-break AND stack/reentrancy safety). If DSEG grows past 0x7E, move state to XDATA, do NOT raise sp. Re-run the depth DFS if walk_8000/d5da/phy_cc10 gain nested calls.",
+  "Non-reentrant SDCC PARM globals: P1_REG8_wr / phy_cc10_cmd / phy_cc10_cmd_wait / uart_puthex / pd_wait are reachable from BOTH an ISR and the NON-EA-protected super-loop (diagnostics, deferred tunnel-up, USB bulk). An ISR preempting a same-fn call there corrupts _*_PARM_n DSEG globals. Mitigation: strip the diagnostic uart_puthex/dumps from the non-EA super-loop body (planned post-confirm), OR wrap any remaining non-FSM phy_cc10_cmd/P1_REG8_wr calls in a short EA=0 bracket. Do NOT add __reentrant (eats the 53B headroom)."
+ ],
+ "tripwires": [
+  "[af38-Afail] / [af38-Bfail D50=..] \u2014 af38 gate FAIL path; must not print on the live connect once the host descriptor is well-formed.",
+  "[d5da:TO] \u2014 af38/lane d5da bounded SB[0x2C].2 poll hit its cap; never on a good TX.",
+  "[b7a4 81A.5 CLR] \u2014 the dropped 0x081A.5 clear-back fired; if it prints, the omission was load-bearing for 0x081A=C0.",
+  "[edd9] \u2014 host set P1[0x0109].0 (receive-ACK requested).",
+  "[dea1 re-entry] \u2014 once per call; if it floods, the connect is not being consumed (do not mask with an early-return).",
+  "[d4cd-link81] / [d4cd-link83] \u2014 SB[0x81]/[0x83].3 link edges; likely never fire on this host.",
+  "[cb10 ED=.. 76A=.. 76B=..] gated on 0x06ED!=0 \u2014 if 0x06ED stays 3/5 and 0x076A/0x076B never move, the ee57/e672 advance is the stall.",
+  "[s5 759/75B parking at 0x30 775=00] / [8000:e461gate] \u2014 e461 push not eliciting host descriptor; SB[0xA0]/[0xA1] staying 0x07 = never reaching CL0.",
+  "[e461:716] / [e461:e1cb] \u2014 confirm the real e2b9/e1cb push path runs.",
+  "[b4:WIDGATE-abort] / [b4:wid=0000 neg=..] \u2014 width delta gate; CCE4:CCE5 read 0 = ec51 Trig-arm / 98ec snapshot wrong.",
+  "[b4:retrain] / [edf5:99ac] / [850b!] \u2014 b0b4/edf5/850b micro-fidelity tripwires.",
+  "[d556 NO9FA7 unexpected] \u2014 must never print (0x09FA=0x81 on happy path); if it does the omitted nested block was dead.",
+  "[bb37 9F7<2 c523] \u2014 must never print on the live path; if it does, transcribe c523.",
+  "[b230 NOCON] \u2014 must never print on the live connect path (0x07BA!=0).",
+  "[e7ae C006 TIMEOUT] / [e7ae C00E TIMEOUT] \u2014 must never print on a good connect (bounded poll vs stock unbounded).",
+  "[a7de:09] / [a7de:dir1] \u2014 confirm the state-0x11 deep-PHY dir-set fires on the live route.",
+  "[c80a4 1407=.. 1603=.. 9fa=..] \u2014 if never prints on the live USB4 path the host is not raising C80A.4 and the c105/0x09FA|=4 path is dead.",
+  "[c9a8 src=.. 9fa=.. af1=.. 7e8=..] \u2014 if 8a89 only ever runs via fsm_stall (never INT0/INT1), the host-event redrive is missing.",
+  "[c80a03 e763=..] \u2014 E763.2 set but no ack = tunnel-linkup event being dropped.",
+  "[d7cd ca81=.. b481=.. b2f=..] \u2014 per-iter tunnel/PCIe-gen housekeeping; absence stalls gen reporting after tunnel-up.",
+  "[Pend Int] with no follow-up router-op answer \u2014 a5d8 body missing.",
+  "[PcieTunnel-PcieLinkUp] never printed after a real tunnel \u2014 E763.2 never set (tunnel not powered) or the ack-only handler swallowed it.",
+  "super-loop ae9= dump \u2014 if 0x0AE9 ever != 0x0F, the e2ec recovery branch is being skipped.",
+  "super-loop e716= dump \u2014 when (E716&3)!=0 appears, the dee3/480c recovery branch is being skipped.",
+  "[5284 5B=..2D=..] once + [C6B3wait hex] \u2014 a 0 at 5284 proves clock-analog never ran; a spinning C6B3 wait = PHY clock never ready.",
+  "[92c5-e957 N] \u2014 should print 6x at boot; if the loop is added and never appears, it was optimized out.",
+  "[91D1=..] / [9302=..] in int0 demux \u2014 any bit other than 91D1.1/9302.2 = a dropped stock sub-handler.",
+  "[NONSTOCK_SoftReset_0x0D] / [DataReset_0x0E_NAKed] \u2014 PD non-stock/omitted handlers being hit.",
+  "[!b1cb-gate 91c0!=10] \u2014 forced 0x09F9=0x87 masked a USB3-fallback the host actually wanted."
+ ],
+ "verify": [
+  {
+   "reasoning": "I independently verified the af38 immediateBlocker and orders 1-6 against the raw CODE_BANK1 disassembly/decompile. The audit's CORE DIAGNOSES are real and correctly identified, but several of its proposed FIXES contain their own hand-reasoned inaccuracies, and order 2 mislabels a divergent inline as byte-exact. Net: the blocker direction is right, but I refute that the fix as written is byte-faithful \u2014 it needs correction before it can be trusted.\n\nVERIFIED REAL (audit correct):\n- af38 branch INVERSION: raw disasm af8b `MOV A,0x52; JNZ af92; LJMP b024`. DAT_52!=0 -> af92 (0x0754=1, RX-plane->0x0800 work copy at afed-b017). DAT_52==0 -> b024 (0x0754=DAT_51, work->0x2900 TX copy at b073-b094). Handmade sb_router.h:210-235 has it backwards (dat52==0 => 0x0754=1+RX->work; else => 0x0754=dat51+work->TX). CONFIRMED inverted, swap is correct.\n- Both arms GATED, handmade copies unconditionally: branch-A gate afb9-afdf (99b5 CY=(DAT_50<0x13); 976e LUT!=0; DAT_51==DAT_4f; movc CODE[0x0700+DAT_50+5]!=0; DAT_51<=width). branch-B gate b040-b054 (DAT_50<0x13; LUT!=0; DAT_4f==0 i.e status==5). Handmade has NO gate. CONFIRMED.\n- 98ec mis-store (order 10, blocker): 98ec body verified = `0x0758=0x10; ee57(); 0x0768=param_1; 0x0769=param_2`. Handmade dea1 tail (sb_router.h:544-545) writes 0x0768=CCE4 / 0x0769=CCE5 -- WRONG. With db7a/edd9 calling 98ec(0,3) the correct values are 0x0768=0, 0x0769=3. Handmade ALSO drops the ee57() call inside 98ec. CONFIRMED blocker, fix is faithful.\n- edd9 dropped tail (order 6): edd9 verified = on (P1[0x0109]&1): 98b7;973d;9789;eb62(0,3);98ec(0,3). Handmade sb_edd9_receive_ack (312-320) omits eb62+98ec (comment admits it). CONFIRMED.\n- b7a4 0x081A.5 clear-back (order 3): b7a4 decompile shows `if(0x09F5){0x081A=(.&0xDF)|0x20; if((0x07BA&&0x07CC<3)||(0x07B9&&(0x07CF==1||==2))) 0x081A&=0xDF;}`. Handmade sb.h:187 sets bit5 but DROPS the clear-back (comment at 184 admits it). CONFIRMED, fix faithful.\n- eaac (order 4) and cd3f (order 5): eaac verified byte-exact (0x0775=1; 0x40-byte copy from 0x0755-tuple plane; 97ef=CCD9 4 then 2). cd3f calls edd9 first, then 9a3e/97a9/9a45 plane setup, then the 3-way ebb5/eaac/af38 dispatch -- handmade matches. CONFIRMED faithful (keep), with the caveat that handmade reconstructs the plane from 0x06F0 directly (0x2a00/0x2b00) rather than transcribing the 0x0755 R3:R2:R1 tuple loaded via 9a38/0ddd -- equivalent only while 0x0755 tracks 0x06F0.\n\nREFUTED / FIX IS ITSELF A HACK (critical):\n1. Order-1 branch-A FAIL-response is WRONG. Audit says fail does `(void)SBTX_RD(1); SBTX_WR(1,1)` (r3_write 1 to 0x2901). Raw afe1: `9988(); INC R1; A=1; 0be6 write` with R2=0x28 (SB plane, not 0x29) and R1=0x0D/0x0E (from afa8/afb1) incremented to 0x0E/0x0F. So branch-A FAIL writes 1 to SB[0x0E]/SB[0x0F] (R2=0x28 SB plane), NOT SBTX[1]/0x2901. The audit conflated this with a TX-plane write. Branch-B FAIL (b056) is just `9988(); 0x0754=0`. The prescribed fail-response is itself hand-reasoned and not byte-faithful.\n2. Order-2 is FALSE/incomplete: it claims af38's d5da is byte-exact with no structural change, but af38 INLINES d5da (sb_router.h:253-260) and DROPS the d5da trailing block (d627-d65c): when 0xAAC==0 (af38 calls d5da(2,0)) and SB[0x0C]>=6, stock zeroes a run of the 0x2900 TX plane (bytes [DAT_54..DAT_55)). The inline omits it. So d5da is NOT faithfully reproduced on the af38 path; order 2's \"byte-exact, keep\" is wrong for the af38 inline.\n\nThese mean: applying order-1 verbatim would introduce a new non-stock SBTX[1] write on the FAIL path, and order-2's \"no change\" leaves the d5da TX-plane-zeroing gap. Both must be corrected to the real disasm before trusting the fix. The central swap + gate + 98ec store are sound.",
+   "refuted": true,
+   "criticalIssues": [
+    "Order-1 branch-A FAIL-response is NOT byte-faithful. Audit prescribes `(void)SBTX_RD(1); SBTX_WR(1,1)` (write 1 to SBTX/0x2901). Raw disasm afe1-afea: `9988(); INC R1; A=1; LCALL 0x0be6` with R2=0x28 (SB register plane) and R1=0x0D/0x0E (port-selected at afa8/afb1) incremented to 0x0E/0x0F -> it writes 1 to SB[0x0E]/SB[0x0F], NOT SBTX[1]/0x2901. The audit conflated branch-A's fail with a TX-plane write. Implementing it as written adds a non-stock 0x2901 write.",
+    "Order-2 is FALSE for the af38 path. It claims af38's d5da is byte-exact with no structural change, but af38 INLINES d5da (sb_router.h:253-260) and DROPS the d5da trailing block (raw d627-d65c): af38 calls d5da(2,0) so 0xAAC==0, and when SB[0x0C]>=6 stock zeroes a run of the 0x2900 TX plane (for DAT_54 in [0..SB[0x0C]-6): 0x29NN=0). The inline omits this entirely. d5da is NOT faithfully reproduced on the af38 path.",
+    "The audit's 'eb62(0,3): FSM -> state 3' label (and handmade comment at sb_router.h:530) is misleading: eb62 body verified = `0xAAC=p1; 0xAAD=p2; 51c7(eb81()); U4LB_STATE=eb81()`. It sets U4LB_STATE(==0x06ED) AND runs 51c7(3) (margining push) + an eb81 marker print. Handmade reduces eb62(0,3) to a bare `0x06ED=3`, dropping the 51c7(3) push. Orders 6/9 restore eb62 but the framing that 0x06ED=3 alone reproduces eb62 is wrong."
+   ],
+   "missedIssues": [
+    "98ec internally calls ee57() and sets 0x0758=0x10 BEFORE storing 0x0768/0x0769. Order 10 only fixes the 0x0768/0x0769 store (CCE4/CCE5 -> p1/p2) but does not flag that the handmade dea1 tail's 98ec-equivalent also drops the ee57() call (it inlines a partial ec51 arm instead at sb_router.h:537-543). ee57 is the 0x076A/0x076B target-delta producer the cb10 walker (order 14) gates on -- a missed coupling between order 10 and order 14.",
+    "Branch-A copy loop bound: audit says branch A copies `i in [0..DAT_51)`, but the real afed loop (aff0-b017) iterates DAT_4f while DAT_4f<DAT_51 with the afcd width-clamp applied to 0x0754 first (afc8-afcc clamps when DAT_51 < width+1). The handmade's `n=dat51; if(n>0x40)n=0x40` cap is a different (looser) bound than stock's LUT/99b5 clamp. The audit's [0..DAT_51) simplification papers over the real clamp on both arms.",
+    "The handmade reconstructs the eaac/af38 source plane as 0x2a00/0x2b00 keyed on 0x06F0 directly, whereas stock reads it via the 0x0755 R3:R2:R1 tuple loaded by 9a38(=0ddd(0x755)) which cd3f populates from ROM 0x212d[0x06F0] (0de6 at cd3f end). Equivalent ONLY while 0x0755 exactly tracks 0x06F0; if any path sets 0x0755 independently (e.g. a different R3 plane byte) the reconstruction diverges. Not flagged as a fidelity risk in orders 4/5."
+   ]
+  },
+  {
+   "reasoning": "I independently verified the af38 immediateBlocker and orderedFixes #1-5 against the stock CODE_BANK1 disassembly/decompile.\n\nAF38 (immediateBlocker / order 1) \u2014 divergences are REAL and the fix spec is byte-faithful:\n- Branch inversion CONFIRMED. Raw disasm af8b-af8f: `MOV A,0x52; JNZ af92; LJMP b024` => DAT_52!=0 -> af92 (0x0754=1, plane->0x0800 work buffer), DAT_52==0 -> b024 (0x0754=DAT_51, work->0x2900 TX). Handmade sb_router.h:210-235 has these two arms SWAPPED (dat52==0 sets 0x0754=1; dat52!=0 sets 0x0754=dat51). Genuine bug.\n- The 3-condition gate is genuinely MISSING in handmade (it copies unconditionally). I traced both gates byte-by-byte: af92/BRANCH-A gate (afb9-afdf) = 99b5 CY(DAT_50<0x13) && 976e-LUT!=0 && DAT_51==DAT_4f && XDATA[0x0705+DAT_50]!=0 && DAT_51<=LUTwidth, FAIL->afe1 (9988 + write 1 to plane[off+1] + skip copy). b024/BRANCH-B gate (b040-b054) = DAT_50<0x13 && LUT!=0 && DAT_4f==0, PASS clamps 0x0754 to LUTwidth (b060-b072), FAIL->b056 (9988 + 0x0754=0 + skip). Both match the plan's spec.\n- Helper semantics verified: 99b5 sets DAT_4f=R7-5 and returns CY=(DAT_50<0x13) [plan said <0x12, minor]; 976e reads XDATA[0x0600+A] with carry (so PR(0x06f2+DAT_50) for small types, wraps to 0x0700 region for DAT_50>=0x0e \u2014 the plan's literal '0x06F2+(DAT_50-0xe)' offset arithmetic is slightly off but the gate semantics hold).\n- The false '81A= af38 dest' diag label CONFIRMED false: af38 writes 0x0753/0x0754/0x2900-plane/0x0800/SB[0x0D|0x0E]/SB[0x15] only \u2014 never 0x081A. Plan correctly flags it.\n- The sb_af38_force_budget probe IS dead code (seeded =0 in main.c:687), so its 'TXes garbage on the live path' urgency is overstated, but removing invented dead code is fine.\n\nThe af38 CODE fix is faithful. HOWEVER the immediateBlocker's CAUSAL claim is unproven: I confirmed via xrefs+grep that 0x081A is written by b7a4 (sb.h:187-189) and read by a7de's lane-gate; af38 never touches it. So 'the host posts C0 into 0x081A because af38 TXes wrong' is an indirect, multi-hop hypothesis (the plan itself hedges with 'LIKELY elicits'). The b7a4 clear-back (order 3) is the DIRECT lever on 0x081A yet is ranked only 'med'. Because the blocker's resolution is not established and the task says default-refuted when faithfulness/efficacy is unverified, I mark refuted=true for the immediateBlocker's efficacy claim (not its code-fidelity).\n\nOrder 2 (d5da 'byte-exact, no change'): I decompiled d5da. The handmade u4lb_d5da (usb4_lanebond.h:328) and the SEPARATE inline d5da in af38's tail (sb_router.h:253-260) both DROP the d5da return value (stock returns cVar5 = SB[0x0C]-7). Orders 15/17 depend on d5da_ret-1 for the e461/edf5 tokens, so the return omission is load-bearing. Order 2's 'no structural change / verified byte-exact' is therefore wrong \u2014 but order 17 separately catches 'd5da: return cVar5', so the issue is covered by the plan, just inconsistently labeled. Also the two handmade d5da copies diverge from each other (phy_cc10_cmd vs _wait; bound 0x4000 vs 0x2000) \u2014 a fidelity smell.\n\nOrder 3 (b7a4 0x081A.5 clear-back): VERIFIED REAL. Decompile shows the exact conditional clear-back `if((0x07BA && 0x07CC<3)||(0x07B9 && (0x07CF==1||2))) 0x081A&=0xDF;` which handmade DROPS (sb.h:184 comment explicitly admits the omission). The fix is byte-faithful. This is the most directly relevant fix to the 0x081A=C0 blocker and is under-prioritized.\n\nOrder 4 (eaac): VERIFIED faithful. Decompile = 0x0775=1; copy 0x40 bytes SBP2[base+i]->0x0777+i; 97ef (=CCD9 4 then 2, confirmed). Handmade matches. Plan's 'keep' is correct \u2014 this is a true-negative (correctly NOT flagged as divergence).\n\nOrder 5 (cd3f): The 3-way dispatch IS faithful (decompile confirms ebb5/eaac/af38 selection; cd3f calls edd9 first; 0x06F0 set per-port atomically in d4cd is stock-exact). BUT the plan MISSES that sb_connect_present_poll (sb_router.h:383-386) contains a non-stock `if(0x06EC){0x0752=SB[0x18]; ebb5();}` poke \u2014 flagged in its own comment as 'DOCUMENTED-EQUIVALENT'/'spec-sanctioned equivalent reproduction', which is exactly the jank the user wants removed. The plan declares cd3f 'faithful; keep' without flagging this shortcut. Also cd3f now runs from BOTH the a066 ISR (sb_d4cd_transport_edges, line 684) AND the super-loop (present-poll) \u2014 and the in-file comments contradict each other about which. Stock runs cd3f only inside d4cd from the ISR.\n\nNet: the plan's disassembly grounding for the top items is solid (not hand-waved). Real refutable issues are (a) the immediateBlocker's efficacy claim is unproven and the more-direct lever (b7a4) is under-ranked, (b) order 2 mislabels d5da as byte-exact, and (c) order 5 misses a non-stock ebb5 poke. I therefore set refuted=true: the top item (immediateBlocker as THE fix for the blocker) is not established, even though its code transcription is faithful.",
+   "refuted": true,
+   "criticalIssues": [
+    "immediateBlocker EFFICACY UNPROVEN: af38 NEVER writes 0x081A (verified \u2014 af38 only writes 0x0753/0x0754/0x2900-plane/0x0800/SB[0x0D|0x0E]/SB[0x15]). 0x081A is written by b7a4 (sb.h:187-189) and read by a7de's lane-gate. So 'fix af38 -> host posts F3 not C0 into 0x081A' is an indirect multi-hop hypothesis the plan itself hedges ('LIKELY elicits'). The af38 CODE divergences are real and the fix is byte-faithful, but it is NOT established to resolve the 0x081A=C0 latch.",
+    "MIS-PRIORITIZATION: order 3 (b7a4 0x081A.5 conditional clear-back) is the DIRECT writer of 0x081A and its omission is verified real (sb.h:184 comment admits it), yet it is ranked only 'med' while af38 (which never touches 0x081A) is the blocker. The b7a4 clear-back should be co-equal/higher for the 0x081A blocker.",
+    "ORDER 2 IS INTERNALLY INCONSISTENT: it claims d5da is 'byte-exact, no structural change', but handmade's u4lb_d5da (usb4_lanebond.h:328) and the inline af38-tail d5da (sb_router.h:253-260) both DROP the stock cVar5 return (SB[0x0C]-7). Orders 15/17 depend on d5da_ret-1 for the e461/edf5 tokens, so the return is load-bearing. (Order 17 does separately catch 'd5da: return cVar5', so the bug is covered \u2014 but order 2's label is wrong.)",
+    "ORDER 5 (cd3f) MISSES A JANK SHORTCUT: sb_connect_present_poll (sb_router.h:383-386) has a non-stock `if(0x06EC){0x0752=SB[0x18]; ebb5();}` poke, self-described as 'DOCUMENTED-EQUIVALENT / spec-sanctioned equivalent reproduction' \u2014 exactly the deviation class the user wants removed. The plan declares cd3f 'faithful; keep' without flagging it."
+   ],
+   "missedIssues": [
+    "Two divergent transcriptions of the SAME stock d5da exist: u4lb_d5da uses phy_cc10_cmd_wait(1,0,0x0B) with poll bound 0x2000; the inline af38-tail d5da uses phy_cc10_cmd(1,0,0x0B) (no _wait) with bound 0x4000. They should be one faithful function; the plan does not call out this duplication/divergence.",
+    "cd3f dual call-site: handmade runs cd3f from BOTH the a066 INT1 ISR (sb_d4cd_transport_edges @ sb_router.h:684) AND the super-loop (sb_connect_present_poll), and the in-file comments contradict each other (line 372 says 'now runs in the a066 ISR' vs lines 171/285 'super-loop / stack cliff'). Stock runs cd3f only inside d4cd from the ISR. The plan's order 5 doesn't reconcile this.",
+    "cd3f big dispatch GUARD is simplified in handmade: stock has port-vs-0x752.4 cross-checks (0x06f0 in {0,1} vs {2,3}); handmade reduces to `if(d752&0x10) return`. Equivalent only for a 2-port device (0x06f0 in {0,1}). Acceptable here but it IS a simplification the 'faithful; keep' label hides.",
+    "976e LUT addressing carry: 976e does DPH=ADDC #6, so for descriptor type DAT_50>=0x0e the LUT address wraps from 0x06f2+DAT_50 to the 0x0700 region (0x0700+DAT_50-0x0e). Both the existing handmade eaac/af38 LUT reads and the plan's spec use the un-carried PR(0x06F2+...) form. Harmless if routing-descriptor types stay <0x0e, but it is a latent off-by-0x100 the plan does not flag."
+   ]
+  },
+  {
+   "refuted": false,
+   "reasoning": "I independently verified the immediateBlocker (af38) and the top 5 orderedFixes against the raw stock ghidra disassembly/decompile. The core claims hold up; the plan is NOT refuted. Details below.\n\n== immediateBlocker / Order 1 (af38 branch inversion + gate) \u2014 CONFIRMED REAL ==\nRaw af38 disasm (af8b-af8f): `MOV A,0x52; JNZ af92; LJMP b024`. So DAT_52!=0 -> af92, DAT_52==0 -> b024. I traced both bodies via the plane helpers (9a38 loads the SRC plane tuple 0x755 = 0x2a00/0x2b00; 96a7 reads work-buffer XDATA[0x0800+x]; 99e7 returns plane 0x29 = TX 0x2900). Result: af92 (DAT_52!=0) sets 0x0754=1 and copies SRC/RX-plane(0x2a00)->work[0x0800+0x53+i] (loop b008 reads SRC, b00c-b014 writes work). b024 (DAT_52==0) sets 0x0754=DAT_51 and copies work[0x0800+..]->TX-plane(0x2900+2+i) (b081 96a7 reads work, b08b 99e7 -> 0be6 writes 0x29 plane). The HANDMADE (sb_router.h lines 210-235) assigns af92's body to its `dat52==0` arm and b024's body to its `dat52!=0` arm \u2014 i.e. the two arms are SWAPPED relative to stock. The branch-inversion claim is genuinely real, not a hand-reasoned guess.\nThe 3-condition gate is also real: stock gates BOTH arms (afb9 99b5/afbc JNC afe1; afc6 JZ; afca CJNE 0x51,0x4f; afd9 JZ; afdf JC for branch-A; b040/b04d/b054 for branch-B) and on FAIL calls 9988() + writes SBTX[1]=1 (branch A, afe1-afe7) or 9988()+0x0754=0 (branch B, b056-b05d), then falls through to the SHARED b096 tail WITHOUT the copy. Handmade copies UNCONDITIONALLY with no gate and no fail-response. 99b5 verified: sets DAT_4f=R7-5, returns CY=(DAT_50<0x12). 976e verified: returns XDATA[0x0600+param]. So the gate transcription in the fix is accurate.\n\n== Order 2 (d5da 'byte-exact, keep') \u2014 PARTIALLY REFUTED (overstated) ==\nStock d5da (decompiled) has a TRAILING `if(0x0AAC==0){ if(SB[0x0C]>6) zero TX-plane 0x29xx from 0..(SB[0x0C]-6) }` loop that the handmade d5da reproduction (sb_router.h lines 253-260) OMITS entirely. Also the handmade uses `phy_cc10_cmd(1,0,0x0B)` where stock calls e80a with R7=1 (subcmd 1) \u2014 cc12/cc13=0x0B is unverified against the 051b call site. The audit labels order-2 'verified byte-exact'; that is an overstatement. Likely not load-bearing for the 0x081A latch (the trailing loop only clears TX-plane tail), but the 'byte-exact' claim is false.\n\n== Order 3 (b7a4 0x081A.5 clear-back) \u2014 plausible, not independently re-verified here (in sb.h, outside my decompile budget); accept as MED, treat as unverified per default-skeptic.\n\n== Order 4 (eaac faithful) \u2014 CONFIRMED. Stock eaac: 0x0775=1; loop i=0..0x40 copies SBP2[base+i]->XDATA 0x0777+i (dest CONCAT11(6,0x77+i)); 97ef() = CCD9=4 then 2. Handmade matches byte-for-byte. Keep.\n\n== Order 5/6 (cd3f dispatch + edd9 tail) \u2014 CONFIRMED divergence ==\nStock cd3f head = `LCALL edd9` (cd3f), and the 3-way dispatch (ebb5 / eaac / af38) matches handmade's structure. BUT stock edd9 (edd9-edf4) runs `eb62(0,3); 98ec(0,3)` INSIDE the page1-0x0109.0 gate (edea-edf1), which handmade's sb_edd9_receive_ack DROPS (admitted in comment). The edd9 gate itself is correctly transcribed: 9779(9) reads page1 0x0109, `JNB ACC.0` = `if(P1[0x0109]&1)` \u2014 handmade's gate is right; only the eb62+98ec tail is missing. Order 6 is real.\nOrder 7 (sb_chan_prelude wrong-register stub) ALSO CONFIRMED: c3b2 head is LCALL edd9; handmade calls sb_chan_prelude = (void)SB_RD(0x09), the wrong register. Real bug.\n\n== Order 8 (dea1) \u2014 CONFIRMED, multiple real divergences ==\nStock dea1 (dea1-defe) has NO `if(0x06EC)return` early-return, NO CC11 poll/W1C, NO IE_EX1 mask, NO ec51 inline. It runs 989b/gate, the SB[0x00]/[0x04]/[0x01]/P1[0x0100] RMW block, e80a via 051b (R7=2 -> subcmd=2,cc12=0,cc13=0x15), sets 0x06EC=1, then `LJMP db7a`. Handmade adds ALL of: the 0x06EC early-return (line 491), an invented CC11 poll+W1C (519-520), the IE_EX1 mask (555), 8a89-pending (547), and inlines ec51+98ec-snapshot (537-545). All confirmed hand-reasoned. The dea1 e80a arg (2,0,0x15) IS faithful.\n\n== Order 10 (98ec stores wrong cells) \u2014 CONFIRMED BLOCKER ==\nStock 98ec(p1,p2): 0x0758=0x10; ee57(); 0x0768=R6(=p1); 0x0769=R7(=p2). db7a/edd9 both call 98ec(0,3). Handmade inlines 0x0768=CCE4, 0x0769=CCE5 (dea1 lines 544-545) \u2014 stores HW regs instead of the (0,3) params. Genuine divergence; the 'lane-width snapshot' label is wrong (98ec just stores its two args).\n\n== Order 9 (db7a tail) \u2014 CONFIRMED. Stock db7a ends with eb62(0,3)+98ec(0,3); handmade omits these in sb_db7a_route_arm (admitted) and instead inlines them in dea1. The 0x07B9!=0 else-branch helpers (98de/984d/98e4/975e) are reproduced as masked-self no-ops in handmade \u2014 real fidelity gap, lower priority (0x07B9==0 is the live path).\n\nNET: the immediateBlocker and orders 4-10 are correctly diagnosed and the fixes are byte-faithful (modulo the minor 9988/d5da approximations noted). I do not refute the plan. I flag the order-2 'byte-exact' overstatement and a couple of fix-text approximations as criticalIssues, and note missed jank items.",
+   "criticalIssues": [
+    "Order 2 is mis-labeled 'verified byte-exact': stock d5da has a TRAILING `if(0x0AAC==0){if(SB[0x0C]>6) zero TX-plane 0x29xx[0..SB[0x0C]-6]}` clear loop (decompile of CODE_BANK1::d5da) that the handmade d5da reproduction (sb_router.h lines 253-260) omits entirely. Also handmade's `phy_cc10_cmd(1,0,0x0B)` vs stock e80a(subcmd=1) leaves cc12/cc13=0x0B unverified against the 051b call site. The 'keep, no structural change' verdict should be downgraded to 'verify the trailing TX-clear loop is non-load-bearing and confirm the e80a args'.",
+    "Order 1 fix-text approximates the af38 FAIL-path helper 9988 as `(void)SBTX_RD(1)`. Stock 9988 actually does `SBTX[1] = SBTX[1] & 0x80` (read-modify-WRITE clearing bits0-6 of 0x2901), not a discarded read. Branch-A fail then does INC R1 + SBTX[1]=1; branch-B fail does 0x0754=0. Transcribe 9988 as the &0x80 RMW, not a no-op read, to stay byte-faithful.",
+    "Order 1 omits that the SHARED b096 tail begins with `9695()` = a discarded read of SB[0x0C] (r3_read 0x280c) BEFORE building the status byte. The status byte high bit comes from THAT 9695 read (b099 ANL #0x80), i.e. (SB[0x0C]&0x80) is the result of 9695's read of 0x280c, which the handmade approximates as SB_RD(0x0C). This is consistent but the fix text should keep the 9695 read ordering since it shares the SB accessor state.",
+    "The immediateBlocker's premise that the af38 force_budget probe 'TXes garbage on the live path' is overstated: main.c line 687 seeds sb_af38_force_budget=0, so the probe is dead code on the live path (gated `if(sb_af38_force_budget && ...)`). Removing it is correct hygiene but it is NOT actively corrupting the connect; the justification should be 'dead probe, remove for clarity' not 'TXes garbage live'."
+   ],
+   "missedIssues": [
+    "sb_connect_present_poll (sb_router.h lines 383-386) contains a hand-reasoned 'spec-sanctioned equivalent' that pokes ebb5's effect from the super-loop whenever 0x06EC==1 (`if(PR(0x06EC)){PR(0x0752)=SB_RD(0x18); sb_set_connect_present_ebb5();}`). This is exactly the 'documented-equivalent / spec-sanctioned equivalent' jank the user wants removed, and the stock cd3f reaches ebb5 ONLY via its real dispatch gate ((0x752&0x60)==0x60). Order 5 says 'keep cd3f faithful' but does NOT call for removing this super-loop ebb5 short-circuit. It should be removed alongside the af38 probe.",
+    "edd9 double-arm risk: once order 6 restores eb62(0,3)+98ec(0,3) inside sb_edd9_receive_ack AND order 8/9 also place the eb62+98ec tail in dea1/db7a, the route-query sub-FSM (0x06ED=3, 0x0758=0x10) could be armed twice per connect edge (cd3f calls edd9 first, then dea1->db7a calls it again). Stock has THREE distinct 98ec callers (edd9, db7a, dea1->db7a) but they run at different FSM phases; the plan should specify the ordering so the super-loop's per-iteration cd3f doesn't repeatedly reset 0x0758=0x10 mid-route-query.",
+    "Order 10 should also note db7a/edd9 call 98ec(0,3) i.e. p1=0, p2=3 -> 0x0768=0, 0x0769=3 (NOT a snapshot of anything). The plan says 'db7a calls 98ec(0,3)' but the eed9 path and the handmade's claim that 0x0768/0x0769 is a 'lane-width snapshot b0b4 diffs' is the actual root mislabel \u2014 b0b4's width gate reads 0x0768/0x0769 expecting 0/3 sentinels, so storing CCE4/CCE5 there actively poisons b0b4. Confirm b0b4's consumer reads 0/3, not a width, before assuming the fix restores correct behavior.",
+    "The handmade dea1 reproduction calls e80a via a bounded CC11 poll that is INVENTED (order 8 flags removing it), but stock's 051b/e80a (the real phy_cmd_and_wait) has its OWN internal wait. If e80a's handmade implementation (boot_phy.h, not audited in top-5) does NOT actually wait, removing the dea1 CC11 poll could regress timing. The plan should verify boot_phy.h's phy_cc10_cmd(2,0,0x15) blocks on the PHY-cmd-done event before deleting the dea1 poll, otherwise order 8 trades one hack for a race."
+   ]
+  }
+ ],
+ "jankCount": 78,
+ "perAreaSummary": [
+  {
+   "area": "A1-boot",
+   "summary": "Audited boot_phy.h + main.c against stock fw_tinygrad.bin (Ghidra). The PHY/SBU mailbox primitives (cc10/cc11 @E50D/E80A/E8EF), d0d3 (Type-C SBU @D0D3), d118, cf28 (@CF28), dd42 (@DD42), e57d (@E57D), e8a9 (@E8A9) are byte-faithful. THREE real divergences in boot_phy.h: (1) boot_phy_d996_pcie_tunnel_boot OMITS the entire d996 TAIL (P1[0x7041]&=0xBF; P1[0x1507]=(.&0xFB)|4; P1[0x1507]=(.&0xFD)|2 on the DPX=1/page1 plane) AND stubs e25e (d702+cc62x4 banked-PHY writes) as a bare comment; (2) boot_phy_d630_lane_power omits the E76C/E774 cc69 RMW latches (only writes E77C); (3) bank0_92c5_seed OMITS the stock bank0_e957/db09 staging loop (a83=0..5 -> b838/be02 PIPE-lane RAM). The d436 width stub writes B434/B436 directly instead of the c089/cc8b ramp (net-equivalent but unverified). The BIG finding is main() BOOT ORDER: stock main_boot_and_superloop@0x2FB4 runs ce79 -> 5284(clock/analog C65B/HDDPC/PHY_EXT_2D) -> e971 -> boot_hw_init_main(4fb6: 5305/4c40 RAM-reset+0x09F9=4, 4be6 timers/C800/C801/CA60, 92c5, 8d77, de16, eef9, WAIT C6B3&0x30, cd6c, d127, bf8e) -> b1cb(mode decision). Handmade OMITS 5284 entirely, OMITS boot_hw_init_main's 4be6/de16/eef9/cd6c/bf8e and the C6B3&0x30 PHY-ready WAIT, runs 92c5_seed but never 8d77 (hand-seeds 0x09F9=0x87 + 0x09F5-8 manually), and reorders 92c5 to AFTER ce79 in main rather than inside boot_hw_init. boot_phy_bringup_early itself (the ce79 body) is faithful and correctly tail-jumps d996.",
+   "nonFaithful": 8
+  },
+  {
+   "area": "A2-pd",
+   "summary": "PDaudit",
+   "nonFaithful": 6
+  },
+  {
+   "area": "A3-vdm",
+   "summary": "vdm/usb4 audit",
+   "nonFaithful": 6
+  },
+  {
+   "area": "A4-sb",
+   "summary": "Audited handmade/src/sb.h against stock fw_tinygrad.bin (Ghidra). The descriptor-ENGINE plane model (P12 = 0x12 plane / physical 0x011200) is CORRECT: a2ff/a33d/c208 all latch R3=2,R2=0x12 (verified by disasm), and the engine primitives eng_a30c/a308/a2df/a31c/a348/a327 + the commit (e7fb->e83d->e711) are faithfully transcribed at the micro-op level, including the bounded poll on ENGINE[0x38].0. ccb3 main+sub descriptors and c270's three DROM descriptors land on the correct ENGINE bytes [0x3C..0x3F] with the right data sources. e0d9(0) seed is correctly the zero variant (NOT the 0x3E/RXPLL e0d9(4)). b230/bb37 are ~95% byte-faithful for the happy connect path.\n\nCRITICAL STRUCTURAL FINDING: the sb_assert() \"tail\" comments cite FICTIONAL stock addresses (a460/a463/a469/a48c/a4e8/a4fe/a480/a50e/a511/a514/a51b/a51e). The real driver is bank0 FUN_CODE_a480 (engine descriptors + b230@0x0606 + bb37@0x060b); those addresses a460-a527 in bank1 are an unrelated USB descriptor handler. Annotate sb_assert with stock a480 and the real sub-addresses below. (There is also a SECOND, un-modeled stock caller of bb37: CODE_BANK1::da9f @dadf \u2014 a different preamble path; note it but a480 is the one handmade models.)\n\nThe real divergences are: (1) ccb3 a30c and ALL THREE c270 a308 \"width\" args use the freshly-read ENGINE[0x34] high-nibble, NOT the constant 0x81 / XDATA bytes the handmade passes \u2014 systemic engine bug. (2) u4c_bcd7_tail OMITS the two leading RMWs (ENGINE 0x011504 = val&0xF3 ; page1 0x010000 = val&0xFB) before CA06. (3) u4c_d556 omits the d31e descriptor-engine commit AND the 0x09FA.7-gated nested block which IS taken on the happy path (0x09FA=0x81, bit7 set). (4) several small extra/missing bit clears in b230/bb37 (invented bit6 clears; missing bit-set/clears on SB[0x2D]/[0x67]/[0xC8]). Details + exact fixes per finding.",
+   "nonFaithful": 15
+  },
+  {
+   "area": "A5-router",
+   "summary": "Audited sb_router.h against stock fw_tinygrad.bin bank1 (af38, eaac, cd3f, edd9, ebb5, d4cd, a066, dea1, db7a, c3b2, eed6, e52d, cb10, d5da + all paged-accessor helpers 9a38/9a3e/9a45/96a7/99e7/99b5/976e/9988/97ef/98c7/9838/999e). Resolved every paged accessor to an explicit plane+addr. HEADLINE FOR THE BLOCKER: stock af38 BRANCH B (and A) GATE the descriptor copy on a 3-condition check (99b5 -> CY=(DAT50<0x12); 976e LUT 0x06f2+DAT50 != 0; DAT51 length vs LUT width). On gate FAIL stock writes a MINIMAL response (0x0754=0, SBTX[1]=1) instead of copying; handmade UNCONDITIONALLY does a bounded work-buffer copy with NO gate -> on a malformed/short host descriptor the device TXes wrong payload, which is a strong candidate for why the host posts C0 not F3 into 0x081A. SRC plane for af38/eaac is CORRECT (0x0755 tuple = {R3=2,R2=0x2a/0x2b,R1=0} -> page1 0x2a00/0x2b00, matches SBP2_RD). cd3f gate, eaac copy (len 0x40, dest 0x0777, 97ef CCD9 4/2), d4cd transport edges, dea1 SB RMW block, db7a branch direction, and a066 PART2 W1C acks are all FAITHFUL. DIVERGENT: eed6 second op is 999e (0x06F1=(SB[0x24]&6)>>1) NOT the fabricated P1[0x01C8] RMW. STUB: cb10 omits the ee57/e672/cdf5 0x06ED substate advance (the state-5 walker push) and cbbe margining. sb_chan_prelude (used by c3b2) is a gutted (void)SB_RD(0x09) reading the WRONG reg vs the real edd9. sb_con_consequence invents an 0x06EC early-return + IE_EX1 mask + inlined db7a-tail/ec51 not in stock.",
+   "nonFaithful": 10
+  },
+  {
+   "area": "A6-lanebond",
+   "summary": "3 live-path blockers in usb4_lanebond.h vs stock CODE_BANK1.",
+   "nonFaithful": 5
+  },
+  {
+   "area": "A7-connect-irq",
+   "summary": "test2 - checking subset of 4 blocker/high findings",
+   "nonFaithful": 4
+  },
+  {
+   "area": "B1-bootchain",
+   "summary": "Traced stock from reset (boot_reset_cstartup@0x431a) -> main_boot_and_superloop@0x2FB4 -> the super-loop body, and both ISRs (int0 0x0e5b, int1 0x4486 int1_isr_orchestrator). Boot order is: 5418(cc32.0); ce79 boot_phy_bringup_early; 5284 clock/analog; e971(stub); boot_hw_init_main@0x4fb6 [=5305 ramstate-reset(09F9=4)/e597/e14b/4be6 init_sys_flags(INT-enable+ef24/ef1e)/92c5/8d77/de16/eef9; WAIT C6B3&0x30; cd6c/d127/bf8e]; b1cb USB4-vs-USB3 mode-decision(PIPE cfg + CC10 arm; writes 09F9=1/2, 09FA=4); then IF(09F9&0x83) the USB4 boot-init {e56f router-op enable; b230 sb_lane_flip_init; d894; baa0 pd_cc_attach_term}; then EX0=EX1=EA=1; super-loop. Handmade reproduces the boot chain well (boot_phy/cf28/ed02/d996, usb_pipe_engine_init+usb4_phy_arm=b1cb, usb4_irq_arm=4be6 tail, usb4_routerop_init=e56f, sb_lane_flip_init=b230, pd_cc_attach=baa0/pd_keystone). The MAJOR divergences are in the SUPER-LOOP and the two ISRs, where handmade either omits stock branches or replaces the host-driven engine-redrive with a connect-path hack. The single most load-bearing omission tied to the stated blocker: stock drives bank0_8a89 (lane-MODE engine) + sets 0x09FA|=4 + 0x0AE2=1 from the INT1 C80A.4 handler c105/a522 link-width-event path (and from INT0 91D1.1/9302.2 -> e94d/e952 -> c9a8); handmade OMITS the c105 body entirely (only sets a \"seen\" flag in usb4_int_demux) and instead force-drives 8a89 from the connect critical path on an fsm_stall>=6 heuristic. That is why 0x09FA never gets its .2 bit set by a host event and 8a89 runs at the wrong time. All addresses below are stock ghidra fw_tinygrad offsets.",
+   "nonFaithful": 8
+  },
+  {
+   "area": "B2-tunnelchain",
+   "summary": "Traced stock's full SB-connect -> GPU chain: e672(dispatch) -> cm_conn_routing_setup(a7de, state-3) -> b0b4(state-4) -> 8000/850b(state-5 lane-bond walker) -> M2 router-ISR(a066) -> e552/3578 downstream-PCIe to GPU; plus the INT1 PcieLinkUp(e911/E763) leg.\n\nVERDICT: The FSM DRIVER and state-3 are faithfully ported. The chain is intact up to \"lanes reach CL0\", but THREE load-bearing legs that actually power the tunnel and bring up the GPU are STUBBED/REPLACED with hand-reasoned stand-ins, and the cb10->e672 wiring is restructured:\n\n1. STATE-4 TUNNEL POWER-ON (b0b4 -> e305 -> e26a/cdc6 + a840 + B402): handmade replaces the real e305 PcieTunnel-PwrOn (REG_CPU_MODE_NEXT mode-bit program by 0x0AEC/0x0750/0x0751, ee29(0xCA06), B402 clear, a840 SERDES stub, e26a E764-train via cdc6) with a single boot_phy_e57d pulse + one CA06 RMW marked \"Round B stand-in\". b8db [CDRV ok] (real CDR/margining compare loop, 10-iteration C2D0/C350 lock) is a bare UART marker. c593/c586 (C8FF rate descriptor) omitted.\n\n2. POST-LANE-BOND TUNNEL-UP (e552/sb_lane_bond_complete_tunnel_up): handmade only calls b7a4 (descriptor reload) + sets a pending flag; it OMITS b031(05d4), e06b(0598), and the ENTIRE eb0a() tunnel-ENABLE chain (ee29 + e26a(1,0) + d436 + d7cd + e7ae + the [PcieTunnel-...] print) which is what arms the tunnel adapter before the downstream link.\n\n3. GPU DOWNSTREAM BRINGUP (3578 pcie_downstream_link_bringup): handmade's pcie_power_on() is a from-scratch hand-written sequence on a DIFFERENT register set (REG_TUNNEL_LINK_STATUS/B403/HDDPC) and is NOT a transcription of stock's 3578 (B455 LTSSM speed cfg, B220 cap-read TLP via 0dc5, B480 PERST release, e8a9(1)+d436(0xF) x4-width latch, state 0x0F).\n\n4. PcieLinkUp ISR (e911/E763): handmade W1C-acks E763.2/.3 but drops the C80A.0 gate, the [PcieTunnel-PcieLinkUp] print, and the d17e read.\n\n5. cb10 wiring: stock cb10 calls e672 from its tail (gated by 0x076A/0x076B width-delta + ee57); handmade's sb_cb10_lane_advance is observe-only and e672 is instead pump-driven (up to 4x/iter) directly in the super-loop. Functionally advances the FSM but diverges in cadence and omits 981b/da9f/cdf5/ee57.\n\nCURRENT BLOCKER (a7de lane-present latch 0x0819.0) is UPSTREAM of all the above and is in sb_router.h (eaac/af38 plane selection), not in this state-4/5 chain \u2014 the chain below it is structurally present but cannot be exercised until the latch passes.",
+   "nonFaithful": 11
+  },
+  {
+   "area": "C1-iram",
+   "summary": "IRAM/stack audit of handmade vs stock: NO BLOCKING overlap or collision found. (1) Stack: crt0 sets sp=0x7F (ihx confirms `75 81 7F`), so the 8051 stack occupies 0x80-0xFF = 128 bytes. SDCC's DSEG (108B of anonymous locals/temporaries; no named globals) plus REG_BANK_0 (0x00-0x07), OSEG overlay (0x08-0x0B), BIT_BANK (0x20) place the data top at 0x7E with 0x7F as a 1-byte guard before the stack at 0x80 \u2014 NO overlap with live DSEG/overlay data (firmware.mem agrees: data 'a' 0x21-0x7E, stack 'S' 0x7F-0xFF, 20 spare bytes at 0x0C-0x1F). The sp=0x7F in crt0 matches build __start__stack=0x7F. (2) Peak depth (full call-graph DFS over build/obj/main.asm, both ISRs save all R0-R7+ACC/B/DPL/DPH/PSW/bits=14B in prologue): deepest single chains are int0_isr=43B, int1_isr=33B, main super-loop=32B. The deep state-5 walker chain (main->cb10->e672->state5->walk_8000->8992->d5da->phy_cc10 ~30-34B) AND the INT1 connect chain (int1_isr->usb4_int_demux->a066->con_consequence->phy_cc10 ~31B) both fit. Critically, the WHOLE FSM walker chain runs with EA cleared (main.c:724 `IE &= ~IE_EA` ... :747 `IE |= IE_EA`), exactly matching stock's `{EA=0; cb10(); ...; EA=1;}` (main.c:715 cites stock@0x2FB4), so an ISR CANNOT preempt the deepest chain. Worst real case = main non-FSM code (~32B) + one ISR (int0=43B, no nesting since no IP/EA-reenable) = ~75B << 128B (~53B headroom). (3) Handmade uses NO fixed IRAM/IDATA scratch at all \u2014 stock's DAT_INTMEM_4e (cd3f), DAT_INTMEM_21/22/23/24 + 0x6a/0x6c (8000 walker), 0x4e-0x53 (af38) are ALL reimplemented as C locals or XDATA cells (PR()/__xdata __at). Zero IRAM-scratch collision possible. (4) Match to stock: stock zeroes IDATA 0xFF..0x00 and sets SP=0x72 (141B stack, with its IRAM scratch BELOW 0x72); handmade trades that IRAM scratch + 13B of stack for XDATA, giving a smaller-but-non-overlapping 128B stack. Interrupt-gating discipline (EA=0 around FSM) is faithful. ONE latent divergence (low priority): SDCC small-model places function params/locals in fixed non-reentrant DSEG globals (_*_PARM_n); functions shared between an ISR and the super-loop's NON-EA-protected code (P1_REG8_wr, phy_cc10_cmd, uart_puthex) could corrupt those globals if an ISR preempts a same-function call there. The load-bearing FSM path is EA-protected; only diagnostics/USB-bulk paths are exposed. This differs from stock hand-ASM which uses R-regs/IRAM the ISR prologue saves.",
+   "nonFaithful": 1
+  },
+  {
+   "area": "C2-xdata",
+   "summary": "XDATA audit",
+   "nonFaithful": 4
+  }
+ ]
+}
