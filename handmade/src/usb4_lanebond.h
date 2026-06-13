@@ -671,26 +671,44 @@ static void u4lb_c593(void) {
   P1_WR(0x1285, (uint8_t)((P1_RD(0x1285) & 0x0F) | 0x30)); /* 0x1285 = (0x1285&0x0F)|0x30 */
 }
 
-/* ---- b8db: CDR/PLL validate loop. CODE_BANK1::b8db (45152). Disasm-verified: a PROLOGUE picks an
- * early-return (stock does NOTHING -- no loop, no e9e7) in three cases, else a bounded retry loop that
- * polls the PLL-lock bit (c3a8 = bit6/0x40, NOT bit5) and fires e9e7 (RxPLL reset) on a miss. Caller
- * DISCARDS the return; the only hardware effect is the e9e7 set, so the early-returns matter (they stop
- * a spurious RxPLL reset right after the PHY trained). The per-iteration CDR-margin SUBB compare is
- * read-only and only gates loop-exit timing -- omitted here; we exit on PLL-lock. ---- */
+/* ---- b8db: CDR/PLL validate loop. CODE_BANK1::b8db (45152), full wrsweda2r disasm-verified body. A
+ * PROLOGUE picks an early-return (stock does NOTHING) in three cases + sets the per-lane margin window
+ * (lo/hi = CDR phase, lo52:lo54 / hi52:hi54 = a 16-bit eye margin), then a bounded (<=10) loop that on
+ * EACH pass polls bit6 PLL-lock (c3a8) AND the full CDR-margin SUBB compare on C2D2/C2D9/C2DA/C352/C359/
+ * C35A, and fires e9e7 (RxPLL reset) on ANY miss -- this is THE retry that drives C2D0/C350 from 0xE4 to
+ * 0xF4 (bit4 = full CDR lock; stock-[P:]-confirmed). Exiting early on bit6 alone (the prior simplified
+ * version) skipped those e9e7 retries -> the CDR never fully locked -> the lane never came up. Caller
+ * discards the return (538d success print dropped, cosmetic). Locals -> static/__xdata (DSEG is full). ---- */
+static __xdata uint8_t b8db_lo, b8db_hi, b8db_lo52, b8db_hi52, b8db_lo54, b8db_hi54;
 static void u4lb_b8db(void) {
-  uint8_t iter;
+  __xdata uint8_t s50, s51, s52, s53, s54, s55;
+  uint8_t cnt;
   if ((P1_RD(0x0000) & 0x02) == 0) {                    /* b8e4: plane-2 reg0.1 clear */
     if ((PR(0x92F8) & 0x0C) == 0) return;              /* b953-b95f: nothing to validate */
+    b8db_lo = 0x01; b8db_hi = 0x28;                     /* b962-b965 */
+    b8db_lo52 = 0x01; b8db_hi52 = 0x3D; b8db_lo54 = 0x01; b8db_hi54 = 0x43;   /* b968-b971 */
   } else if (PR(0x0750) == 1) {                         /* b8e7 */
     if (PR(0xC297) & 0x20) return;                     /* b8ef-b8fc: already locked */
+    b8db_lo = 0x01; b8db_hi = 0x28;                     /* b8ff-b902 */
+    if (PR(0x07BA) == 0) { b8db_lo52=0x01; b8db_hi52=0x47; b8db_lo54=0x01; b8db_hi54=0x4D; }  /* b90d-b916 */
+    else { b8db_lo52=0x01; b8db_hi52=0x3D; b8db_lo54=0x01; b8db_hi54=0x43; }                  /* b90b->b968 */
   } else {
     if (PR(0xC2A7) & 0x20) return;                     /* b91b-b928: already locked */
+    b8db_lo = 0x01; b8db_hi = 0x20;                     /* b92b-b92e */
+    if (PR(0x07BA) != 0) { b8db_lo52=0x01; b8db_hi52=0x3E; b8db_lo54=0x01; b8db_hi54=0x42; }  /* b937-b940 */
+    else { b8db_lo52=0x01; b8db_hi52=0x48; b8db_lo54=0x01; b8db_hi54=0x4C; }                  /* b945-b94e */
   }
-  for (iter = 0; iter < 10; iter++) {
-    (void)(PR(0xC2D2) & 0x3F); (void)PR(0xC2D9); (void)PR(0xC2DA);   /* b977-b987: CDR shadow (read-only) */
-    (void)(PR(0xC352) & 0x3F); (void)PR(0xC359); (void)PR(0xC35A);   /* b989-b999 */
-    if ((PR(0xC2D0) & 0x40) && (PR(0xC350) & 0x40)) break;           /* c3a8: bit6 PLL lock */
-    u4lb_e9e7();                                                     /* b9f3: RxPLL reset on miss */
+  for (cnt = 0; cnt < 10; cnt++) {                      /* b974 + ba01-ba08 bound */
+    s50 = PR(0xC2D2) & 0x3F; s52 = PR(0xC2D9); s53 = PR(0xC2DA);   /* b977-b987 */
+    s51 = PR(0xC352) & 0x3F; s54 = PR(0xC359); s55 = PR(0xC35A);   /* b989-b999 */
+    if ((PR(0xC2D0) & 0x40) && (PR(0xC350) & 0x40) &&             /* c3a8 bit6 PLL lock, both lanes */
+        s50 >= b8db_lo && s50 <= b8db_hi && s51 >= b8db_lo && s51 <= b8db_hi &&
+        (uint8_t)(b8db_lo52 - (s53 <  b8db_lo54         ? 1 : 0)) <= s52 &&
+        s52 <  (uint8_t)(b8db_hi52 - (s53 < (uint8_t)(b8db_hi54 + 1) ? 1 : 0)) &&
+        (uint8_t)(b8db_lo52 - (s55 <  b8db_lo54         ? 1 : 0)) <= s54 &&
+        s54 <  (uint8_t)(b8db_hi52 - (s55 < (uint8_t)(b8db_hi54 + 1) ? 1 : 0)))
+      return;                                            /* b9f8: full margin passed -> CDR locked */
+    u4lb_e9e7();                                         /* b9f3: RxPLL reset on any poll/margin miss */
   }
 }
 
@@ -960,7 +978,9 @@ static void u4lb_s5_diag(void) {
   uart_puts(" 775="); uart_puthex(h);
   uart_puts(" E764="); uart_puthex(REG_PHY_TIMER_CTRL_E764); uart_puts(" E762="); uart_puthex(PR(0xE762));
   uart_puts(" ED="); uart_puthex(PR(0x06ED));
-  uart_puts(" snap="); uart_puthex(PR(0x0779)); uart_puthex(PR(0x077A)); uart_putc(']');  /* CL snap 0x0779/0x077A */
+  uart_puts(" snap="); uart_puthex(PR(0x0779)); uart_puthex(PR(0x077A));  /* CL snap 0x0779/0x077A */
+  uart_puts(" pll="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350));   /* C2D0/C350 bit6 PLL-lock (stock=F4) */
+  uart_putc(']');
 }
 
 /* ---- 8501: e80a(R5R4=0x0065,R7=2) via trampoline 0x051b -- a banked SB-transport drain/poll. The FSM
