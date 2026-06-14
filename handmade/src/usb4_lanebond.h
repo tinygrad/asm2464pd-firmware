@@ -535,7 +535,7 @@ static void u4lb_e74e(void) {
  * Verbatim CODE_BANK1::ee29 (52581). ---- */
 static void u4lb_ee29(void) {
   REG_PCIE_LANE_CTRL_C659 &= 0xFE;                      /* e8a9(0xf): (0xf&1) -> C659 &= ~1 */
-  REG_CPU_MODE_NEXT = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);  /* d185: CA06 = B402 & 0xFE */
+  REG_PCIE_CTRL_B402 &= 0xFE;                          /* d185 leaves DPTR=0xB402; ee31 MOVX@DPTR -> B402 &= ~1 (clear bit0; CA06 UNTOUCHED). The decompiler mismodeled this as CA06 (caller passed 0xca06). B402.0 held set kept the PHY/CDR in reset -> C2D0 stuck 0xE4. */
   u4lb_ed44();
   u4lb_e74e();
   PR(0x0B42) = 0;
@@ -911,7 +911,6 @@ static uint8_t u4lb_e461(void) {
    * response and the walker parked at 0x30. The ONLY functional difference is the SB[0x15] value.
    * KEY (kept): status byte (SB[0x0C]&0x80)|8 -> SB[0x0C] (9695 leaves R1=0x0C); token 0x0719 = d5da_ret-1. */
   {
-    uint8_t dc;
     PR(0x0AAB) = 0;                                /* 9960/9966: 0xAAB = 0 */
     PR(0x0AA8) = PR(0x0776) ? 0 : PR(0x0718);      /* e1cb p3 = 0 (9966 CLR A); e2b9 p3 = 0x0718 (=4) */
     PR(0x0AA9) = 0x0D;                             /* p2 -> SBTX[0] */
@@ -934,8 +933,9 @@ static uint8_t u4lb_e461(void) {
     phy_cc10_cmd(1, 0, 0x0B);                        /* d614 */
     SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));
     REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;            /* 97ef strobe */
-    dc = SB_RD(0x0C);                               /* d5da return = SB[0x0C] - 7 */
-    PR(0x0719) = (uint8_t)((uint8_t)(dc - 7) - 1);  /* token 0x0719 = d5da_ret - 1 */
+    (void)SB_RD(0x0C);                              /* d5da reads SB[0x0C] last; its return is DISCARDED by stock */
+    REG_XFER2_DMA_STATUS = 0x01;                    /* e2b9/e1cb tail: dec a (A=1 after the 97ef CCD9=2) -> CCD9=1 */
+    PR(0x0719) = 0x01;                              /* token 0x0719 = 1 HARDCODED (stock discards d5da ret). The old data-dependent token could land on 0 (re-push storm) or 2 (spurious eda0 re-arm), breaking the host CL-response handshake. */
   }
   return 1;
 }
@@ -1100,7 +1100,7 @@ static void u4lb_walk_8000(void) {
     }
     else if (s == 0x70) {                            /* 82d5: present-gated plane RMW -> 0x90 */
       if (u4lb_ee6e(lane)) {                         /* 82d5-82d8 present-gate */
-        PR(0x0800 + lane) |= 0x10;                   /* 82da-82df 969e |= 0x10 */
+        PR(0x081C + lane) |= 0x10;                   /* 82da-82df 969e -> 0x081C+lane (DPTR=0x0800+code[0x21ae]=0x1C); NOT 0x0800 */
         PR(0x081C + lane) |= 0x40;                   /* 82e0-82e8 96a9 |= 0x40 */
         PR(0x0819 + lane) &= 0x7F;                   /* 82e9-82f1 96a7 &= 0x7F */
       }
@@ -1127,7 +1127,7 @@ static void u4lb_walk_8000(void) {
       }
     }
     else {                                           /* default (804f): shadow clear -> 0x20 */
-      PR(0x0800 + lane) &= 0xEF;                     /* 804f-8054 969e &= 0xEF */
+      PR(0x081C + lane) &= 0xEF;                     /* 804f-8054 969e -> 0x081C+lane &= 0xEF (969e targets 0x081C+lane) */
       PR(0x081C + lane) &= 0x7F;                     /* 8055-805d 96a9 &= 0x7F */
       PR(0x0819 + lane) &= 0xDF;                     /* 805e-8066 96a7 &= 0xDF */
       PR(0x0759 + lane) = 0x20;                      /* 8067: state = 0x20 */
