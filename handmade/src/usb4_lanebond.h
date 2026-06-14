@@ -1227,6 +1227,8 @@ static void u4lb_walk_8000(void) {
           if (cap & 1) { __xdata uint16_t m = (uint16_t)(PR(0x073E + v) * 0x20); d24 |= (uint8_t)m; d23 |= (uint8_t)(m >> 8); }
           uart_puts(lane ? "\r\nL1:CL0 " : "\r\nL0:CL0 ");
           uart_puthex(d23); uart_puthex(d24);
+          SB_WR(0x6A + 2 * lane, d23);   /* 8470-8492: 99d1->R1=0x6A/0x6C; 0c7a->0b15 STAGES the per-lane CL */
+          SB_WR(0x6B + 2 * lane, d24);   /* config into the SB plane that af38 echoes into the 40 descriptor */
           u4lb_ea7c(v, lane);
           PR(0x075B + lane) = 0x50;
         }
