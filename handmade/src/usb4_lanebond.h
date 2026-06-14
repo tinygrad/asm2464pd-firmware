@@ -267,7 +267,7 @@ static void u4lb_cm_conn_routing_setup(void) {
   /* a88f..: latch the 0x077a lane-width bits into 0x0819/0x0751/0x0750. */
   { uint8_t b77a = PR(0x077A);
     if ((b77a & 1) && (PR(0x081A) & 1)) { PR(0x0819) = (PR(0x0819) & 0xFE) | 1; }
-    if (b77a & 0x02) { if (PR(0x081A) & 2) { PR(0x081A) = (PR(0x081A) & 0xFD) | 2; } }  /* 9a31 net */
+    if ((b77a & 0x02) && (PR(0x081A) & 2)) { PR(0x0819) = (PR(0x0819) & 0xFD) | 2; }  /* latch 0x0819.1 (lane-1 present) -- was wrongly writing 0x081A (no-op) -> connect stayed single-lane */
     /* 0x0751 = 1 iff (0x077a.4 && 0x081a.4 && 0x0819.0 && 0x0819.1) else 0 */
     if ((b77a & 0x10) && (PR(0x081A) & 0x10) && (PR(0x0819) & 1) && (PR(0x0819) & 2)) PR(0x0751) = 1;
     else PR(0x0751) = 0;
