@@ -647,6 +647,192 @@ static void sb_channel_connect_service(void) {
 }
 
 /* ====================================================================================
+ * a5d8 (CODE_BANK1::a5d8) — the SB device->host ROUTER-OP responder ("[Pend Int]").
+ *
+ * The host posts a 4-byte sideband router-op descriptor into page-1 XDATA 0x0998-0x099B during USB4
+ * lane-bond. a5d8 snapshots it (0x0998-0x099B -> working regs 0x0A9D-0x0AA0), validates the
+ * descriptor-valid bit (0x0AA0.7), decodes the opcode (0x0AA4 = 0x0A9F & 7), and either:
+ *   - aa4 != 0 (ROUTE/transmit):  builds the SB-transport TX answer and pushes it via the e1cb (READ
+ *     answer, aa4==2) or e2b9 (WRITE answer, aa4==1) descriptor engine. THIS is the converged root
+ *     cause that the AMD GPU never enumerates: the prior handmade had only a NO-OP stub here, so the
+ *     host's router-ops were ignored, the lanes never advanced to CL0, and the PCIe tunnel/GPU never
+ *     came up.
+ *   - aa4 == 0 (CONFIG-space):    reads/writes the local router config tables (page-0x08 / page-1
+ *     0x099C) per the host's config-register op, then writes the answer back into 0x0998/0x0999 and
+ *     commits SB[0x06]=1. (The deep CM 4CC command dispatcher d283, reached only when 0x0AA2==8, is
+ *     a separate subsystem and is left as a TODO stub -- it is NOT on the lane-bond critical path.)
+ *
+ * Transcribed BYTE-EXACT from the raw CODE_BANK1::a5d8 disassembly (a5d8-a7dd) -- the decompiler
+ * mismodels the whole R2:R1/DPTR paged-accessor cluster, so every value/target/mask/arg below was
+ * resolved from the instruction listing, NOT the decompile. Verified accessor map:
+ *   plain MOVX @DPTR (DPX=0) on page 0x06/0x07/0x08/0x09 -> PR(0x0600/0x0700/0x0800/0x0900 + off)
+ *   r3_*_dispatch (R3=2,R2=0x28) -> SB_RD/SB_WR(off);  (R2=0x29) -> SBTX_RD/SBTX_WR(off) (0x2900 plane)
+ *   lane_port_map_a = ROM CODE 0x21A1 (read_memory byte-exact):
+ *     00 04 FF 08 0C FF FF FF 10 14 18 FF 19 1C FF 20 FF FF 24
+ *
+ * STACK (HARD CONSTRAINT): like cd3f/af38/eaac, this runs in the SUPER-LOOP, NEVER inside the a066
+ * INT1 ISR (the documented sp=0x7F stack cliff). The ISR only flags it (sb_pend_int_pending); the
+ * super-loop W1Cs SB[0x26].1 and runs the body. ==================================================== */
+
+/* lane_port_map_a (CODE ROM @0x21A1), indexed by 0x0AA2 -> 0x0AA6. 0xFF = invalid/reserved slot. */
+static __code const uint8_t lane_port_map_a[19] = {
+  0x00,0x04,0xFF,0x08,0x0C,0xFF,0xFF,0xFF,0x10,0x14,0x18,0xFF,0x19,0x1C,0xFF,0x20,0xFF,0xFF,0x24
+};
+
+/* sb_a5d8_tx (e1cb/e2b9 — the SB-transport TX answer push, byte-exact e1cb-e21a / e2b9-e304).
+ * is_e1cb=1 -> e1cb form: SB[0x15] = (0x0AA8<<1)|0x41 (the READ/route answer, aa4==2);
+ * is_e1cb=0 -> e2b9 form: SB[0x15] = 0x0AA8           (the WRITE answer, aa4==1).
+ * Shared body (verified): 0x0AA8/0x0AA9/0x0AAA already loaded by the caller via 99c3 (R7->0x0AA8,
+ * R5=0x0AA2->0x0AA9, R3=0x0AA3->0x0AAA) and 0x0AAB = 99c3-ret = 0x0AA5; d4cd drains the transport
+ * edges (no-op in handmade: the ISR's sb_d4cd_transport_edges owns them); 997e writes SBTX[0]=0x0AA9;
+ * 9923 writes SBTX[1] = 0x0AAA | ((0x0AAB.0)<<7); the status RMW writes SB[0x0C] (0x0AAB==0 ->
+ * (SB[0x0C]&0x80)|8 ; else (0x0AA9+8)|(SB[0x0C]&0x80)); then SB[0x15]; then the d5da(0) TX-go. */
+static void sb_a5d8_tx(uint8_t is_e1cb) {
+  static __xdata uint16_t g;                                /* IRAM/DSEG full: keep scratch in XDATA */
+  sb_transport_substate_poll();                            /* d4cd: no-op stub (ISR owns the edges) */
+  SBTX_WR(0, PR(0x0AA9));                                   /* 997e: SBTX[0x29:0] = 0x0AA9 */
+  SBTX_WR(1, (uint8_t)(PR(0x0AAA) | ((PR(0x0AAB) & 1) << 7)));  /* 9923: SBTX[0x29:1] = 0x0AAA | (0x0AAB.0<<7) */
+  if (PR(0x0AAB) == 0)                                      /* 9923-ret==0 -> 9695 branch */
+    SB_WR(0x0C, (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08));    /* e1f5: SB[0x0C] = (SB[0x0C]&0x80)|8 */
+  else                                                     /* else -> 99ac branch */
+    SB_WR(0x0C, (uint8_t)(((PR(0x0AA9) + 8) & 0xFF) | (SB_RD(0x0C) & 0x80)));  /* e1eb: (0x0AA9+8)|(SB[0x0C]&0x80) */
+  /* SB[0x15] TX command (e1cb 972a vs e2b9 96f7) */
+  SB_WR(0x15, is_e1cb ? (uint8_t)((PR(0x0AA8) << 1) | 0x41) : (uint8_t)PR(0x0AA8));
+  /* d5da(0) TX-go (inlined like u4lb_e461; bounded HW poll for super-loop safety). */
+  PR(0x0AAC) = 0;                                          /* d5da: 0x0AAC = 0 */
+  P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));          /* 9777: P1[0x0100] &= ~1 */
+  SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));              /* 98c7: SB[0x04] &= ~2 */
+  SB_WR(0x10, 0x01);                                       /* d5f9: SB[0x10] = 1 (TX go) */
+  g = 0; while (((SB_RD(0x2C) & 0x04) == 0) && ++g < 0x4000) { }  /* d600: bounded spin SB[0x2C].2 */
+  SB_WR(0x2C, 0x04);                                       /* d60d: W1C SB[0x2C].2 */
+  phy_cc10_cmd(1, 0, 0x0B);                                /* d614 */
+  SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));              /* d61d: SB[0x0F] &= ~1 */
+  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;  /* 97ef: CCD9 strobe 4 then 2 */
+  REG_XFER2_DMA_STATUS = 0x01;                             /* e214/e2fe tail: dec a (A=1) -> CCD9=1 */
+  /* e216/e300: 0x0719 token = d5da-ret-1. Stock's d5da return is data-dependent and discards the
+   * value; per the proven u4lb_e461 precedent (data-dependent token caused re-push storms / spurious
+   * eda0 re-arm), pin the in-flight token to 1. */
+  PR(0x0719) = 0x01;
+}
+
+/* sb_a5d8_pend_int (CODE_BANK1::a5d8): the [Pend Int] router-op responder. SUPER-LOOP only.
+ * DSEG/IRAM is full (sp=0x7F); keep all scratch in XDATA. This handler is single-threaded (the
+ * super-loop calls it serially, never re-entrant), so static __xdata scratch is safe. */
+static void sb_a5d8_pend_int(void) {
+  static __xdata uint8_t b3, aa4, i, aa2, len;
+
+  uart_puts("\r\n[Pend Int]");                             /* a5de: uart_puts str@0x2033 (marker kept) */
+
+  /* a5e1-a600: snapshot host router-op descriptor 0x0998-0x099B -> 0x0A9D-0x0AA0 (plain XDATA). */
+  PR(0x0A9D) = PR(0x0998);
+  PR(0x0A9E) = PR(0x0999);
+  PR(0x0A9F) = PR(0x099A);
+  PR(0x0AA0) = PR(0x099B);
+
+  if (!(PR(0x0AA0) & 0x80)) return;                        /* a601-a60d: descriptor-valid bit (0x0AA0.7) */
+
+  /* a60e-a645: decode. */
+  PR(0x0AA2) = PR(0x0A9D);
+  PR(0x0AA3) = PR(0x0A9E);
+  b3 = PR(0x0A9F);
+  PR(0x0AA4) = (uint8_t)(b3 & 7);                          /* opcode */
+  PR(0x0AA7) = (uint8_t)(b3 >> 4);
+  PR(0x0AA5) = (uint8_t)(PR(0x0AA0) & 1);
+  PR(0x0AA6) = lane_port_map_a[PR(0x0AA2)];                /* a639: ROM 0x21A1[0x0AA2] */
+
+  aa4 = PR(0x0AA4);
+  if (aa4 != 0) {
+    /* ---- a73a: ROUTE/transmit path ---- */
+    if (aa4 != 1 && aa4 != 2) return;                      /* a73e-a748 */
+    PR(0x072A) = 1;                                        /* a74b-a750 */
+    if (PR(0x0AA5) != 0) {                                 /* a751-a755 */
+      /* a757-a7b6: copy the descriptor body into the SBTX TX plane, 4 bytes / iteration.
+       * loop while 0x0AA1 < 0x0AA3 (len) and 0x0AA1 != 0x40. */
+      PR(0x0AA1) = 0;
+      while (PR(0x0AA1) < PR(0x0AA3) && PR(0x0AA1) != 0x40) {
+        i = PR(0x0AA1);
+        SBTX_WR(i + 2, PR(0x099C + i));                    /* a76c-a78f: 98a4(0x099C+i)->98d6 SBTX[i+2] */
+        SBTX_WR(i + 3, PR(0x099D + i));                    /* a792-a78f: 0be6 SBTX[i+3] */
+        SBTX_WR(i + 4, PR(0x099E + i));                    /* a79e: 98cf SBTX[i+4] */
+        SBTX_WR(i + 5, PR(0x099F + i));                    /* a7ae: 98cf SBTX[i+5] */
+        PR(0x0AA1) = (uint8_t)(i + 4);                     /* a7b3: 0x0AA1 += 4 */
+      }
+    }
+    /* a7b8: aa4==1 -> e2b9 (WRITE answer); else (aa4==2) -> e1cb (READ/route answer). */
+    if (PR(0x0AA4) == 1) {
+      PR(0x0AAB) = PR(0x0AA5);                             /* a7bf-a7cb: A=0x0718|1; 99c3-ret=0x0AA5 -> 0x0AAB */
+      PR(0x0AA8) = (uint8_t)(PR(0x0718) | 0x01);           /* 99c3: R7(A) -> 0x0AA8 */
+      PR(0x0AA9) = PR(0x0AA2);                             /* 99c3: R5=0x0AA2 -> 0x0AA9 */
+      PR(0x0AAA) = PR(0x0AA3);                             /* 99c3: R3=0x0AA3 -> 0x0AAA */
+      sb_a5d8_tx(0);                                       /* e2b9 */
+    } else {
+      PR(0x0AAB) = PR(0x0AA5);                             /* a7cf-a7d9: A=0x0AA7; 99c3-ret=0x0AA5 -> 0x0AAB */
+      PR(0x0AA8) = PR(0x0AA7);                             /* 99c3: R7(A) -> 0x0AA8 */
+      PR(0x0AA9) = PR(0x0AA2);
+      PR(0x0AAA) = PR(0x0AA3);
+      sb_a5d8_tx(1);                                       /* e1cb */
+    }
+    return;
+  }
+
+  /* ---- a64c: CONFIG-space path (aa4==0) ---- */
+  if (PR(0x0AA5) != 0) {
+    /* a652: config READ -> stage descriptor body into the page-0x08 table. */
+    aa2 = PR(0x0AA2);                                      /* len = 9768 = PR(0x0600+(aa2-0x0E)) */
+    if (aa2 < 0x12 &&
+        (len = PR(0x0600 + (uint8_t)(aa2 - 0x0E))) != 0 && /* a652-a65c */
+        PR(0x0700 + (uint8_t)(aa2 + 5)) != 0 &&            /* a65e-a669: 0x07 descriptor gate */
+        PR(0x0AA3) < len) {                                /* a66b-a671: JC a67b (0x0AA3 < len) */
+      PR(0x0AA1) = 0;                                      /* a67b */
+      while (PR(0x0AA1) < PR(0x0AA3)) {                    /* a680: 9974 vs 0x0AA3 */
+        i = PR(0x0AA1);
+        PR(0x0800 + (uint8_t)(PR(0x0AA6) + i)) = PR(0x099C + i);  /* a687-a695: 98a4(0x099C+i)->98fe(0x08:..) */
+        PR(0x0AA1) = (uint8_t)(i + 1);                     /* a696-a69b */
+      }
+      PR(0x0A9E) = PR(0x0600 + (uint8_t)(aa2 - 0x0E));     /* a69e-a6a9: 976c -> 0x0A9E */
+      if (aa2 == 8) {
+        /* a6af: d283 cm_command_dispatch -- deep CM 4CC dispatcher, separate subsystem. TODO: port. */
+        uart_puts("[a5d8:cm8]");
+      }
+    } else {
+      uart_puts("\r\n[RdCmdErr]");                         /* a673: str@0x2040 */
+      PR(0x0A9E) = 0;                                      /* a6cf-a6d3 */
+      PR(0x0AA0) = (uint8_t)(PR(0x0AA0) | 0x04);           /* a6d4-a6da */
+    }
+  } else {
+    /* a6b4: config WRITE -> pull descriptor body back out of the page-0x08 table. */
+    aa2 = PR(0x0AA2);
+    if (aa2 < 0x12 &&
+        (len = PR(0x0600 + (uint8_t)(aa2 - 0x0E))) != 0) { /* a6b4-a6c4: 976e gate */
+      if (PR(0x0AA3) >= len) PR(0x0AA3) = len;             /* a6dd-a6ea: clamp 0x0AA3 to len */
+      PR(0x0AA1) = 0;                                      /* a6eb */
+      while (PR(0x0AA1) < PR(0x0AA3)) {                    /* a6f0: 9974 vs 0x0AA3 */
+        i = PR(0x0AA1);
+        PR(0x099C + i) = PR(0x0800 + (uint8_t)(PR(0x0AA6) + i));  /* a6f7-a709: 96a7(0x08:..)->98a8(0x099C+i) */
+        PR(0x0AA1) = (uint8_t)(i + 1);                     /* a70a-a70f */
+      }
+      PR(0x0A9E) = PR(0x0600 + (uint8_t)(aa2 - 0x0E));     /* a712-a718: 9768 -> 0x0A9E */
+    } else {
+      uart_puts("\r\n[WrCmdErr]");                         /* a6c6: str@0x204B */
+      PR(0x0A9E) = 0;
+      PR(0x0AA0) = (uint8_t)(PR(0x0AA0) | 0x04);
+    }
+  }
+
+  /* a719: common tail -- answer back into 0x0998/0x0999 + commit SB[0x06]=1. */
+  PR(0x0AA0) = (uint8_t)(PR(0x0AA0) & 0x7F);
+  PR(0x0998) = PR(0x0A9D);
+  PR(0x0999) = PR(0x0A9E);
+  PR(0x099A) = PR(0x0A9F);                                 /* a731-9934: 0x099A = 0x0A9F */
+  PR(0x099B) = PR(0x0AA0);                                 /* 9934: 0x099B = (0x0AA0&0x7F) */
+  SB_WR(0x06, 0x01);                                       /* 9934-ret=1 -> LJMP 0be6: SB[0x06] = 1 */
+}
+
+/* Set by the a066 INT1 ISR when it observes SB[0x26].1 ([Pend Int]); consumed (W1C + body) by the
+ * super-loop. The heavy a5d8 body MUST NOT run in the ISR (sp=0x7F stack cliff). */
+static volatile uint8_t __xdata __at(0x0B55) sb_pend_int_pending;
+
+/* ====================================================================================
  * sb_router_event_handler (CODE_BANK1::A066) — INT1 source C80A.5 service body.
  * PART 1 (a066-a0d5): per-channel connect poll over idx 0..3.
  * PART 2 (a0d7-a31d): connect/disconnect edge + lane CL0/event servicing, all W1C.
@@ -696,7 +882,8 @@ static void sb_router_event_handler(void) {
       /* Print is rate-limited (the logic still runs every edge) so the UART isn't saturated when
        * the host holds the link connected and the SB-router edge re-asserts. */
       if (sb_con_print_budget) { uart_puts("\r\n[===SB Con===]\r\n"); sb_con_print_budget--; }
-      SB_WR(0x2C, (uint8_t)(SB_RD(0x2C) + 1)); /* a0f0-a0f6: 9797/INC */
+      SB_WR(0x2C, 0x01);   /* a0f2 9797 = MOV A,#1: W1C SB[0x2C].0 connect-event latch (LITERAL 1, NOT read+inc) */
+      SB_WR(0x2C, 0x02);   /* a0f5-a0f6 INC A + 0be6: W1C SB[0x2C].1 disconnect latch -> SB[0x2C]=0xF1 (was 0xF3: host read .1=disconnect-pending -> never left the connect phase / SB[0x18] stuck 0x04) */
       SB_WR(0x66, SB_RD(0x66) & 0xFD);         /* a0fa-a102: clear SB[0x66].1 (connect bit) */
       sb_con_consequence();                    /* a105: dea1 */
     }
@@ -705,7 +892,7 @@ static void sb_router_event_handler(void) {
     if (!(cs & 0x02)) {                        /* a10d-a112: disconnect (bit1 clear) */
       if (SB_RD(0x2C) & 0x02) {                /* a118: gated on SB[0x2C].1 */
         uart_puts("\r\n[===SB Dis===]\r\n");   /* a121: string @0x2069 */
-        SB_WR(0x2C, (uint8_t)(SB_RD(0x2C) - 1));     /* a124-a12a: 96f5(2)/DEC */
+        SB_WR(0x2C, 0x02); SB_WR(0x2C, 0x01);        /* a124-a12a 96f5(2)=MOV A,#2 + DEC A: W1C SB[0x2C].1 then .0 (literals, not read-dec) */
         SB_WR(0x66, SB_RD(0x66) & 0xFE);             /* a12d-a133: clear SB[0x66].0 */
         SB_WR(0x9E, (SB_RD(0x9E) & 0xFD) | 0x02);    /* a136: 97fc (clr b0? ->) net ~0x01 per plan */
         /* a139 LJMP 0xda9f — disconnect re-init. Heavy; the SB W1C acks above hold the FSM. */
@@ -781,20 +968,15 @@ static void sb_router_event_handler(void) {
     uart_puts("\r\nL1:Training");             /* string @0x20f6 */
   }
 
-  /* a156-region [Pend Int] device->host responder (RE-AUDIT #4-extra). The re-audit found handmade
-   * mismaps SB[0x26] vs SB[0x9E]: the a066 [Pend Int] branch reads SB[0x26].1 (NOT SB[0x9E]) and
-   * dispatches CODE_BANK1::a5d8 — the device->host sideband READ/WRITE command responder (reads the
-   * page-1 0x0998-0x099B router-op descriptor, validates, and answers via the SB[0x15] transmit
-   * path e1cb/e2b9). a5d8 is a deep banked responder; it is gated on SB[0x26].1 which, per the
-   * [ROPB] HW trace THIS SESSION (sb26=00 across all samples), the Intel MTL TB4 host NEVER sets
-   * after connect. So this branch is a correct NO-OP here; the gate + W1C + [Pend Int] marker are
-   * wired faithfully for a host that posts a sideband router-op (the full a5d8 body is not
-   * fabricated — there is no host op to validate it against). */
-  if (SB_RD(0x26) & 0x02) {                    /* a156: SB[0x26].1 -> [Pend Int] */
-    SB_WR(0x26, 0x02);                         /* W1C bit1 */
-    uart_puts("\r\n[Pend Int]");              /* string @0x... (a5d8 head 538d) */
-    /* a5d8(): copy page1 0x0998-0x099B -> 0x0A9D-0x0AA0; if 0x0AA0.7 set, decode the router-op
-     * read/write descriptor and answer via the SB[0x15] transmit engine (e1cb/e2b9 banked). */
+  /* a156-region [Pend Int] device->host router-op responder (CODE_BANK1::a5d8). The a066 [Pend Int]
+   * branch reads SB[0x26].1 and dispatches a5d8 -- the device->host sideband READ/WRITE router-op
+   * responder. STACK CLIFF: a5d8 is a deep banked responder (descriptor copy loops + the e1cb/e2b9
+   * SB-transport TX engine) and MUST NOT run inside this INT1 ISR (sp=0x7F). So here we only FLAG it;
+   * the super-loop W1Cs SB[0x26].1 and runs sb_a5d8_pend_int() (mirroring how cd3f/af38/eaac were
+   * moved out of the ISR). We deliberately do NOT W1C SB[0x26].1 here -- the super-loop W1Cs it after
+   * it has actually serviced the descriptor, so a pending router-op can't be lost on a fast IRET. */
+  if (SB_RD(0x26) & 0x02) {                    /* a156: SB[0x26].1 -> [Pend Int] (deferred) */
+    sb_pend_int_pending = 1;
   }
 
   (void)SB_RD(0xF6);                           /* a317-a31d: tail status latch read */
