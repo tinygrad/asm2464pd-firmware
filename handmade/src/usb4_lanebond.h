@@ -279,9 +279,28 @@ static void u4lb_cm_conn_routing_setup(void) {
     PR(0x0763) = 0; PR(0x0764) = 0;
   }
 
-  /* a95f..: c586 (C8FF tunnel-adapter rate cfg) + bank0 e175/e282/c17f (tunnel-adapter PHY cfg) +
-   * the 0x0750==1 ROM-table 0x21c4 copy. DEEP PHY LAYER -- documented-omitted (configures the PCIe-
-   * tunnel adapter; not reproduced to avoid fabricating the PHY write sequence). */
+  /* a95f: c586 (CODE_BANK1::c586, workflow disasm-verified) -- the negotiated-rate descriptor that the
+   * device sends the host (SB[0x6A-0x6D]/[0x74-0x75] via 0c7a 16-bit big-endian) + the Gen2 lane eq
+   * RE-TRIM (C294/C293/C314/C313) that overrides the boot-8e31 training-rate trim. (bank0 siblings
+   * e175/e282/c17f tunnel-adapter cfg + the 0x0750==1 ROM 0x21c4 copy are NOT lane-CDR and stay omitted.) */
+  {
+    uint16_t v = (uint16_t)((uint16_t)PR(0x0749) * 0x20);   /* c586-c598: 0x0749<<5 */
+    uint8_t v_hi = (uint8_t)(v >> 8);
+    uint8_t v_lo = (uint8_t)((v & 0xFF) | PR(0x0739));      /* lo |= 0x0739 */
+    SB_WR(0x6A, v_hi); SB_WR(0x6B, v_lo);                   /* c599: 0c7a -> SB[0x6A:0x6B] BE */
+    SB_WR(0x6C, v_hi); SB_WR(0x6D, v_lo);                   /* c5a0: 0c7a -> SB[0x6C:0x6D] BE */
+    SB_WR(0x74, 0x00); SB_WR(0x75, (uint8_t)((PR(0x0750) == 2) ? 0x1F : 0x0F));  /* c5ad: SB[0x74:0x75] */
+    if (REG_LANE_RATE_C8FF == 0x04 && PR(0x07BA) == 0) {    /* c5d0/c5d6: Gen2 && not-low-power */
+      PR(0xC294) = (uint8_t)((PR(0xC294) & 0xF0) | 0x03);   /* c5dc lane-0 eq retrim */
+      PR(0xC293) = (uint8_t)((PR(0xC293) & 0xFC) | 0x02);   /* c5e5 (c2bf) */
+      PR(0xC314) = (uint8_t)((PR(0xC314) & 0xF0) | 0x03);   /* c5eb lane-1 eq retrim */
+      PR(0xC313) = (uint8_t)((PR(0xC313) & 0xFC) | 0x02);   /* c2bc fall-through */
+    }
+    if (PR(0x0750) == 1) {                                  /* c5f8: bond mode 1 */
+      PR(0xC2C5) = (uint8_t)((PR(0xC2C5) & 0xF0) | 0x0F);   /* c2e7(C2C5) */
+      PR(0xC345) = (uint8_t)((PR(0xC345) & 0xF0) | 0x0F);   /* c2e7(C345) */
+    }
+  }
 
   /* a891: 0x0758 = 0 (FSM done with the routing-setup state). The eb62(0,4) -> [SB P04] advance
    * happens via the st==0 re-entry next cb10 iteration (cm_conn_routing_setup st==0 path). */
@@ -849,17 +868,19 @@ static void u4lb_state4_b0b4(void) {
     PR(0x081F) = (PR(0x081F) & 0x7F) | 0x80;        /* b186-b18e: latch L1 OS-armed (0x081F.7) */
   }
 
-  uart_puts("[b4:D]");   /* INSTR: past E716/PwrOn-stub/OS-arm; entering rate-change */
+  uart_puts("[b4:D c2="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350)); uart_putc(']');   /* C2D0/C350 pre-rate-change */
   /* --- CC37.2 set -> d3b0(3) Chg2 20G -> e980 rate apply -> e9e7 RstRxpll -> CC37.2 clr (b18f-b1a3) */
   REG_CPU_CTRL_CC37 = (REG_CPU_CTRL_CC37 & 0xFB) | 0x04;          /* b18f-b194 984d: CC37 |= 0x04 */
   u4lb_d3b0(3);                                     /* b195-b197: d3b0(3) Chg2 20G */
   u4lb_e980();                                      /* b19a: rate descriptor apply */
   u4lb_e9e7();                                      /* b19d: RstRxpll */
+  uart_puts("[c2@rstpll="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350)); uart_putc(']');
   REG_CPU_CTRL_CC37 &= 0xFB;                   /* b1a0-b1a3 984d: CC37 &= ~0x04 */
 
   /* --- b8db: [CDRV ok] CDR/PLL validate loop (b1a4) --- */
   uart_puts("[CDRV ok]");
   u4lb_b8db();   /* read-only CDR/PLL validate; caller discards return (harmless, bounded). */
+  uart_puts("[c2@b8db="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350)); uart_putc(']');
 
   /* --- CA60.3 set (b1a7-b1af) --- */
   REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0xF7) | 0x08;          /* CA60 bit3 = tunnel-adapter enable */
@@ -888,6 +909,9 @@ static void u4lb_state4_b0b4(void) {
 
   /* --- ec51 Trig-arm (b20c) --- */
   u4lb_ec51();
+  uart_puts("[c2@ec51="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350));
+  uart_puts(" d1="); uart_puthex(PR(0xC2D1)); uart_puthex(PR(0xC351));
+  uart_puts(" ab6="); uart_puthex(PR(0x0AB6)); uart_putc(']');   /* C2D1/C351 CDR-done + 0x0AB6 arm mask */
 
   /* --- latch negotiated width 0x074E:0x074F = CCE4:CCE5 (b20f-b21d) --- */
   PR(0x074E) = REG_LANE_WIDTH_CNT_HI;
