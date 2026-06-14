@@ -351,6 +351,7 @@ static void u4lb_d5da(uint8_t param) {
   }
   P1_WR(0x0100, P1_RD(0x0100) & 0xFE);              /* d5ea: P1[0x0100] &= ~1 (9777) */
   SB_WR(0x04, SB_RD(0x04) & 0xFD);                  /* d5f2: SB[0x04] &= ~2 (98c7) */
+  uart_puts("[Td="); uart_puthex(SB_RD(0x15)); uart_putc(':'); uart_puthex(SBTX_RD(0)); uart_puthex(SBTX_RD(1)); uart_putc(']');  /* helper-d5da TX trace */
   SB_WR(0x10, 0x01);                                /* d5f9: SB[0x10]=1 */
   { uint16_t g = 0;                                 /* d600: BOUNDED spin until SB[0x2C].2 set */
     while (((SB_RD(0x2C) & 0x04) == 0) && ++g < 0x2000); }
@@ -991,6 +992,7 @@ static uint8_t u4lb_e461(void) {
     PR(0x0AAC) = 0;
     P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
     SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));
+    uart_puts("[Te="); uart_puthex(SB_RD(0x15)); uart_putc(':'); uart_puthex(SBTX_RD(0)); uart_puthex(SBTX_RD(1)); uart_putc(']');  /* e461 route-query TX trace */
     SB_WR(0x10, 0x01);                              /* SB[0x10] = 1 (TX go) */
     g = 0; while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { }   /* wait SB[0x2C].2 (bounded) */
     SB_WR(0x2C, 0x04);                              /* W1C SB[0x2C].2 */
