@@ -542,16 +542,56 @@ static void u4lb_ee29(void) {
   PR(0x0B43) = 0;
 }
 
-/* ---- d436: PCIe-tunnel link-width config. Direct register effects of CODE:d436
- * (pcie_tunnel_link_width_config_b434_b436, 32247). The multi-round downstream B434 lane RAMP
- * (c089 + d702/cc-cluster + e84d/e85c clock-gate bracket) is the PCIe-to-GPU side, NOT the upstream
- * USB4 bond, so it is transcribed as its net B434 write. The load-bearing direct effects -- B401.0
- * clear (mask!=0xF), B436 low nibble (mask&0xE) and B436 HIGH nibble from B404 -- are faithful. ---- */
+/* ---- d436 FAITHFUL: pcie_tunnel_link_width_config_b434_b436 @CODE:d436 (workflow disasm-verified).
+ * Inlines e84d/e85c (B402.1 clock-gate bracket via ccac=B402&0xFD), the c089 4-round lane RAMP,
+ * d702 (CC10-mailbox bit-distributor on the R3=2 PHY plane 0x78AF..0x7BAF), and the B401.0 set/clear
+ * strobe. r3=2 (DPX=1) accesses use P1_RD/P1_WR. The per-round phy_cc10_cmd_wait(2,0,0xC7) PHY
+ * settles were the dropped piece; they configure the lanes through the CC10 mailbox. ---- */
+static void u4lb_d702(uint8_t newmask) {
+  __xdata uint8_t r6;
+  r6 = (uint8_t)(P1_RD(0x78AF) & 0x7F);
+  P1_WR(0x78AF, (uint8_t)(((newmask & 0x01) ? 0x80 : 0x00) | r6));   /* slot0 bit7 = newmask.0 */
+  r6 = (uint8_t)(P1_RD(0x79AF) & 0x7F);
+  P1_WR(0x79AF, (uint8_t)(((newmask & 0x02) ? 0x80 : 0x00) | r6));   /* slot1 bit7 = newmask.1 */
+  r6 = (uint8_t)(P1_RD(0x7AAF) & 0x7F);
+  P1_WR(0x7AAF, (uint8_t)(((newmask & 0x04) ? 0x80 : 0x00) | r6));   /* slot2 bit7 = newmask.2 */
+  r6 = (uint8_t)(P1_RD(0x7BAF) & 0x7F);
+  P1_WR(0x7BAF, (uint8_t)(((newmask & 0x08) ? 0x80 : 0x00) | r6));   /* slot3 bit7 = newmask.3 */
+}
+
+static void u4lb_c089_lane_ramp(uint8_t target) {
+  __xdata uint8_t curmask = (uint8_t)(PR(0xB434) & 0x0F);   /* 0xAAB */
+  __xdata uint8_t roundbit = 0x01;                          /* 0xAAC */
+  __xdata uint8_t counter = 0;                              /* 0xAAA */
+  do {
+    __xdata uint8_t newmask;
+    if (target < 0x0F) {
+      if (curmask == target) return;                        /* converged */
+      newmask = (uint8_t)((uint8_t)(target | (uint8_t)(roundbit ^ 0x0F)) & curmask);
+    } else {
+      if (curmask == 0x0F) return;                          /* converged (full x4) */
+      newmask = (uint8_t)(roundbit | curmask);
+    }
+    curmask = newmask;
+    PR(0xB434) = (uint8_t)(newmask | (uint8_t)(PR(0xB434) & 0xF0));   /* B434 = newmask | (B434&0xF0) */
+    u4lb_d702(newmask);                                     /* program CC10 mailbox lanes */
+    phy_cc10_cmd_wait(2, 0, 0xC7);                          /* c0e8: R7=2,R4=0,R5=0xC7 PHY settle */
+    roundbit = (uint8_t)(roundbit << 1);
+    counter++;
+  } while (counter < 4);
+}
+
 static void u4lb_d436(uint8_t mask) {
-  PR(0xB434) = (uint8_t)((mask & 0x0F) | (PR(0xB434) & 0xF0));   /* c089 net: B434 = mask | (B434&0xF0) */
-  if (mask != 0x0F) PR(0xB401) &= 0xFE;                         /* mask!=0xF -> clear B401.0 */
-  PR(0xB436) = (uint8_t)((PR(0xB436) & 0xF0) | (mask & 0x0E));   /* B436 low nibble = mask&0xE */
-  PR(0xB436) = (uint8_t)((PR(0xB436) & 0x0F) | (uint8_t)(((PR(0xB404) & 0x0F) ^ 0x0F) << 4));  /* B436 high nibble from B404 */
+  __xdata uint8_t saved_b402_1 = (uint8_t)(PR(0xB402) & 0x02);   /* e84d: save B402.1 */
+  PR(0xB402) = (uint8_t)(PR(0xB402) & 0xFD);                     /* e84d/ccac: clear B402.1 during ramp */
+  u4lb_c089_lane_ramp(mask);                                    /* c089: 4-round B434 ramp + d702 + cc10 settle */
+  if (mask != 0x0F) {
+    PR(0xB401) = (uint8_t)((PR(0xB401) & 0xFE) | 0x01);         /* cc8b: B401.0 SET (strobe) */
+    PR(0xB401) = (uint8_t)(PR(0xB401) & 0xFE);                  /* B401.0 CLEAR */
+  }
+  if (saved_b402_1 != 0) PR(0xB402) = (uint8_t)((PR(0xB402) & 0xFD) | 0x02);  /* e85c: restore B402.1 if it was set */
+  PR(0xB436) = (uint8_t)((PR(0xB436) & 0xF0) | (uint8_t)(mask & 0x0E));       /* B436 low = mask&0xE */
+  PR(0xB436) = (uint8_t)((PR(0xB436) & 0x0F) | (uint8_t)(((uint8_t)(PR(0xB404) & 0x0F) ^ 0x0F) << 4));  /* B436 high from B404 */
 }
 
 /* ---- a840 gen->speed table (CODE:38cc, resolved via read_memory). Indexed by 0x0A5D (gen):
