@@ -115,6 +115,9 @@ static void sb_eaac_populate_0777(void) {
   for (i = 0; i < 0x40; i++) {                             /* eab3-ead4: 0x0777+i = SBP2[base+i] */
     PR(0x0777 + i) = SBP2_RD(base, i);
   }
+  { static __xdata uint8_t eb = 40;
+    if (eb) { eb--; uart_puts("[eaac b="); uart_puthex((uint8_t)(base >> 8)); uart_puts(" 777="); uart_puthex(PR(0x0777));
+      uart_puthex(PR(0x0778)); uart_puthex(PR(0x0779)); uart_puthex(PR(0x077A)); uart_putc(']'); } }
   REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;   /* ead7 97ef: CCD9 mailbox strobe */
 }
 
@@ -321,6 +324,9 @@ static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
   desc4e = SB_RD(desc4e_off);                /* cd42-cd55: 0x4E (IRAM scratch) = SB[desc4e_off] per ROM 0x2135 */
   PR(0x0752) = SB_RD(desc752_off);           /* cd57-cd6a: 0x752 = SB[desc752_off] per ROM 0x2125 */
   d752 = PR(0x0752);
+  { static __xdata uint8_t cdbud = 60;
+    if (cdbud) { cdbud--; uart_puts("[cd p="); uart_puthex(port); uart_puts(" 752="); uart_puthex(d752);
+      uart_puts(" 4e="); uart_puthex(desc4e); uart_puts(" 765="); uart_puthex(PR(0x0765)); uart_putc(']'); } }
   /* ---- dispatch (cd86-cdf4) ---- */
   if (PR(0x0765) != 0 && (d752 & 0x60) == 0x60) return;  /* cd86-cd94: already present */
   if (!(desc4e & 0x10)) return;              /* cd96-cd9a: need 0x4E.4 (descriptor valid) */
@@ -350,6 +356,7 @@ static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
     }
   }
 }
+static void sb_d4cd_transport_edges(void);   /* fwd decl: defined below; called here to break the EX1-mask deadlock */
 static void sb_connect_present_poll(void) {
   /* RUN cd3f EVERY super-loop iteration while the connect is in progress (NOT one-shot gated on
    * 0x0765). Stock's cd3f reads the host descriptor ~290x as SB[0x18] climbs 00->05->0x63; each
@@ -368,8 +375,14 @@ static void sb_connect_present_poll(void) {
    * Setting 0x06F0 per-port (stock-exact) makes each port's eaac+af38 coherent and the connect
    * deterministic. Keep the 0x0777!=0x0C gate (stop once the route descriptor is confirmed; stock stops
    * naturally when the transport edges cease). */
-  /* d4cd transport-edge dispatch now runs in the a066 ISR (sb_d4cd_transport_edges), faithful to
-   * stock -- so cd3f/eaac/af38 sample the host descriptor event-driven, not by super-loop polling. */
+  /* DEADLOCK FIX (workflow wp4vdm11n, 2 agents high-conf): sb_con_consequence masks IE_EX1 (the
+   * C80A.5 storm-break) on connect -> the a066 ISR (the ONLY other caller of sb_d4cd_transport_edges)
+   * stops firing -> cd3f/eaac never runs -> 0x0777 never reaches 0x0C -> cm_conn_routing_setup's
+   * state-3 confirm (0x0777==0x0C) never passes -> 0x06ED stays 3 -> the super-loop keeps EX1 masked
+   * (main.c gate 0x06ED!=3). CIRCULAR. Run the transport-edge dispatch HERE in the super-loop so eaac
+   * populates 0x0775/0x0777 even while EX1 is masked (no concurrent a066 d4cd while masked). Matches
+   * the stale comments below + the documented "cd3f runs in the super-loop" architecture. */
+  sb_d4cd_transport_edges();
   if (PR(0x0765)) return;
   /* DOCUMENTED-EQUIVALENT (per the unblock spec): on the Intel MTL TB4 host the SB-router CONNECT
    * engages (C80A.5 / [===SB Con===] -> sb_con_consequence set 0x06EC=1) but the host never drives
@@ -400,19 +413,21 @@ static void sb_connect_present_poll(void) {
  * Called from sb_connect_present_poll (super-loop). */
 static void sb_d4cd_transport_edges(void) {
   /* ---- transport edges SB[0x28]/[0x2A].3 (0x06EE toggle, ports 0/1). 9746 ack = W1C 0x10,0x20,0x40,0x08. */
+  /* FIX: process the port-0 edge WHENEVER SB[0x28].3 is set (NOT gated on the 0x06EE toggle). The
+   * host fires the port-0 transport edge MULTIPLE times as SB[0x18] climbs (05->af38, then 04->eaac);
+   * the old `if(0x06EE==0)` gate processed only the FIRST and blocked all later same-port edges, so
+   * eaac (which needs the later SB[0x18]==0x04 edge) never ran -> 0x0777 stuck at 0x55. The W1C ack
+   * clears the edge each time, so a new SB[0x28].3 is a fresh host post; 0x06F0=port keeps the plane
+   * correct. 0x06EE is still tracked for any reader. */
   if (SB_RD(0x28) & 0x08) {                          /* SB[0x28].3 (port0 transport edge) */
-    if (PR(0x06EE) == 0) {
-      PR(0x06F0) = 0; sb_cd3f_dispatch(0x28, 0x18);
-      SB_WR(0x28, 0x10); SB_WR(0x28, 0x20); SB_WR(0x28, 0x40); SB_WR(0x28, 0x08);  /* 9746(0x28) */
-      PR(0x06EE) = 1;
-    }
+    PR(0x06F0) = 0; sb_cd3f_dispatch(0x28, 0x18);
+    SB_WR(0x28, 0x10); SB_WR(0x28, 0x20); SB_WR(0x28, 0x40); SB_WR(0x28, 0x08);  /* 9746(0x28) */
+    PR(0x06EE) = 1;
   }
   if (SB_RD(0x2A) & 0x08) {                          /* SB[0x2A].3 (port1 transport edge) */
-    if (PR(0x06EE) == 1) {
-      PR(0x06F0) = 1; sb_cd3f_dispatch(0x2A, 0x19);
-      SB_WR(0x2A, 0x10); SB_WR(0x2A, 0x20); SB_WR(0x2A, 0x40); SB_WR(0x2A, 0x08);  /* 9746(0x2A) */
-      PR(0x06EE) = 0;
-    }
+    PR(0x06F0) = 1; sb_cd3f_dispatch(0x2A, 0x19);
+    SB_WR(0x2A, 0x10); SB_WR(0x2A, 0x20); SB_WR(0x2A, 0x40); SB_WR(0x2A, 0x08);  /* 9746(0x2A) */
+    PR(0x06EE) = 0;
   }
   /* ---- LINK edges SB[0x81]/[0x83].3 (0x06EF toggle, ports 2/3). The state-5 route-query RESPONSE arrives
    * HERE -> cd3f (port 2/3, 0x752.4 SET gate) -> eaac -> 0x0775=1 -> walker past 0x30. d54c sets 0x06F0=2/3
