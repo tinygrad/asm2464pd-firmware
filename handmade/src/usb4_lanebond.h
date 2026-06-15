@@ -221,7 +221,6 @@ static void u4lb_d5da(uint8_t param) {
   }
   P1_WR(0x0100, P1_RD(0x0100) & 0xFE);
   SB_WR(0x04, SB_RD(0x04) & 0xFD);
-  uart_puts("[Td="); uart_puthex(SB_RD(0x15)); uart_putc(':'); uart_puthex(SBTX_RD(0)); uart_puthex(SBTX_RD(1)); uart_putc(']');
   SB_WR(0x10, 0x01);
   { uint16_t g = 0;
     while (((SB_RD(0x2C) & 0x04) == 0) && ++g < 0x2000); }
@@ -761,10 +760,6 @@ static uint8_t u4lb_e461(void) {
     sb_tx_go_param = 0;
     P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
     SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));
-    uart_puts("[Te="); uart_puthex(SB_RD(0x15)); uart_putc(':'); uart_puthex(SBTX_RD(0)); uart_puthex(SBTX_RD(1));
-    uart_puts(" 2c="); uart_puthex(SB_RD(0x2C)); uart_puts(" 0c="); uart_puthex(SB_RD(0x0C));
-    uart_puts(" 18="); uart_puthex(SB_RD(0x18)); uart_puts(" 26="); uart_puthex(SB_RD(0x26));
-    uart_puts(" rx="); { uint8_t i; for (i = 0; i < 6; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i))); } uart_putc(']');
     SB_WR(0x10, 0x01);
     g = 0; while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { }
     SB_WR(0x2C, 0x04);
@@ -830,15 +825,17 @@ static void u4lb_s5_diag(void) {
 static void u4lb_8501(void) { }
 
 /* 81d4 finalize: width-settle -> advance state cell 0x0759+lane to 0x60; on counter overflow
- * (>=0x0F) reset to 0x00. Composes the device TX[2:3] CL-walk value from work[0x071A+walk_idx]. */
+ * (>=0x0F) reset to 0x00. Composes the device TX[2:3] CL-walk value: the low nibble walks the
+ * lane-descriptor ROM (sb_lane_desc) while the high nibble of work[0x081C+lane] is PRESERVED, then
+ * bit7 is latched (81f8 969e read, 81fb ANL #0xf0, 8208 ORL, 8211 write; 8215 96a7 |0x80 write). */
 static void u4lb_lp1_finalize(uint8_t lane) {
   __xdata uint8_t walk_idx;
   if (lb_settle_counter[lane] >= 0x0F) { lb_loop1_state[lane] = 0x00; return; }
   lb_settle_counter[lane]++;
   walk_idx = (uint8_t)((lb_lane_desc_idx[lane] + 1) & 0x0F);
   lb_lane_desc_idx[lane] = walk_idx;
-  u4_work_buf[0x1C + lane] = (uint8_t)(sb_lane_desc[(uint16_t)(0x0 + walk_idx)] | 0x10);
-  u4_work_buf[(uint8_t)(lane + walk_idx)] |= 0x80;
+  u4_work_buf[0x1C + lane] = (uint8_t)((u4_work_buf[0x1C + lane] & 0xF0) | sb_lane_desc[(uint16_t)(0x0 + walk_idx)]);
+  u4_work_buf[0x1C + lane] |= 0x80;
   lb_loop1_state[lane] = 0x60;
 }
 
@@ -856,8 +853,11 @@ static void u4lb_lp1_width_settle(uint8_t lane) {
 }
 
 /* 8000: primary state-5 walker (0x0718==4). LOOP1 state@0x0759+lane (connect-arm/retrain edges),
- * LOOP2 state@0x075B+lane (the CL-state walk). Live LOOP1 chain from the b0b4 seed:
- * 0x10->0x30->0x50->0x70->0x90->0xA1 (bonded); 0xA1 is terminal. */
+ * LOOP2 state@0x075B+lane (the CL-state walk). LOOP1 dispatches through the 0def jump table @802a
+ * = [target_hi,target_lo,match]: 0x10->804f 0x20->8069 0x30->807a 0x40->80ca 0x50->80d7 0x60->8251
+ * 0x70->8262 0x80->82d5 0x90->82fa 0xA0->831a 0xA1->8327 default->8355. Linear chain from the b0b4
+ * seed (0x10): 0x10->0x20->0x30->0x40->0x50(finalize: one TX[2:3] walk step)->0x60->0x70->0x80->
+ * 0x90->0xA0->0xA1; the host re-train (8327 snap&0xC0==0x80) re-enters 0x50 for each walk step. */
 static void u4lb_walk_8000(void) {
   __xdata uint8_t lane, state;
   for (lane = 0; lane < 2; lane++) {
@@ -865,9 +865,19 @@ static void u4lb_walk_8000(void) {
     state = lb_loop1_state[lane];
 
     if (state == 0x10) {
-      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x30;
+      /* 804f: width-settle init (3x mask on work[0x081C+lane]) -> 0x20 (unconditional, no e461). */
+      u4_work_buf[0x1C + lane] &= 0xEF;
+      u4_work_buf[0x1C + lane] &= 0x7F;
+      u4_work_buf[0x1C + lane] &= 0xDF;
+      lb_loop1_state[lane] = 0x20;
     }
     else if (state == 0x20) {
+      /* 8069: e461 route push -> 0x30. */
+      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x30;
+    }
+    else if (state == 0x30) {
+      /* 807a: route-special selector; on snap.7 set, arm the lane (SB[0x40]) + work[0x1C]|=0x20
+       * -> 0x40, else stay 0x20. */
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
         __xdata uint8_t snap = u4_host_desc[0x4 + lane];
@@ -885,17 +895,21 @@ static void u4lb_walk_8000(void) {
         lb_loop1_state[lane] = 0x20;
       }
     }
-    else if (state == 0x30) {
+    else if (state == 0x40) {
+      /* 80ca: clear width-settle counter -> 0x50. */
       lb_settle_counter[lane] = 0x00;
       lb_loop1_state[lane] = 0x50;
     }
-    else if (state == 0x40) {
+    else if (state == 0x50) {
+      /* 80d7: first entry (counter==0) -> width-settle/finalize = the TX[2:3] CL-walk step;
+       * re-entry (ee6e && counter) -> work[0x1C]|=0x10|=0x40, reset state cell to 0x00. */
       if (u4lb_ee6e(lane) != 0 && lb_settle_counter[lane] != 0) {
         if (phy_lane_gate == 0) {
           SB_WR(lane ? 0x5A : 0x50, 0x01);
         }
+        u4_work_buf[0x1C + lane] |= 0x10;
         u4_work_buf[0x1C + lane] |= 0x40;
-        u4_work_buf[0x1C + lane] = 0x00;
+        lb_loop1_state[lane] = 0x00;
         if ((REG_PHY_ORIENT_C2C3 & 0x01) || (REG_VENDOR_CTRL_C343 & 0x01)) {
           if ((u4_work_buf[0x19] & 0x03) != 0) {
             u4_work_buf[0x1C + lane] = (uint8_t)((u4_work_buf[0x1C + lane] | 0x40) & 0x7F);
@@ -906,10 +920,12 @@ static void u4lb_walk_8000(void) {
         u4lb_lp1_width_settle(lane);
       }
     }
-    else if (state == 0x50) {
+    else if (state == 0x60) {
+      /* 8251: e461 route push -> 0x70. */
       if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x70;
     }
-    else if (state == 0x60) {
+    else if (state == 0x70) {
+      /* 8262: snap&0xC0==0xC0 + low-nibble match -> arm width pairs -> 0x80, else stay 0x60. */
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
         __xdata uint8_t snap = u4_host_desc[0x4 + lane];
@@ -931,25 +947,30 @@ static void u4lb_walk_8000(void) {
         lb_loop1_state[lane] = 0x60;
       }
     }
-    else if (state == 0x70) {
+    else if (state == 0x80) {
+      /* 82d5: ee6e -> work[0x1C] |=0x10 |=0x40 &=0x7F (all gated) -> 0x90. */
       if (u4lb_ee6e(lane)) {
         u4_work_buf[0x1C + lane] |= 0x10;
         u4_work_buf[0x1C + lane] |= 0x40;
-        u4_work_buf[0x19 + lane] &= 0x7F;
+        u4_work_buf[0x1C + lane] &= 0x7F;
       }
       lb_loop1_state[lane] = 0x90;
     }
-    else if (state == 0x80) {
+    else if (state == 0x90) {
+      /* 82fa: ee6e -> work[0x1C] |=0x10 |=0x40; then work[0x1C] &=0x7F (unconditional) -> 0xA0. */
       if (u4lb_ee6e(lane)) {
+        u4_work_buf[0x1C + lane] |= 0x10;
         u4_work_buf[0x1C + lane] |= 0x40;
       }
       u4_work_buf[0x1C + lane] &= 0x7F;
       lb_loop1_state[lane] = 0xA0;
     }
-    else if (state == 0x90) {
+    else if (state == 0xA0) {
+      /* 831a: e461 -> 0xA1 (lane bonded). */
       if (u4lb_e461() == 1) lb_loop1_state[lane] = 0xA1;
     }
-    else if (state == 0xA0) {
+    else if (state == 0xA1) {
+      /* 8327: bonded monitor; host re-train request (snap&0xC0==0x80) re-enters 0x50, else 0xA0. */
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
         if ((u4_host_desc[0x4 + lane] & 0xC0) == 0x80) lb_loop1_state[lane] = 0x50;
@@ -959,12 +980,7 @@ static void u4lb_walk_8000(void) {
         lb_loop1_state[lane] = 0xA0;
       }
     }
-    else {
-      u4_work_buf[0x1C + lane] &= 0xEF;
-      u4_work_buf[0x1C + lane] &= 0x7F;
-      u4_work_buf[0x19 + lane] &= 0xDF;
-      lb_loop1_state[lane] = 0x20;
-    }
+    /* default (state 0x00 / unmatched): stock 8355 tail is a no-op (lane parked). */
   }
   /* LOOP2: the CL-state walker (state @0x075B+lane). */
   for (lane = 0; lane < 2; lane++) {
