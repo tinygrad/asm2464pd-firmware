@@ -182,11 +182,19 @@ static void u4lb_cm_conn_routing_setup(void) {
     SB_WR(0x6A, rate_hi); SB_WR(0x6B, rate_lo);
     SB_WR(0x6C, rate_hi); SB_WR(0x6D, rate_lo);
     SB_WR(0x74, 0x00); SB_WR(0x75, (uint8_t)((lb_lane_width_latch0 == 2) ? 0x1F : 0x0F));
-    if (REG_LANE_RATE_C8FF == 0x04 && u4_enter_usb_accepted == 0) {
-      REG_PHY_LANEA_C294 = (uint8_t)((REG_PHY_LANEA_C294 & 0xF0) | 0x03);
-      REG_PHY_LANEA_C293 = (uint8_t)((REG_PHY_LANEA_C293 & 0xFC) | 0x02);
-      REG_PHY_LANEB_C314 = (uint8_t)((REG_PHY_LANEB_C314 & 0xF0) | 0x03);
-      REG_PHY_LANEB_C313 = (uint8_t)((REG_PHY_LANEB_C313 & 0xFC) | 0x02);
+    if (REG_LANE_RATE_C8FF == 0x04) {
+      if (u4_enter_usb_accepted != 0) {
+        /* c2c6 (stock c5d2->c5db RETs here): force the advertised PHY rate-field low nibble to 0x02.
+         * Omitting this left C294/C314 at the boot default 0x07 (usb4_irq C2E0 RMW(0xF0,0x07)) -> the
+         * host trained/granted the higher-rate CL index 0x0D instead of stock's 0x0C. */
+        REG_PHY_LANEA_C294 = (uint8_t)((REG_PHY_LANEA_C294 & 0xF0) | 0x02);
+        REG_PHY_LANEB_C314 = (uint8_t)((REG_PHY_LANEB_C314 & 0xF0) | 0x02);
+      } else {
+        REG_PHY_LANEA_C294 = (uint8_t)((REG_PHY_LANEA_C294 & 0xF0) | 0x03);
+        REG_PHY_LANEA_C293 = (uint8_t)((REG_PHY_LANEA_C293 & 0xFC) | 0x02);
+        REG_PHY_LANEB_C314 = (uint8_t)((REG_PHY_LANEB_C314 & 0xF0) | 0x03);
+        REG_PHY_LANEB_C313 = (uint8_t)((REG_PHY_LANEB_C313 & 0xFC) | 0x02);
+      }
     }
     if (lb_lane_width_latch0 == 1) {
       REG_PHY_LANEA_C2C5 = (uint8_t)((REG_PHY_LANEA_C2C5 & 0xF0) | 0x0F);
