@@ -506,6 +506,12 @@ void main(void) {
   // DROM cap bits read by sb_rom_descriptor_load; 0x09F4 deliberately left at default.
   XDATA_REG8V(0x09F5) = 1; XDATA_REG8V(0x09F6) = 1;
   XDATA_REG8V(0x09F7) = 3; XDATA_REG8V(0x09F8) = 1; XDATA_REG8V(0x09FB) = 3;
+  // 0x0A57/0x0A58 = device PID-low / bcdDevice-hi. Stock relies on the boot env (SPI-flash shadow)
+  // pre-loading these; there is no firmware writer. Without them they stay uninit 0x55, so the SB
+  // connect descriptor TX becomes 0104 5555 instead of 0104 6324 and the host never escalates
+  // SB[0x18] 05->63 to assign the route-ID (no lane bond, no GPU). Values from the stock wire trace.
+  XDATA_REG8V(0x0A57) = 0x63;
+  XDATA_REG8V(0x0A58) = 0x24;
 
   // PHY tune + PCIe power cycling only in non-USB4 mode (they clobber CM-owned regs).
   if (!(XDATA_REG8V(0x09F9) & 0x83)) {
