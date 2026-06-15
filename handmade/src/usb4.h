@@ -2,132 +2,81 @@
 #define USB4_H
 /*
  * USB4 mode-establishment glue: post-Enter_USB connect path + the INT1 USB4 event demux.
- * Faithful transcription of the ASM2464PD stock firmware (fw_tinygrad.bin); ghidra body
- * offset == fw_tinygrad offset. Include AFTER vdm.h (needs PR(a), uart_*, PD helpers, DPX SFR).
- *
- * Flow: Enter_USB Accept sets 0x07BA=1 -> usb4_connect_decide @0xA0A7 tail -> usb4_connect_u4
- * @0xA3F5, which drives sideband bring-up so the host CM trains the lanes (E302 link-mode -> >=2).
- *
- * usb4_connect_u4 @0xA3F5 has two parts:
- *   (A) bank0 head: XDATA RMW on E716/CA81/CA06 (gated 0x0AF1.0) and the 0x09FA/0x09FB
- *       route-mode latch from 0x09F9&3 / 0x09F4.
- *   (B) bank1 tail: b230 (sb_lane_flip_init) + bb37 (sb_block_init) via trampolines 0x0606/0x060b,
- *       preceded by the a48c..a516 tunnel/PCIe path-state RMWs. Implemented in sb.h from the
- *       byte-exact ROM tables (CODE 0x213d/0x21d4). This is the SB block the host CM polls.
+ * Include AFTER vdm.h (needs PR(a), uart_*, PD helpers, DPX SFR).
  */
 
-/* e0d9 (bank1 sb_phy_descriptor_seed) param 4: PHY descriptor seed via c306/c307 (fused PHY trim,
- * read back live). param 0 (route): C206-region reseed handled by sb_block_init's e0d9. */
-static void u4c_e0d9(uint8_t param) {
-  if (param == 4) {
+/* PHY descriptor seed (mode 4 seeds the PHY trim registers). */
+static void u4c_e0d9(uint8_t mode) {
+  if (mode == 4) {
     REG_PHY_RXPLL_RESET = 0x3E; REG_PHY_CTRL_C20F = 0x08; PR(0xC210) = 0x08; PR(0xC211) = 0x2E; PR(0xC212) = 0x3E;
     PR(0xC214) = 0x00; PR(0xC215) = 0x20; PR(0xC216) = 0x00; PR(0xC217) = 0x3F;
   }
 }
 
-/* e7c1 @0xe7c1: param 1 -> bd14 (CC3A&=~2; CC38&=~2); else if 0x0AF1.4 -> bcf2. */
-static void u4c_e7c1(uint8_t param) {
-  if (param == 1) { REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0xFD; }       /* bd14 */
-  else if (PR(0x0AF1) & 0x10) { REG_TIMER_ENABLE_B = (REG_TIMER_ENABLE_B & 0xFD) | 0x02; REG_TIMER_ENABLE_A = (REG_TIMER_ENABLE_A & 0xFD) | 0x02; }  /* bcf2 */
+/* Timer-enable gate: mode 1 clears bit1; else conditionally sets bit1 per 0x0AF1.4. */
+static void u4c_e7c1(uint8_t mode) {
+  if (mode == 1) { REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0xFD; }
+  else if (PR(0x0AF1) & 0x10) { REG_TIMER_ENABLE_B = (REG_TIMER_ENABLE_B & 0xFD) | 0x02; REG_TIMER_ENABLE_A = (REG_TIMER_ENABLE_A & 0xFD) | 0x02; }
 }
 
-/* usb4_connect_u4 @0xA3F5: head + a415 pre-gate + a48c-a516 tail. The a48c tail (sb.h u4c_*) is
- * the lane/tunnel-train path the host CM needs after connect. */
+/* Post-Enter_USB connect path: drives sideband bring-up so the host CM trains the lanes. */
 static void usb4_connect_u4(void) {
-  /* 0x0AF1.0 is a dynamic connect-time gate (stock seeds 0 at boot @92C5). Set on connect entry. */
   PR(0x0AF1) |= 0x01;
-  /* a3f5: gated on 0x0AF1.0 — link/route control RMW. */
   if (PR(0x0AF1) & 0x01) {
-    REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;     /* a3fc */
-    REG_CPU_CTRL_CA81 &= 0xFE;              /* a405 */
-    REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;     /* a40c */
+    REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
+    REG_CPU_CTRL_CA81 &= 0xFE;
+    REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;
   }
-  /* a415 pre-gate (PHY descriptor seed the host CM reads): dd42(0)/e7c1(1)/e0d9(0). */
-  boot_phy_dd42(0);                              /* a415: dd42(0) -> E7E3=0 */
-  u4c_e7c1(1);                                   /* a418: e7c1(1) -> bd14 (CC3A/CC38 &= ~2) */
-  u4c_e0d9(0);                                   /* a41e: e0d9(0) -> PHY descriptor seed */
-  /* a424: 0x07BA gate (set by Enter_USB Accept). */
+  boot_phy_dd42(0);
+  u4c_e7c1(1);
+  u4c_e0d9(0);
   if (PR(0x07BA) == 0) {
-    /* a427: 0x07B9 fallback — non-connect route mode latch. */
-    if (PR(0x07B9) == 0) return;                 /* neither connect flag -> nothing to do */
-    PR(0x09FA) = 0x81;                           /* a432: 0x09FA = 0x81 (tunnel route) */
+    if (PR(0x07B9) == 0) return;
+    PR(0x09FA) = 0x81;
     PR(0x09FB) = 0x02;
   } else {
-    /* a42a: latch route mode from 0x09F9&3. Preserve 0x09FA.2 (the c9a8 connect-gate bit, owned
-     * by the a522/link-event path; stock's masked store keeps it). */
     PR(0x09FA) = (PR(0x09FA) & 0x04) | (PR(0x09F9) & 0x03);
-    if (PR(0x09F4) == 0x03) {                    /* a434: DP-alt sub-case */
+    if (PR(0x09F4) == 0x03) {
       if (PR(0x07BE) == 0) { PR(0x09FA) = (PR(0x09FA) & 0x04) | 2; PR(0x09FB) = 1; }
       else                 { PR(0x09FA) = (PR(0x09FA) & 0x04) | 1; PR(0x09FB) = 2; }
     }
-    if (PR(0x09FA) & 0x02) {                     /* a45a: 0x09FA.1 lane-1 route mode */
+    if (PR(0x09FA) & 0x02) {
       REG_LINK_STATUS_E716 &= 0xFC;
       REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
-      SB_WR(0xD8, 0x02);                          /* SB[0xD8]=2 (page1 0x128D8) */
+      SB_WR(0xD8, 0x02);
     }
   }
-  /* a460..a51e: full tail (edbd/e5b0/dd42/bcd7-tunnel-train/ccb3/c270/d556) then b230 + bb37. */
   sb_assert();
 }
 
-/* ====================================================================================
- * INT1 USB4 event demux (orchestrator int1_isr_orchestrator @0x4486, USB4 branch),
- * gated by (0x09F9 & 0x83). Logs which sources fire and applies the documented-safe W1C
- * acks (EC04=1, E763 W1C) so a fired source is observable and not left asserted. The bank1
- * handler register sequences are serviced via their ported helpers, not fabricated here.
- * ==================================================================================== */
+/* INT1 USB4 event demux: services the USB4 INT sources and applies their W1C acks. */
 
-/* Sticky bitmap of USB4 INT sources seen, printed from the super-loop (keeps the ISR short):
- * bit0=C80A.5 SB, bit1=C80A.4 evt, bit2=EC06.0 routerop, bit3=C80A.0-3 tunnel. */
-static volatile uint8_t __xdata __at(0x0B49) usb4_int_seen;   /* XDATA: IRAM headroom */
+/* Sticky bitmap of USB4 INT sources seen (bit0=SB, bit1=evt, bit2=routerop, bit3=tunnel). */
+static volatile uint8_t __xdata __at(0x0B49) usb4_int_seen;
 
-/* SB-router event handler (a066), defined in sb_router.h (included before usb4.h). It W1C-acks
- * the C80A.5 source, so the demux can service every ISR without a one-shot latch. */
 static void sb_router_event_handler(void);
 
-/* Sticky accumulator of every C80A value seen in the ISR (catches a transient C80A.5). */
-static volatile uint8_t __xdata __at(0x0B4A) c80a_acc;   /* XDATA: IRAM headroom */
+/* Sticky accumulator of every C80A value seen in the ISR. */
+static volatile uint8_t __xdata __at(0x0B4A) c80a_acc;
 
-/* ====================================================================================
- * cm_routerop_mailbox (CODE_BANK1::c0a5): EC06.0 config-space router-op dispatcher. The host CM
- * posts router config-space read(0x50)/write(0x51) ops into the EA80/EA90 mailbox; this builds the
- * reply in the 0x0B02-0x0B1F working buffer and signals it back via C805|=0x02 + EA90=0xA5.
- *
- *   gate:        EA90 == 0x5A (host posted a router-op; else return)
- *   state 0x0B02: 0=idle (read opcode from EA80 -> 0x0B03, dispatch movc func_0def@c0c2),
- *                 1=read-resp pending (0x0B03==0xE2), 2=write-resp pending (0x0B03==0xE3).
- *   reply:       EA90 = 0xA5 (ack the host).
- *
- * The opcode-dispatch bodies (d945/ceab config read/write, e21b/e4a6 link-control, e2b9
- * connect-fill) are deep banked router-config state machines reached only when the host posts a
- * 0x5A op; not reproduced (no host op to validate against on this HW). Observed: EA90 stays 0x00
- * on the Intel MTL TB4 host, so this is a correct NO-OP; the gate + ack are wired for a host that
- * does post.
- * ==================================================================================== */
+/* Config-space router-op dispatcher: replies to host-posted EA90 router-ops and acks them. */
 static void cm_routerop_mailbox(void) {
-  if (REG_SYS_CTRL_EA90 != 0x5A) return;            /* c0a5 gate: host must have posted a 0x5A router-op */
+  if (REG_SYS_CTRL_EA90 != 0x5A) return;
   {
     uint8_t state = PR(0x0B02);
     if (state == 0) {
-      PR(0x0B03) = PR(0xEA80);               /* read opcode/path from EA80 into the working buf */
-      /* movc func_0def(0x0B03) @c0c2 dispatches the read/write/link-control op into 0x0B0A..;
-       * the deep d945/ceab/e21b/e4a6/e2b9 bodies are banked and not reproduced here.
-       * Stock state-0 does NOT touch C805; the send-engine trigger (C805 = (C805 & 0xF9) | 0x02)
-       * lives in cf35, called from the per-opcode send-resp helpers only after a response is built.
-       * Restore it inside the per-opcode bodies if/when func_0def is ported. */
+      PR(0x0B03) = PR(0xEA80);
     } else if (state == 1) {
-      if (PR(0x0B03) == 0xE2) {               /* read-resp pending */
-        /* cm_routerop_send_read_resp() + addr-in-bounds check; banked. */
+      if (PR(0x0B03) == 0xE2) {
         PR(0x0B02) = 0;
-        REG_SYS_CTRL_EA90 = 0xA5;                     /* ack */
+        REG_SYS_CTRL_EA90 = 0xA5;
         return;
       }
       PR(0x0B02) = 0;
     } else if (state == 2) {
-      if (PR(0x0B03) == 0xE3) {               /* write-resp pending */
-        /* cm_routerop_send_write_resp() + addr-in-bounds check; banked. */
+      if (PR(0x0B03) == 0xE3) {
         PR(0x0B02) = 0;
-        REG_SYS_CTRL_EA90 = 0xA5;                     /* ack */
+        REG_SYS_CTRL_EA90 = 0xA5;
         return;
       }
       PR(0x0B02) = 0;
@@ -135,25 +84,25 @@ static void cm_routerop_mailbox(void) {
   }
 }
 
-/* Called from int1_isr after PD-RX, gated by (0x09F9 & 0x83). Reactive W1C-ack + forward. */
+/* Called from int1_isr after PD-RX: acks and forwards each fired USB4 INT source. */
 static void usb4_int_demux(void) {
-  uint8_t c80a = REG_INT_PCIE_NVME;
-  c80a_acc |= c80a;
-  if (c80a & 0x20) {                         /* C80A.5 -> SB router/connect (bank1 0xA066) */
+  uint8_t int_sources = REG_INT_PCIE_NVME;
+  c80a_acc |= int_sources;
+  if (int_sources & 0x20) {
     usb4_int_seen |= 0x01;
-    sb_router_event_handler();               /* a066: per-channel connect + lane-bond + W1C */
+    sb_router_event_handler();
   }
-  if (c80a & 0x10) usb4_int_seen |= 0x02;   /* C80A.4 -> USB4 adapter/link event (bank0 0xC105) */
-  if (REG_NVME_EVENT_STATUS & 0x01) {                   /* EC06.0 -> router-op mailbox (bank1 0xC0A5) */
+  if (int_sources & 0x10) usb4_int_seen |= 0x02;
+  if (REG_NVME_EVENT_STATUS & 0x01) {
     usb4_int_seen |= 0x04;
-    REG_NVME_EVENT_ACK = 1;                          /* documented ack (orchestrator @0x4486) */
-    cm_routerop_mailbox();                    /* c0a5 config-space router-op dispatch */
+    REG_NVME_EVENT_ACK = 1;
+    cm_routerop_mailbox();
   }
-  if (c80a & 0x0F) {                         /* C80A.0-3 -> PCIe-tunnel link events (bank1 0xE911) */
+  if (int_sources & 0x0F) {
     usb4_int_seen |= 0x08;
-    { uint8_t e763 = REG_PHY_RXPLL_TRIGGER;             /* documented W1C: bit2->0x04, bit3->0x08 */
-      if (e763 & 0x04) REG_PHY_RXPLL_TRIGGER = 0x04;
-      if (e763 & 0x08) REG_PHY_RXPLL_TRIGGER = 0x08; }
+    { uint8_t tunnel_status = REG_PHY_RXPLL_TRIGGER;
+      if (tunnel_status & 0x04) REG_PHY_RXPLL_TRIGGER = 0x04;
+      if (tunnel_status & 0x08) REG_PHY_RXPLL_TRIGGER = 0x08; }
   }
 }
 

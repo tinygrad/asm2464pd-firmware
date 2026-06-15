@@ -177,75 +177,59 @@ static void usb_init_controller(uint8_t force_usb2) {
     }
 }
 
-/* usb_pipe_engine_init — the stock boot_usb4_vs_usb3_mode_decision @0xB1CB USB-PIPE engine config
- * (register writes only; the d07f/e214/545c/bbb6 helpers are mode-decision glue, not the PIPE arm).
- * Run UNCONDITIONALLY at boot (identical for USB3 and USB4 per USB4_BOOT_REDESIGN.md sec 2). This
- * brings up the USB PIPE/PHY layer the upstream USB4 lane engine needs. Verbatim register set. */
+/* Bring up the USB PIPE/PHY engine; run unconditionally at boot. */
 static void usb_pipe_engine_init(void) {
-    REG_POWER_ENABLE      = (REG_POWER_ENABLE & 0x7F) | 0x80;   /* 92C0.7 */
+    REG_POWER_ENABLE      = (REG_POWER_ENABLE & 0x7F) | 0x80;
     REG_USB_PHY_CTRL_91D1 = 0x0F;
     REG_BUF_CFG_9300      = 0x0C;
     REG_BUF_CFG_9301      = 0xC0;
     REG_BUF_CFG_9302      = 0xBF;
-    REG_USB_CTRL_PHASE    = 0x1F;        /* control-phase reg, boot-time raw write */
-    REG_USB_EP_CFG1       = 0x0F;        /* 0x9093 */
+    REG_USB_CTRL_PHASE    = 0x1F;
+    REG_USB_EP_CFG1       = 0x0F;
     REG_USB_PHY_CTRL_91C1 = 0xF0;
     REG_BUF_CFG_9303      = 0x33;
     REG_BUF_CFG_9304      = 0x3F;
     REG_BUF_CFG_9305      = 0x40;
-    REG_USB_CONFIG        = 0xE0;        /* 0x9002 */
-    REG_USB_EP0_CFG       = 0xF0;        /* 0x9005 */
-    REG_USB_MODE          = 0x01;        /* 0x90E2 */
-    REG_USB_EP_MGMT      &= (uint8_t)~0x01;   /* 905E.0 = 0 */
-    REG_USB_MSC_CTRL      = 0x01;        /* C42C (verbatim; MSC-vs-strap ambiguous, copy as-is) */
-    REG_USB_MSC_STATUS   &= (uint8_t)~0x01;   /* C42D.0 = 0 */
-    REG_USB_PHY_CTRL_91C3 &= (uint8_t)~0x20;  /* 91C3.5 = 0 */
-    REG_USB_PHY_CTRL_91C0 |= 0x01;       /* pulse 91C0.0 */
+    REG_USB_CONFIG        = 0xE0;
+    REG_USB_EP0_CFG       = 0xF0;
+    REG_USB_MODE          = 0x01;
+    REG_USB_EP_MGMT      &= (uint8_t)~0x01;
+    REG_USB_MSC_CTRL      = 0x01;
+    REG_USB_MSC_STATUS   &= (uint8_t)~0x01;
+    REG_USB_PHY_CTRL_91C3 &= (uint8_t)~0x20;
+    REG_USB_PHY_CTRL_91C0 |= 0x01;
     REG_USB_PHY_CTRL_91C0 &= (uint8_t)~0x01;
 }
 
-/* boot_phy_early_settle — the CC10 portion of stock boot_phy_bringup_early @0xCE79 (Step C, the
- * optional early PHY settle per USB4_BOOT_REDESIGN.md sec 2). cc10(subcmd=2, CC12=0, CC13=0x14)
- * via phy_cmd_cc10_and_wait (poll CC11.1, ack), then cc10(subcmd=3, CC12=0, CC13=0x0A) + WAIT
- * E712[1:0] OR CC11.1, then ack. (Omits the CE79 Type-C/SBU/PCIe-tunnel helpers d0d3/cf28/d996
- * which touch CC30/CC33/CC3F/E324 + the downstream PCIe tunnel — out of scope, HW-risky.) */
+/* Optional early PHY settle (two CC10 mailbox commands with bounded waits). */
 static void boot_phy_early_settle(void) {
-    /* subcmd=2, CC12=0, CC13=0x14, then poll CC11.1 + ack (phy_cmd_cc10_and_wait) */
     REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
     REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x02;
     REG_TIMER0_THRESHOLD_HI = 0x00;
     REG_TIMER0_THRESHOLD_LO = 0x14;
     REG_TIMER0_CSR = 0x01;
-    { uint16_t g = 0; while (!(REG_TIMER0_CSR & 0x02) && ++g < 0xFFFF); }
+    { uint16_t spin = 0; while (!(REG_TIMER0_CSR & 0x02) && ++spin < 0xFFFF); }
     REG_TIMER0_CSR = 0x02;
-    /* subcmd=3, CC12=0, CC13=0x0A, then WAIT E712[1:0] OR CC11.1 + ack */
     REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
     REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x03;
     REG_TIMER0_THRESHOLD_HI = 0x00;
     REG_TIMER0_THRESHOLD_LO = 0x0A;
     REG_TIMER0_CSR = 0x01;
-    { uint16_t g = 0;
-      while (!((REG_LINK_STATUS_E712 & 0x03) || (REG_TIMER0_CSR & 0x02)) && ++g < 0xFFFF); }
+    { uint16_t spin = 0;
+      while (!((REG_LINK_STATUS_E712 & 0x03) || (REG_TIMER0_CSR & 0x02)) && ++spin < 0xFFFF); }
     REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
 }
 
-/* usb4_phy_arm — the upstream USB4 PHY link-up arm (stock phy_link_train_cmd_cc10 @0xE50D, called
- * from B1CB as cc10(subcmd=4, CC12=1, CC13=0x8F)), then WAIT E318.4 (PHY link-up) OR CC11.1, then
- * ack. Uses the CC10-CC13 mailbox; run ONCE at boot before the super-loop (no sleep() may run
- * between the CC10 issue and the CC11.1 ack — the arm is self-contained). Values verbatim. */
+/* Arm USB4 PHY link-up once at boot via the CC10 mailbox, with a bounded wait. */
 static void usb4_phy_arm(void) {
-    /* ack any prior event (phy_cc11_ack_event @0xE8EF): CC11=4 then CC11=2 */
     REG_TIMER0_CSR = 0x04;
     REG_TIMER0_CSR = 0x02;
-    /* issue subcmd=4, CC12=0x01, CC13=0x8F */
     REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x04;
     REG_TIMER0_THRESHOLD_HI = 0x01;
     REG_TIMER0_THRESHOLD_LO = 0x8F;
-    REG_TIMER0_CSR = 0x01;            /* go */
-    /* WAIT E318.4 (PHY link-up) OR CC11.1 (done), bounded */
-    { uint16_t g = 0;
-      while (!((REG_PHY_COMPLETION_E318 & 0x10) || (REG_TIMER0_CSR & 0x02)) && ++g < 0xFFFF); }
-    /* ack (E8EF): CC11=4 then CC11=2 */
+    REG_TIMER0_CSR = 0x01;
+    { uint16_t spin = 0;
+      while (!((REG_PHY_COMPLETION_E318 & 0x10) || (REG_TIMER0_CSR & 0x02)) && ++spin < 0xFFFF); }
     REG_TIMER0_CSR = 0x04;
     REG_TIMER0_CSR = 0x02;
 }
