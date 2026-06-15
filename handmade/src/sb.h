@@ -160,10 +160,10 @@ static void sb_rom_descriptor_load(void) {
 static void sb_block_init(void) {
   uart_puts("[SB Init]");
 
-  REG_PHY_RXPLL_RESET = 0; REG_PHY_CTRL_C20F = 0; PR(0xC210) = 0;
-  PR(0xC211) = 0; PR(0xC212) = 0;
-  PR(0xC214) = 0; PR(0xC215) = 0; PR(0xC216) = 0;
-  PR(0xC217) = 0;
+  REG_PHY_RXPLL_RESET = 0; REG_PHY_CTRL_C20F = 0; REG_PHY_CDR_SEED_C210 = 0;
+  REG_PHY_CDR_SEED_C211 = 0; REG_PHY_CDR_SEED_C212 = 0;
+  REG_PHY_CDR_SEED_C214 = 0; REG_PHY_CDR_SEED_C215 = 0; REG_PHY_CDR_SEED_C216 = 0;
+  REG_PHY_CDR_SEED_C217 = 0;
 
   P1_CLR(0x0100, 0x10);
   P1_CLR(0x0100, 0x40);
@@ -200,20 +200,20 @@ static void sb_block_init(void) {
 
   /* PHY bank0 RMW (DPX=0) */
   REG_PHY_CONFIG &= ~0x08;
-  PR(0xC2C4) = (PR(0xC2C4) & 0xBF) | 0x40;
-  PR(0xC2DC) &= 0xC0;
-  PR(0xC344) = (PR(0xC344) & 0xBF) | 0x40;
-  PR(0xC35C) &= 0xC0;
+  REG_PHY_LANEA_C2C4 = (REG_PHY_LANEA_C2C4 & 0xBF) | 0x40;
+  REG_PHY_LANEA_C2DC &= 0xC0;
+  REG_PHY_LANEB_C344 = (REG_PHY_LANEB_C344 & 0xBF) | 0x40;
+  REG_PHY_LANEB_C35C &= 0xC0;
 
   /* PHY lane config */
   PR(0x0AB3) = 0; PR(0x0AB4) = 3; PR(0x0AB5) = 3; PR(0x0AB6) = 0;
   REG_PHY_ORIENT_C2C3 &= 0xFE; REG_PHY_ORIENT_C2C3 &= 0xFD;
   REG_PHY_ORIENT_C2C3 = (REG_PHY_ORIENT_C2C3 & 0xC3) | 0x1C; REG_PHY_ORIENT_C2C3 &= 0xBF;
-  PR(0xC2CB) &= 0xFB;
+  REG_PHY_LANEA_CDR_C2CB &= 0xFB;
   REG_VENDOR_CTRL_C343 &= 0xFE; REG_VENDOR_CTRL_C343 &= 0xFD;
   REG_VENDOR_CTRL_C343 = (REG_VENDOR_CTRL_C343 & 0xC3) | 0x1C; REG_VENDOR_CTRL_C343 &= 0xBF;
-  PR(0xC34B) &= 0xFB;
-  PR(0xC21C) = (PR(0xC21C) & 0xBF) | 0x40;
+  REG_PHY_LANEB_CDR_C34B &= 0xFB;
+  REG_PHY_LINK_CTRL_C21C = (REG_PHY_LINK_CTRL_C21C & 0xBF) | 0x40;
   REG_PHY_LINK_CTRL_C208 &= 0xBF;
   REG_PHY_ORIENT_C2C3 &= 0x7F;
   REG_VENDOR_CTRL_C343 &= 0x7F;
@@ -232,7 +232,7 @@ static void sb_block_init(void) {
 
 /* Program the PCIe tunnel link width across 4 lanes. */
 static void sb_pcie_width_ramp(uint8_t width) {
-  PR(0xB434) = width; PR(0xB435) = width; PR(0xB436) = width; PR(0xB437) = width;
+  REG_PCIE_LINK_STATE = width; REG_PCIE_LINK_STATE_HI_B435 = width; REG_PCIE_LANE_CONFIG = width; REG_PCIE_LANE_CONFIG_HI_B437 = width;
 }
 
 /*
@@ -363,13 +363,13 @@ static void u4c_bcd7_tail(void) {
     sb_pcie_width_ramp(0x0F);
     if (PR(0x0AF1) & 0x10) {
       uint16_t g = 0;
-      while (((PR(0xC006) & 0x1F) != 0x10) && ++g < 0x0800);
+      while (((REG_UART_TFBF & 0x1F) != 0x10) && ++g < 0x0800);
       g = 0;
-      while (((PR(0xC00E) & 0x07) != 0x00) && ++g < 0x0800);
+      while (((REG_UART_STATUS & 0x07) != 0x00) && ++g < 0x0800);
       REG_CPU_MODE &= 0xFE;
       REG_LINK_WIDTH_E710 = (REG_LINK_WIDTH_E710 & 0xE0) | 0x1F;
     }
-    PR(0xB430) = (PR(0xB430) & 0xFE) | 0x01;
+    REG_TUNNEL_LINK_STATE = (REG_TUNNEL_LINK_STATE & 0xFE) | 0x01;
   }
 }
 

@@ -8,8 +8,8 @@
 /* PHY descriptor seed (mode 4 seeds the PHY trim registers). */
 static void u4c_e0d9(uint8_t mode) {
   if (mode == 4) {
-    REG_PHY_RXPLL_RESET = 0x3E; REG_PHY_CTRL_C20F = 0x08; PR(0xC210) = 0x08; PR(0xC211) = 0x2E; PR(0xC212) = 0x3E;
-    PR(0xC214) = 0x00; PR(0xC215) = 0x20; PR(0xC216) = 0x00; PR(0xC217) = 0x3F;
+    REG_PHY_RXPLL_RESET = 0x3E; REG_PHY_CTRL_C20F = 0x08; REG_PHY_CDR_SEED_C210 = 0x08; REG_PHY_CDR_SEED_C211 = 0x2E; REG_PHY_CDR_SEED_C212 = 0x3E;
+    REG_PHY_CDR_SEED_C214 = 0x00; REG_PHY_CDR_SEED_C215 = 0x20; REG_PHY_CDR_SEED_C216 = 0x00; REG_PHY_CDR_SEED_C217 = 0x3F;
   }
 }
 
@@ -65,7 +65,7 @@ static void cm_routerop_mailbox(void) {
   {
     uint8_t state = PR(0x0B02);
     if (state == 0) {
-      PR(0x0B03) = PR(0xEA80);
+      PR(0x0B03) = REG_ROUTEROP_OPCODE_EA80;
     } else if (state == 1) {
       if (PR(0x0B03) == 0xE2) {
         PR(0x0B02) = 0;

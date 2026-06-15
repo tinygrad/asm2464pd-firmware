@@ -17,11 +17,11 @@ static void pd_rx_message_dispatch(void);
 static volatile uint8_t __xdata __at(0x0B46) pd_cc_timeout;
 
 #define PD_WAIT_LIMIT 0x4000u
-/* Bounded poll until (PR(reg) & mask) matches set (1=wait-for-set, 0=wait-for-clear). */
-static void pd_wait(uint16_t reg, uint8_t mask, uint8_t set) {
+/* Bounded poll until (*reg & mask) matches set (1=wait-for-set, 0=wait-for-clear). */
+static void pd_wait(volatile __xdata uint8_t *reg, uint8_t mask, uint8_t set) {
   uint16_t iters = 0;
-  if (set) { while (!(PR(reg) & mask) && ++iters < PD_WAIT_LIMIT); }
-  else     { while ( (PR(reg) & mask) && ++iters < PD_WAIT_LIMIT); }
+  if (set) { while (!(*reg & mask) && ++iters < PD_WAIT_LIMIT); }
+  else     { while ( (*reg & mask) && ++iters < PD_WAIT_LIMIT); }
   if (iters >= PD_WAIT_LIMIT) pd_cc_timeout = 1;
 }
 
@@ -29,12 +29,12 @@ static void pd_wait(uint16_t reg, uint8_t mask, uint8_t set) {
 static void pd_da51(void) {
   REG_CMD_CONFIG = (REG_CMD_CONFIG & 0x7F) | 0x80;
   if (REG_CMD_CONFIG & 0x80) {
-    PR(0xE401) = (PR(0xE401) & 0xF8) | 0x04;
-    PR(0xE401) = (PR(0xE401) & 0x07) | 0xB0;
-    PR(0xE406) = (PR(0xE406) & 0xF0) | 0x06;
-    PR(0xE406) = (PR(0xE406) & 0x0F) | 0xA0;
-    PR(0xE407) = (PR(0xE407) & 0xE0) | 0x15;
-    PR(0xE408) = (PR(0xE408) & 0xE0) | 0x1C;
+    REG_CMD_CFG_E401 = (REG_CMD_CFG_E401 & 0xF8) | 0x04;
+    REG_CMD_CFG_E401 = (REG_CMD_CFG_E401 & 0x07) | 0xB0;
+    REG_CMD_CFG_E406 = (REG_CMD_CFG_E406 & 0xF0) | 0x06;
+    REG_CMD_CFG_E406 = (REG_CMD_CFG_E406 & 0x0F) | 0xA0;
+    REG_CMD_CFG_E407 = (REG_CMD_CFG_E407 & 0xE0) | 0x15;
+    REG_CMD_CFG_E408 = (REG_CMD_CFG_E408 & 0xE0) | 0x1C;
   }
 }
 
@@ -47,14 +47,14 @@ static void cc_pd_phy_term_init(void) {
   REG_CMD_CTRL_E400 &= 0x7F;
   REG_XFER_DMA_CTRL &= 0xF8; REG_XFER_DMA_ADDR_LO = 0;
   REG_XFER_DMA_ADDR_HI = 0x0A; REG_XFER_DMA_CMD = 0x01;
-  pd_wait(0xCC89, 0x02, 1);
+  pd_wait(&REG_XFER_DMA_CMD, 0x02, 1);
   REG_XFER_DMA_CMD = 0x02;
   REG_CMD_CONFIG = (REG_CMD_CONFIG & 0xFE) | 0x01;
   REG_XFER_DMA_CTRL &= 0xF8; REG_XFER_DMA_ADDR_LO = 0;
   REG_XFER_DMA_ADDR_HI = 0x3C; REG_XFER_DMA_CMD = 0x01;
-  pd_wait(0xCC89, 0x02, 1);
+  pd_wait(&REG_XFER_DMA_CMD, 0x02, 1);
   REG_XFER_DMA_CMD = 0x02;
-  pd_wait(0xE402, 0x08, 0);
+  pd_wait(&REG_CMD_STATUS_E402, 0x08, 0);
   REG_CMD_CTRL_E409 &= 0xFE;
   REG_CMD_CTRL_E409 = (REG_CMD_CTRL_E409 & 0xBF) | 0x40;
   REG_CMD_TRIGGER = 0x40;
@@ -72,9 +72,9 @@ static void cc_pd_phy_term_init(void) {
   REG_PD_CTRL_E66A &= 0xEF;
   REG_CMD_CFG_E40D = 0x28;
   REG_CMD_CFG_E413 = (REG_CMD_CFG_E413 & 0x8F) | 0x60;
-  PR(0xCAC4) &= 0xFE;
+  REG_CMD_ARM_CAC4 &= 0xFE;
   REG_CMD_CONFIG &= 0xDF;
-  PR(0xC698) &= 0xDF;
+  REG_PHY_LINK_ARM_C698 &= 0xDF;
 }
 
 /* Clear and enable the CC attach/role event sources. */
@@ -133,7 +133,7 @@ static void pd_drive_hard_reset(void) {
   REG_CMD_CONFIG &= ~0x0E;
   REG_XFER_DMA_CTRL = (REG_XFER_DMA_CTRL & 0xF8) | 0x02;
   REG_XFER_DMA_ADDR_LO = 0; REG_XFER_DMA_ADDR_HI = 0xC7; REG_XFER_DMA_CMD = 0x01;
-  pd_wait(0xCC89, 0x02, 1);
+  pd_wait(&REG_XFER_DMA_CMD, 0x02, 1);
   REG_XFER_DMA_CMD = 0x02;
   REG_CMD_CONFIG |= 0x0E;
   REG_CMD_CTRL_E403 = 0x00; REG_CMD_CFG_E404 = 0x40;

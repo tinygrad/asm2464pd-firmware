@@ -183,14 +183,14 @@ static void u4lb_cm_conn_routing_setup(void) {
     SB_WR(0x6C, rate_hi); SB_WR(0x6D, rate_lo);
     SB_WR(0x74, 0x00); SB_WR(0x75, (uint8_t)((PR(0x0750) == 2) ? 0x1F : 0x0F));
     if (REG_LANE_RATE_C8FF == 0x04 && PR(0x07BA) == 0) {
-      PR(0xC294) = (uint8_t)((PR(0xC294) & 0xF0) | 0x03);
-      PR(0xC293) = (uint8_t)((PR(0xC293) & 0xFC) | 0x02);
-      PR(0xC314) = (uint8_t)((PR(0xC314) & 0xF0) | 0x03);
-      PR(0xC313) = (uint8_t)((PR(0xC313) & 0xFC) | 0x02);
+      REG_PHY_LANEA_C294 = (uint8_t)((REG_PHY_LANEA_C294 & 0xF0) | 0x03);
+      REG_PHY_LANEA_C293 = (uint8_t)((REG_PHY_LANEA_C293 & 0xFC) | 0x02);
+      REG_PHY_LANEB_C314 = (uint8_t)((REG_PHY_LANEB_C314 & 0xF0) | 0x03);
+      REG_PHY_LANEB_C313 = (uint8_t)((REG_PHY_LANEB_C313 & 0xFC) | 0x02);
     }
     if (PR(0x0750) == 1) {
-      PR(0xC2C5) = (uint8_t)((PR(0xC2C5) & 0xF0) | 0x0F);
-      PR(0xC345) = (uint8_t)((PR(0xC345) & 0xF0) | 0x0F);
+      REG_PHY_LANEA_C2C5 = (uint8_t)((REG_PHY_LANEA_C2C5 & 0xF0) | 0x0F);
+      REG_PHY_LANEB_C345 = (uint8_t)((REG_PHY_LANEB_C345 & 0xF0) | 0x0F);
     }
   }
 
@@ -270,23 +270,23 @@ static void u4lb_ebde(void) {
   REG_PHY_CTRL_C20F = 0xFF;
   phy_cc10_cmd_wait(1, 0, 0x14);
   REG_PHY_CTRL_C20F = 0x00;
-  { uint16_t g = 0; while (((PR(0xC2D0) & 0x20) == 0) && ++g < 0x2000); }
-  { uint16_t g = 0; while (((PR(0xC350) & 0x20) == 0) && ++g < 0x2000); }
+  { uint16_t g = 0; while (((REG_PHY_LANEA_LOCK_C2D0 & 0x20) == 0) && ++g < 0x2000); }
+  { uint16_t g = 0; while (((REG_PHY_LANEB_LOCK_C350 & 0x20) == 0) && ++g < 0x2000); }
 }
 
 /* e980: 20G rate-descriptor apply (C2A8/C328 + C2C9/C349 rate fields + START bit7). */
 static void u4lb_e980(void) {
-  PR(0xC2A8) &= 0x3F;
-  PR(0xC328) &= 0x3F;
+  REG_PHY_LANEA_RATE_START_C2A8 &= 0x3F;
+  REG_PHY_LANEB_RATE_START_C328 &= 0x3F;
   u4lb_ebde();
-  PR(0xC2A8) &= 0x3F;
-  PR(0xC2C9) = (PR(0xC2C9) & 0x80)
-             | (uint8_t)(((PR(0xC2EC) & 0x38) >> 3) | 0x40);
-  PR(0xC328) &= 0x3F;
-  PR(0xC349) = (PR(0xC349) & 0x80)
-             | (uint8_t)(((PR(0xC36C) & 0x38) >> 3) | 0x40);
-  PR(0xC2A8) = (PR(0xC2A8) & 0x3F) | 0x80;
-  PR(0xC328) = (PR(0xC328) & 0x3F) | 0x80;
+  REG_PHY_LANEA_RATE_START_C2A8 &= 0x3F;
+  REG_PHY_LANEA_RATE_DESC_C2C9 = (REG_PHY_LANEA_RATE_DESC_C2C9 & 0x80)
+             | (uint8_t)(((REG_PHY_LANEA_RATE_SRC_C2EC & 0x38) >> 3) | 0x40);
+  REG_PHY_LANEB_RATE_START_C328 &= 0x3F;
+  REG_PHY_LANEB_RATE_DESC_C349 = (REG_PHY_LANEB_RATE_DESC_C349 & 0x80)
+             | (uint8_t)(((REG_PHY_LANEB_RATE_SRC_C36C & 0x38) >> 3) | 0x40);
+  REG_PHY_LANEA_RATE_START_C2A8 = (REG_PHY_LANEA_RATE_START_C2A8 & 0x3F) | 0x80;
+  REG_PHY_LANEB_RATE_START_C328 = (REG_PHY_LANEB_RATE_START_C328 & 0x3F) | 0x80;
 }
 
 /* d3b0: Chg2 rate setup (rate=3=20G). SB[0x65] bit4=rate.0, bit5=rate.1; commit via CC10. */
@@ -369,12 +369,12 @@ static void u4lb_df61(void) {
 
 /* ed44: B401/B402 tunnel-link strobe, then df61. */
 static void u4lb_ed44(void) {
-  PR(0xB401) = (uint8_t)((PR(0xB401) & 0xFE) | 0x01);
-  PR(0xB401) = (uint8_t)((PR(0xB401) & 0xFD) | 0x02);
-  PR(0xB401) &= 0xFE;
-  PR(0xB401) &= 0xFD;
-  PR(0xB402) = (uint8_t)((PR(0xB402) & 0xF7) | 0x08);
-  PR(0xB402) &= 0xFD;
+  REG_PCIE_TUNNEL_CTRL = (uint8_t)((REG_PCIE_TUNNEL_CTRL & 0xFE) | 0x01);
+  REG_PCIE_TUNNEL_CTRL = (uint8_t)((REG_PCIE_TUNNEL_CTRL & 0xFD) | 0x02);
+  REG_PCIE_TUNNEL_CTRL &= 0xFE;
+  REG_PCIE_TUNNEL_CTRL &= 0xFD;
+  REG_PCIE_CTRL_B402 = (uint8_t)((REG_PCIE_CTRL_B402 & 0xF7) | 0x08);
+  REG_PCIE_CTRL_B402 &= 0xFD;
   u4lb_df61();
 }
 
@@ -411,7 +411,7 @@ static void u4lb_d702(uint8_t newmask) {
 
 /* c089: the 4-round B434 lane ramp toward target, with a d702 + CC10 settle each round. */
 static void u4lb_c089_lane_ramp(uint8_t target) {
-  __xdata uint8_t curmask = (uint8_t)(PR(0xB434) & 0x0F);
+  __xdata uint8_t curmask = (uint8_t)(REG_PCIE_LINK_STATE & 0x0F);
   __xdata uint8_t roundbit = 0x01;
   __xdata uint8_t round = 0;
   do {
@@ -424,7 +424,7 @@ static void u4lb_c089_lane_ramp(uint8_t target) {
       newmask = (uint8_t)(roundbit | curmask);
     }
     curmask = newmask;
-    PR(0xB434) = (uint8_t)(newmask | (uint8_t)(PR(0xB434) & 0xF0));
+    REG_PCIE_LINK_STATE = (uint8_t)(newmask | (uint8_t)(REG_PCIE_LINK_STATE & 0xF0));
     u4lb_d702(newmask);
     phy_cc10_cmd_wait(2, 0, 0xC7);
     roundbit = (uint8_t)(roundbit << 1);
@@ -434,16 +434,16 @@ static void u4lb_c089_lane_ramp(uint8_t target) {
 
 /* d436: PCIe-tunnel link-width config — bracket B402.1, run the lane ramp, strobe B401.0, set B436. */
 static void u4lb_d436(uint8_t mask) {
-  __xdata uint8_t saved_b402_1 = (uint8_t)(PR(0xB402) & 0x02);
-  PR(0xB402) = (uint8_t)(PR(0xB402) & 0xFD);
+  __xdata uint8_t saved_b402_1 = (uint8_t)(REG_PCIE_CTRL_B402 & 0x02);
+  REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);
   u4lb_c089_lane_ramp(mask);
   if (mask != 0x0F) {
-    PR(0xB401) = (uint8_t)((PR(0xB401) & 0xFE) | 0x01);
-    PR(0xB401) = (uint8_t)(PR(0xB401) & 0xFE);
+    REG_PCIE_TUNNEL_CTRL = (uint8_t)((REG_PCIE_TUNNEL_CTRL & 0xFE) | 0x01);
+    REG_PCIE_TUNNEL_CTRL = (uint8_t)(REG_PCIE_TUNNEL_CTRL & 0xFE);
   }
-  if (saved_b402_1 != 0) PR(0xB402) = (uint8_t)((PR(0xB402) & 0xFD) | 0x02);
-  PR(0xB436) = (uint8_t)((PR(0xB436) & 0xF0) | (uint8_t)(mask & 0x0E));
-  PR(0xB436) = (uint8_t)((PR(0xB436) & 0x0F) | (uint8_t)(((uint8_t)(PR(0xB404) & 0x0F) ^ 0x0F) << 4));
+  if (saved_b402_1 != 0) REG_PCIE_CTRL_B402 = (uint8_t)((REG_PCIE_CTRL_B402 & 0xFD) | 0x02);
+  REG_PCIE_LANE_CONFIG = (uint8_t)((REG_PCIE_LANE_CONFIG & 0xF0) | (uint8_t)(mask & 0x0E));
+  REG_PCIE_LANE_CONFIG = (uint8_t)((REG_PCIE_LANE_CONFIG & 0x0F) | (uint8_t)(((uint8_t)(REG_PCIE_LINK_PARAM_B404 & 0x0F) ^ 0x0F) << 4));
 }
 
 /* a840 gen->speed table, indexed by 0x0A5D (gen). */
@@ -485,10 +485,10 @@ static void u4lb_a840(uint8_t param) {
     }
   }
   if (gen < 3) {
-    PR(0xB403) = (uint8_t)((PR(0xB403) & 0xFE) | 0x01);
+    REG_TUNNEL_CTRL_B403 = (uint8_t)((REG_TUNNEL_CTRL_B403 & 0xFE) | 0x01);
     P1_WR(0x40B0, (uint8_t)((uint8_t)(gen + 1) | (uint8_t)(P1_RD(0x40B0) & 0xF0)));
   } else {
-    PR(0xB403) &= 0xFE;
+    REG_TUNNEL_CTRL_B403 &= 0xFE;
     P1_WR(0x40B0, (uint8_t)((P1_RD(0x40B0) & 0xF0) | 0x04));
   }
   width_code = 0;
@@ -497,7 +497,7 @@ static void u4lb_a840(uint8_t param) {
     else if (lane == 0) width_code = 0x0E;
   }
   PR(0x0A5C) = width_code;
-  PR(0xB431) = (uint8_t)((PR(0xB431) & 0xF0) | width_code);
+  REG_TUNNEL_LINK_STATUS = (uint8_t)((REG_TUNNEL_LINK_STATUS & 0xF0) | width_code);
   u4lb_d436(width_code);
   if ((uint8_t)(PR(0x09FA) & 0x81) != 0) u4lb_ed44();
   (void)param;
@@ -522,9 +522,9 @@ static void u4lb_e305(uint8_t param) {
 static uint8_t u4lb_e916(void) { return P1_RD(0x2805); }
 static void u4lb_c593(void) {
   uint8_t v;
-  PR(0xCCB0) = (uint8_t)((PR(0xCCB0) & 0xF8) | 0x05);
-  PR(0xCCB2) = 0x00;
-  PR(0xCCB3) = 0xC8;
+  REG_TUNNEL_PHY_CFG_CCB0 = (uint8_t)((REG_TUNNEL_PHY_CFG_CCB0 & 0xF8) | 0x05);
+  REG_TUNNEL_PHY_CFG_CCB2 = 0x00;
+  REG_TUNNEL_PHY_TIMER_CCB3 = 0xC8;
   P1_WR(0x134D, 0x04);
   P1_WR(0x1334, 0x02);
   P1_WR(0x1335, 0x02);
@@ -555,20 +555,20 @@ static void u4lb_b8db(void) {
     b8db_lo = 0x01; b8db_hi = 0x28;
     b8db_lo52 = 0x01; b8db_hi52 = 0x3D; b8db_lo54 = 0x01; b8db_hi54 = 0x43;
   } else if (PR(0x0750) == 1) {
-    if (PR(0xC297) & 0x20) return;
+    if (REG_PHY_LANEA_LOCK_C297 & 0x20) return;
     b8db_lo = 0x01; b8db_hi = 0x28;
     if (PR(0x07BA) == 0) { b8db_lo52=0x01; b8db_hi52=0x47; b8db_lo54=0x01; b8db_hi54=0x4D; }
     else { b8db_lo52=0x01; b8db_hi52=0x3D; b8db_lo54=0x01; b8db_hi54=0x43; }
   } else {
-    if (PR(0xC2A7) & 0x20) return;
+    if (REG_PHY_LANEA_LOCK_C2A7 & 0x20) return;
     b8db_lo = 0x01; b8db_hi = 0x20;
     if (PR(0x07BA) != 0) { b8db_lo52=0x01; b8db_hi52=0x3E; b8db_lo54=0x01; b8db_hi54=0x42; }
     else { b8db_lo52=0x01; b8db_hi52=0x48; b8db_lo54=0x01; b8db_hi54=0x4C; }
   }
   for (iter = 0; iter < 10; iter++) {
-    phase0 = PR(0xC2D2) & 0x3F; margin0_lo = PR(0xC2D9); margin0_hi = PR(0xC2DA);
-    phase1 = PR(0xC352) & 0x3F; margin1_lo = PR(0xC359); margin1_hi = PR(0xC35A);
-    if ((PR(0xC2D0) & 0x40) && (PR(0xC350) & 0x40) &&
+    phase0 = REG_PHY_LANEA_MARGIN_PHASE_C2D2 & 0x3F; margin0_lo = REG_PHY_LANEA_MARGIN_EYE_C2D9; margin0_hi = REG_PHY_LANEA_MARGIN_EYE_C2DA;
+    phase1 = REG_PHY_LANEB_MARGIN_PHASE_C352 & 0x3F; margin1_lo = REG_PHY_LANEB_MARGIN_EYE_C359; margin1_hi = REG_PHY_LANEB_MARGIN_EYE_C35A;
+    if ((REG_PHY_LANEA_LOCK_C2D0 & 0x40) && (REG_PHY_LANEB_LOCK_C350 & 0x40) &&
         phase0 >= b8db_lo && phase0 <= b8db_hi && phase1 >= b8db_lo && phase1 <= b8db_hi &&
         (uint8_t)(b8db_lo52 - (margin0_hi <  b8db_lo54         ? 1 : 0)) <= margin0_lo &&
         margin0_lo <  (uint8_t)(b8db_hi52 - (margin0_hi < (uint8_t)(b8db_hi54 + 1) ? 1 : 0)) &&
@@ -639,7 +639,7 @@ static void u4lb_state4_b0b4(void) {
     REG_PHY_TIMER_CTRL_E764 &= 0xFE;
     REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFD) | 0x02;
     phy_cc10_cmd_wait(1, 7, 0xCF);
-    if (PR(0xE762) & 0x10) {
+    if (REG_PHY_RXPLL_STATUS & 0x10) {
       REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFE) | 0x01;
       REG_PHY_TIMER_CTRL_E764 &= 0xFD;
       PR(0x06E9) = 0;
@@ -666,19 +666,19 @@ static void u4lb_state4_b0b4(void) {
     PR(0x081F) = (PR(0x081F) & 0x7F) | 0x80;
   }
 
-  uart_puts("[b4:D c2="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350)); uart_putc(']');
+  uart_puts("[b4:D c2="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350); uart_putc(']');
   /* CC37.2 set -> d3b0(3) Chg2 20G -> e980 rate apply -> e9e7 RstRxpll -> CC37.2 clr */
   REG_CPU_CTRL_CC37 = (REG_CPU_CTRL_CC37 & 0xFB) | 0x04;
   u4lb_d3b0(3);
   u4lb_e980();
   u4lb_e9e7();
-  uart_puts("[c2@rstpll="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350)); uart_putc(']');
+  uart_puts("[c2@rstpll="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350); uart_putc(']');
   REG_CPU_CTRL_CC37 &= 0xFB;
 
   /* b8db: [CDRV ok] CDR/PLL validate loop */
   uart_puts("[CDRV ok]");
   u4lb_b8db();
-  uart_puts("[c2@b8db="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350)); uart_putc(']');
+  uart_puts("[c2@b8db="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350); uart_putc(']');
 
   /* CA60.3 set (tunnel-adapter enable) */
   REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0xF7) | 0x08;
@@ -707,8 +707,8 @@ static void u4lb_state4_b0b4(void) {
 
   /* ec51 Trig-arm */
   u4lb_ec51();
-  uart_puts("[c2@ec51="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350));
-  uart_puts(" d1="); uart_puthex(PR(0xC2D1)); uart_puthex(PR(0xC351));
+  uart_puts("[c2@ec51="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350);
+  uart_puts(" d1="); uart_puthex(REG_PHY_LANEA_STATUS_C2D1); uart_puthex(REG_PHY_LANEB_STATUS_C351);
   uart_puts(" ab6="); uart_puthex(PR(0x0AB6)); uart_putc(']');
 
   /* latch negotiated width 0x074E:0x074F = CCE4:CCE5 */
@@ -813,10 +813,10 @@ static void u4lb_s5_diag(void) {
   uart_puts("\r\n[s5 9="); uart_puthex(state0); uart_putc('/'); uart_puthex(state1);
   uart_puts(" A="); uart_puthex(sba0); uart_puthex(SB_RD(0xA1));
   uart_puts(" 775="); uart_puthex(host_desc);
-  uart_puts(" E764="); uart_puthex(REG_PHY_TIMER_CTRL_E764); uart_puts(" E762="); uart_puthex(PR(0xE762));
+  uart_puts(" E764="); uart_puthex(REG_PHY_TIMER_CTRL_E764); uart_puts(" E762="); uart_puthex(REG_PHY_RXPLL_STATUS);
   uart_puts(" ED="); uart_puthex(PR(0x06ED));
   uart_puts(" snap="); uart_puthex(PR(0x0779)); uart_puthex(PR(0x077A));
-  uart_puts(" pll="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350));
+  uart_puts(" pll="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350);
   uart_puts(" TX="); { uint8_t i; for (i = 0; i < 6; i++) uart_puthex(SBTX_RD(i)); }
   uart_puts(" w81C="); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(PR((uint16_t)(0x081Cu + i))); }
   uart_puts(" 776="); uart_puthex(PR(0x0776));

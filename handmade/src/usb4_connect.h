@@ -18,17 +18,17 @@ static void u4c_bd14(void) { REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0
 
 /* pump the link controller, then return the current link-mode byte */
 static uint8_t u4c_bd6c(void) {
-  PR(0xCA00) = (PR(0xCA00) & 0xC0) | 0x07;
-  PR(0xCA0A) = 0x02;
+  REG_CPU_LINK_CTRL_CA00 = (REG_CPU_LINK_CTRL_CA00 & 0xC0) | 0x07;
+  REG_CPU_LINK_GO_CA0A = 0x02;
   return PR(0x0A9D);
 }
 
 /* bounded PHY-lock wait */
 static void u4c_e7ae_bounded(void) {
   uint16_t g = 0;
-  while (((PR(0xC006) & 0x1F) != 0x10) && ++g < 0x0800);
+  while (((REG_UART_TFBF & 0x1F) != 0x10) && ++g < 0x0800);
   g = 0;
-  while (((PR(0xC00E) & 0x07) != 0x00) && ++g < 0x0800);
+  while (((REG_UART_STATUS & 0x07) != 0x00) && ++g < 0x0800);
 }
 
 /* set when the engine has run; read from the super-loop */
@@ -123,10 +123,10 @@ static void bank0_8a89(uint8_t mode) {
     }
     config = PR(0x0AA0);
     if (config & 0x01) {
-      PR(0xCAC4) &= 0xFE;
+      REG_CMD_ARM_CAC4 &= 0xFE;
       REG_CMD_CONFIG &= 0xDF;
       u4c_bd2a(0xC698);
-      PR(0xE313) &= 0x7F;
+      REG_CMD_LINK_ARM_E313 &= 0x7F;
       REG_CMD_CFG_E413 &= 0xFD;
     }
 
@@ -147,8 +147,8 @@ static void bank0_8a89(uint8_t mode) {
       descr_arg = (PR(0x09FA) >> 1 & 1) ? 2 : 1;
     } else if (PR(0x0A9D) == 0x01) {
       if (config & 0x02) {
-        { uint16_t g = 0; while (!(PR(0xCD4E) & 1) && ++g < 0x4000);
-          g = 0; while (!(PR(0xCD4E) & 2) && ++g < 0x4000); }
+        { uint16_t g = 0; while (!(REG_CPU_LINK_DONE_CD4E & 1) && ++g < 0x4000);
+          g = 0; while (!(REG_CPU_LINK_DONE_CD4E & 2) && ++g < 0x4000); }
         { uint16_t g = 0;
           while (!((REG_LINK_STATUS_E712 & 1) || (REG_LINK_STATUS_E712 & 2)) && ++g < 0x4000); }
         REG_TIMER_CTRL_CC3B &= 0xBF;

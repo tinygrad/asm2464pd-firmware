@@ -2508,3 +2508,100 @@
 #define REG_LANE_WIDTH_CNT_LO    XDATA_REG8V(0xCCE5)
 
 #endif /* __REGISTERS_H__ */
+
+/* ---- handmade USB4 refactor #2: PHY/PD/router-op register labels (volatile) ---- */
+#define REG_PCIE_LINK_STATE_HI_B435        XDATA_REG8V(0xB435)  /* PCIe link-state adjacent byte (no label) */
+#define REG_PCIE_LANE_CONFIG_HI_B437       XDATA_REG8V(0xB437)  /* PCIe lane-config adjacent byte (no label) */
+#define REG_PHY_CDR_SEED_C210              XDATA_REG8V(0xC210)  /* PHY RXPLL/CDR descriptor seed (c306 trim) */
+#define REG_PHY_CDR_SEED_C211              XDATA_REG8V(0xC211)  /* PHY RXPLL/CDR descriptor seed (c306 trim) */
+#define REG_PHY_CDR_SEED_C212              XDATA_REG8V(0xC212)  /* PHY RXPLL/CDR descriptor seed (c306 trim) */
+#define REG_PHY_CDR_SEED_C214              XDATA_REG8V(0xC214)  /* PHY RXPLL/CDR descriptor seed (c307 trim) */
+#define REG_PHY_CDR_SEED_C215              XDATA_REG8V(0xC215)  /* PHY RXPLL/CDR descriptor seed (c307 trim) */
+#define REG_PHY_CDR_SEED_C216              XDATA_REG8V(0xC216)  /* PHY RXPLL/CDR descriptor seed (c307 trim) */
+#define REG_PHY_CDR_SEED_C217              XDATA_REG8V(0xC217)  /* PHY RXPLL/CDR descriptor seed (c307 trim) */
+#define REG_PHY_LINK_CTRL_C21C             XDATA_REG8V(0xC21C)  /* PHY link control bit6 (e373 b796 set) */
+#define REG_PHY_LINK_CTRL_C21D             XDATA_REG8V(0xC21D)  /* PHY link control bits7:6 (8f8e set) */
+#define REG_PHY_LANEA_C282                 XDATA_REG8V(0xC282)  /* PHY lane-A equalizer trim (DAC8 init) */
+#define REG_PHY_LANEA_C283                 XDATA_REG8V(0xC283)  /* PHY lane-A trim (gen6 bits2:3 clear) */
+#define REG_PHY_LANEA_C289                 XDATA_REG8V(0xC289)  /* PHY lane-A equalizer trim (DAC8 init) */
+#define REG_PHY_LANEA_C28B                 XDATA_REG8V(0xC28B)  /* PHY lane-A equalizer trim (DAC8 init) */
+#define REG_PHY_LANEA_C28C                 XDATA_REG8V(0xC28C)  /* PHY lane-A trim (paired C30C) */
+#define REG_PHY_LANEA_C290                 XDATA_REG8V(0xC290)  /* PHY lane-A equalizer trim (paired C310) */
+#define REG_PHY_LANEA_C292                 XDATA_REG8V(0xC292)  /* PHY lane-A equalizer trim (paired C312) */
+#define REG_PHY_LANEA_C293                 XDATA_REG8V(0xC293)  /* PHY lane-A eq retrim bits1:0 (paired C313) */
+#define REG_PHY_LANEA_C294                 XDATA_REG8V(0xC294)  /* PHY lane-A eq retrim bits3:0 (paired C314) */
+#define REG_PHY_LANEA_C295                 XDATA_REG8V(0xC295)  /* PHY lane-A trim (paired C315) */
+#define REG_PHY_LANEA_LOCK_C297            XDATA_REG8V(0xC297)  /* PHY lane-A trim/lock (bit5=locked gate) */
+#define REG_PHY_LANEA_C29A                 XDATA_REG8V(0xC29A)  /* PHY lane-A trim bits3:0 (paired C31A) */
+#define REG_PHY_LANEA_C29B                 XDATA_REG8V(0xC29B)  /* PHY lane-A trim (bits5:0 clear) */
+#define REG_PHY_LANEA_C2A0                 XDATA_REG8V(0xC2A0)  /* PHY lane-A trim (paired C320) */
+#define REG_PHY_LANEA_C2A1                 XDATA_REG8V(0xC2A1)  /* PHY lane-A trim bits6:5 (paired C321) */
+#define REG_PHY_LANEA_C2A4                 XDATA_REG8V(0xC2A4)  /* PHY lane-A trim (paired C324) */
+#define REG_PHY_LANEA_LOCK_C2A7            XDATA_REG8V(0xC2A7)  /* PHY lane-A trim/lock (bit5=locked gate) */
+#define REG_PHY_LANEA_RATE_START_C2A8      XDATA_REG8V(0xC2A8)  /* PHY lane-A rate-desc START (bit7) trim */
+#define REG_PHY_LANEA_C2AB                 XDATA_REG8V(0xC2AB)  /* PHY lane-A trim (bits5:0 clear) */
+#define REG_PHY_LANEA_C2BC                 XDATA_REG8V(0xC2BC)  /* PHY lane-A trim bits1:0 (paired C33C) */
+#define REG_PHY_LANEA_C2C4                 XDATA_REG8V(0xC2C4)  /* PHY lane-A DPX cfg bit6 (paired C344) */
+#define REG_PHY_LANEA_C2C5                 XDATA_REG8V(0xC2C5)  /* PHY lane-A eq trim bits3:0 (paired C345) */
+#define REG_PHY_LANEA_RATE_DESC_C2C9       XDATA_REG8V(0xC2C9)  /* PHY lane-A rate descriptor (from C2EC) */
+#define REG_PHY_LANEA_CDR_C2CB             XDATA_REG8V(0xC2CB)  /* PHY lane-A CDR cfg bit2 (e35f, paired C34B) */
+#define REG_PHY_LANEA_C2CE                 XDATA_REG8V(0xC2CE)  /* PHY lane-A trim bits4:2 (paired C34E) */
+#define REG_PHY_LANEA_LOCK_C2D0            XDATA_REG8V(0xC2D0)  /* PHY lane-A lock status (bit5 rate,bit6 PLL) */
+#define REG_PHY_LANEA_STATUS_C2D1          XDATA_REG8V(0xC2D1)  /* PHY lane-A status (debug dump, paired C351) */
+#define REG_PHY_LANEA_MARGIN_PHASE_C2D2    XDATA_REG8V(0xC2D2)  /* PHY lane-A CDR phase margin (bits5:0) */
+#define REG_PHY_LANEA_MARGIN_EYE_C2D9      XDATA_REG8V(0xC2D9)  /* PHY lane-A CDR eye-margin sample lo */
+#define REG_PHY_LANEA_MARGIN_EYE_C2DA      XDATA_REG8V(0xC2DA)  /* PHY lane-A CDR eye-margin sample hi */
+#define REG_PHY_LANEA_C2DB                 XDATA_REG8V(0xC2DB)  /* PHY lane-A trim bits4:0 (paired C35B) */
+#define REG_PHY_LANEA_C2DC                 XDATA_REG8V(0xC2DC)  /* PHY lane-A DPX cfg (bits5:0 clear, paired C35C) */
+#define REG_PHY_LANEA_RATE_SRC_C2EC        XDATA_REG8V(0xC2EC)  /* PHY lane-A rate source bits5:3 (feeds C2C9) */
+#define REG_PHY_LANEB_C302                 XDATA_REG8V(0xC302)  /* PHY lane-B trim (paired C282) */
+#define REG_PHY_LANEB_C303                 XDATA_REG8V(0xC303)  /* PHY lane-B trim (gen6 bits2:3 clear) */
+#define REG_PHY_LANEB_C304                 XDATA_REG8V(0xC304)  /* PHY lane-B trim (paired C2B4-region) */
+#define REG_PHY_LANEB_C309                 XDATA_REG8V(0xC309)  /* PHY lane-B trim (paired C289) */
+#define REG_PHY_LANEB_C30B                 XDATA_REG8V(0xC30B)  /* PHY lane-B trim (paired C28B) */
+#define REG_PHY_LANEB_C30C                 XDATA_REG8V(0xC30C)  /* PHY lane-B trim (paired C28C) */
+#define REG_PHY_LANEB_C310                 XDATA_REG8V(0xC310)  /* PHY lane-B trim (paired C290) */
+#define REG_PHY_LANEB_C312                 XDATA_REG8V(0xC312)  /* PHY lane-B trim (paired C292) */
+#define REG_PHY_LANEB_C313                 XDATA_REG8V(0xC313)  /* PHY lane-B eq retrim bits1:0 (paired C293) */
+#define REG_PHY_LANEB_C314                 XDATA_REG8V(0xC314)  /* PHY lane-B eq retrim bits3:0 (paired C294) */
+#define REG_PHY_LANEB_C315                 XDATA_REG8V(0xC315)  /* PHY lane-B trim (paired C295) */
+#define REG_PHY_LANEB_LOCK_C317            XDATA_REG8V(0xC317)  /* PHY lane-B trim/lock (paired C297) */
+#define REG_PHY_LANEB_C31A                 XDATA_REG8V(0xC31A)  /* PHY lane-B trim bits3:0 (paired C29A) */
+#define REG_PHY_LANEB_C31B                 XDATA_REG8V(0xC31B)  /* PHY lane-B trim (bits5:0 clear, paired C29B) */
+#define REG_PHY_LANEB_C320                 XDATA_REG8V(0xC320)  /* PHY lane-B trim (paired C2A0) */
+#define REG_PHY_LANEB_C321                 XDATA_REG8V(0xC321)  /* PHY lane-B trim bits6:5 (paired C2A1) */
+#define REG_PHY_LANEB_C324                 XDATA_REG8V(0xC324)  /* PHY lane-B trim (paired C2A4) */
+#define REG_PHY_LANEB_RATE_START_C328      XDATA_REG8V(0xC328)  /* PHY lane-B rate-desc START (bit7) (paired C2A8) */
+#define REG_PHY_LANEB_C32B                 XDATA_REG8V(0xC32B)  /* PHY lane-B trim (bits5:0 clear, paired C2AB) */
+#define REG_PHY_LANEB_C33C                 XDATA_REG8V(0xC33C)  /* PHY lane-B trim bits1:0 (paired C2BC) */
+#define REG_PHY_LANEB_C344                 XDATA_REG8V(0xC344)  /* PHY lane-B DPX cfg bit6 (paired C2C4) */
+#define REG_PHY_LANEB_C345                 XDATA_REG8V(0xC345)  /* PHY lane-B eq trim bits3:0 (paired C2C5) */
+#define REG_PHY_LANEB_RATE_DESC_C349       XDATA_REG8V(0xC349)  /* PHY lane-B rate descriptor (from C36C) */
+#define REG_PHY_LANEB_CDR_C34B             XDATA_REG8V(0xC34B)  /* PHY lane-B CDR cfg bit2 (e36c, paired C2CB) */
+#define REG_PHY_LANEB_C34E                 XDATA_REG8V(0xC34E)  /* PHY lane-B trim bits4:2 (paired C2CE) */
+#define REG_PHY_LANEB_LOCK_C350            XDATA_REG8V(0xC350)  /* PHY lane-B lock status (bit5 rate,bit6 PLL) */
+#define REG_PHY_LANEB_STATUS_C351          XDATA_REG8V(0xC351)  /* PHY lane-B status (debug dump, paired C2D1) */
+#define REG_PHY_LANEB_MARGIN_PHASE_C352    XDATA_REG8V(0xC352)  /* PHY lane-B CDR phase margin (bits5:0) */
+#define REG_PHY_LANEB_MARGIN_EYE_C359      XDATA_REG8V(0xC359)  /* PHY lane-B CDR eye-margin sample lo */
+#define REG_PHY_LANEB_MARGIN_EYE_C35A      XDATA_REG8V(0xC35A)  /* PHY lane-B CDR eye-margin sample hi */
+#define REG_PHY_LANEB_C35B                 XDATA_REG8V(0xC35B)  /* PHY lane-B trim bits4:0 (paired C2DB) */
+#define REG_PHY_LANEB_C35C                 XDATA_REG8V(0xC35C)  /* PHY lane-B DPX cfg (bits5:0 clear, paired C2DC) */
+#define REG_PHY_LANEB_RATE_SRC_C36C        XDATA_REG8V(0xC36C)  /* PHY lane-B rate source bits5:3 (feeds C349) */
+#define REG_PHY_LINK_ARM_C698              XDATA_REG8V(0xC698)  /* PHY-ext link-arm ctrl; bit5 = USB4 link arm */
+#define REG_CPU_LINK_CTRL_CA00             XDATA_REG8V(0xCA00)  /* dcd4 link-controller pump: (CA00&0xC0)|7 */
+#define REG_CPU_LINK_GO_CA0A               XDATA_REG8V(0xCA0A)  /* dcd4 link-controller trigger; written 0x02 */
+#define REG_CMD_ARM_CAC4                   XDATA_REG8V(0xCAC4)  /* PD/USB4 link-arm strobe (bceb/clear bit0) */
+#define REG_TUNNEL_PHY_CFG_CCB0            XDATA_REG8V(0xCCB0)  /* c593 tunnel/PHY commit cfg: (CCB0&0xF8)|5 */
+#define REG_TUNNEL_PHY_CFG_CCB2            XDATA_REG8V(0xCCB2)  /* c593 tunnel/PHY commit cfg; cleared to 0 */
+#define REG_TUNNEL_PHY_TIMER_CCB3          XDATA_REG8V(0xCCB3)  /* c593 tunnel/PHY commit timer; set 0xC8 (200) */
+#define REG_CPU_LINK_DONE_CD4E             XDATA_REG8V(0xCD4E)  /* mode-1 link completion poll; bit0 then bit1 ready */
+#define REG_CMD_LINK_ARM_E313              XDATA_REG8V(0xE313)  /* PD/USB4 cmd link-arm; bit7 = USB4 link arm */
+#define REG_CMD_CFG_E401                   XDATA_REG8V(0xE401)  /* da51 PD RDO/CRC timing config; set to 0xB4 */
+#define REG_CMD_CFG_E406                   XDATA_REG8V(0xE406)  /* da51 PD RDO/CRC timing config; set to 0xA6 */
+#define REG_CMD_CFG_E407                   XDATA_REG8V(0xE407)  /* da51 PD RDO/CRC timing config; (E407&0xE0)|0x15 */
+#define REG_CMD_CFG_E408                   XDATA_REG8V(0xE408)  /* da51 PD RDO/CRC timing config; (E408&0xE0)|0x1C */
+#define REG_ROUTEROP_OPCODE_EA80           XDATA_REG8V(0xEA80)  /* USB4 CM router-op inbound opcode/path mailbox */
+#define REG_ROUTEROP_SPEED_LO_EA88         XDATA_REG8V(0xEA88)  /* router-op speed descriptor lo; seeded 100 */
+#define REG_ROUTEROP_SPEED_HI_EA89         XDATA_REG8V(0xEA89)  /* router-op speed descriptor hi; seeded 0x24 */
+#define REG_ROUTEROP_ENGINE_CTRL_EC00      XDATA_REG8V(0xEC00)  /* USB4 router-op engine enable; bit0 = enable */
+#define REG_ROUTEROP_CFG_EC05              XDATA_REG8V(0xEC05)  /* router-op init config; bit0 cleared at e56f */
