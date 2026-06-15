@@ -16,13 +16,13 @@ static void u4c_e0d9(uint8_t mode) {
 /* Timer-enable gate: mode 1 clears bit1; else conditionally sets bit1 per 0x0AF1.4. */
 static void u4c_e7c1(uint8_t mode) {
   if (mode == 1) { REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0xFD; }
-  else if (PR(0x0AF1) & 0x10) { REG_TIMER_ENABLE_B = (REG_TIMER_ENABLE_B & 0xFD) | 0x02; REG_TIMER_ENABLE_A = (REG_TIMER_ENABLE_A & 0xFD) | 0x02; }
+  else if (u4_connect_gate & 0x10) { REG_TIMER_ENABLE_B = (REG_TIMER_ENABLE_B & 0xFD) | 0x02; REG_TIMER_ENABLE_A = (REG_TIMER_ENABLE_A & 0xFD) | 0x02; }
 }
 
 /* Post-Enter_USB connect path: drives sideband bring-up so the host CM trains the lanes. */
 static void usb4_connect_u4(void) {
-  PR(0x0AF1) |= 0x01;
-  if (PR(0x0AF1) & 0x01) {
+  u4_connect_gate |= 0x01;
+  if (u4_connect_gate & 0x01) {
     REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
     REG_CPU_CTRL_CA81 &= 0xFE;
     REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;
@@ -30,17 +30,17 @@ static void usb4_connect_u4(void) {
   boot_phy_dd42(0);
   u4c_e7c1(1);
   u4c_e0d9(0);
-  if (PR(0x07BA) == 0) {
-    if (PR(0x07B9) == 0) return;
-    PR(0x09FA) = 0x81;
-    PR(0x09FB) = 0x02;
+  if (u4_enter_usb_accepted == 0) {
+    if (u4_connect_route_latch == 0) return;
+    u4_route_mode = 0x81;
+    u4_lane_gate_sel = 0x02;
   } else {
-    PR(0x09FA) = (PR(0x09FA) & 0x04) | (PR(0x09F9) & 0x03);
-    if (PR(0x09F4) == 0x03) {
-      if (PR(0x07BE) == 0) { PR(0x09FA) = (PR(0x09FA) & 0x04) | 2; PR(0x09FB) = 1; }
-      else                 { PR(0x09FA) = (PR(0x09FA) & 0x04) | 1; PR(0x09FB) = 2; }
+    u4_route_mode = (u4_route_mode & 0x04) | (u4_mode_flag & 0x03);
+    if (u4_dp_alt_mode == 0x03) {
+      if (pd_usb3_fallback_flag == 0) { u4_route_mode = (u4_route_mode & 0x04) | 2; u4_lane_gate_sel = 1; }
+      else                 { u4_route_mode = (u4_route_mode & 0x04) | 1; u4_lane_gate_sel = 2; }
     }
-    if (PR(0x09FA) & 0x02) {
+    if (u4_route_mode & 0x02) {
       REG_LINK_STATUS_E716 &= 0xFC;
       REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
       SB_WR(0xD8, 0x02);
@@ -63,23 +63,23 @@ static volatile uint8_t __xdata __at(0x0B4A) c80a_acc;
 static void cm_routerop_mailbox(void) {
   if (REG_SYS_CTRL_EA90 != 0x5A) return;
   {
-    uint8_t state = PR(0x0B02);
+    uint8_t state = u4_routerop_mbox_state;
     if (state == 0) {
-      PR(0x0B03) = REG_ROUTEROP_OPCODE_EA80;
+      u4_routerop_mbox_opcode = REG_ROUTEROP_OPCODE_EA80;
     } else if (state == 1) {
-      if (PR(0x0B03) == 0xE2) {
-        PR(0x0B02) = 0;
+      if (u4_routerop_mbox_opcode == 0xE2) {
+        u4_routerop_mbox_state = 0;
         REG_SYS_CTRL_EA90 = 0xA5;
         return;
       }
-      PR(0x0B02) = 0;
+      u4_routerop_mbox_state = 0;
     } else if (state == 2) {
-      if (PR(0x0B03) == 0xE3) {
-        PR(0x0B02) = 0;
+      if (u4_routerop_mbox_opcode == 0xE3) {
+        u4_routerop_mbox_state = 0;
         REG_SYS_CTRL_EA90 = 0xA5;
         return;
       }
-      PR(0x0B02) = 0;
+      u4_routerop_mbox_state = 0;
     }
   }
 }

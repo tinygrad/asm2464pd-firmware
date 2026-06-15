@@ -6,16 +6,16 @@
  * 5 -> the per-lane CL-state walker (8000/850b). Include after usb4_connect.h.
  */
 
-#define U4LB_STATE   PR(0x06ED)
+#define U4LB_STATE   u4_fsm_state
 
 /* eb62(p1,p2): set the new FSM state, print "[SB P0<state>]", and store it into 0x06ED. */
 static void u4lb_eb62(uint8_t state_lo, uint8_t state) {
-  PR(0x0AAC) = state_lo;
-  PR(0x0AAD) = state;
+  sb_tx_go_param = state_lo;
+  sb_fsm_state = state;
   uart_puts("\r\n[SB P0");
   uart_puthex(state);
   uart_putc(']');
-  PR(0x06ED) = PR(0x0AAD);
+  u4_fsm_state = sb_fsm_state;
 }
 
 /* [EDF5] dump budget (XDATA, seeded in main()). */
@@ -26,24 +26,24 @@ static volatile uint8_t __xdata __at(0x0B58) u4lb_edf5_print_budget;
  * super-loop can't hang. Returns 1 only when a query was actually sent. */
 static uint8_t u4lb_edf5_route_query(void) {
   uint8_t staged;
-  if (PR(0x0719) != 0) return 0;
+  if (e461_inflight_token != 0) return 0;
 
-  PR(0x0AAB) = 0;
-  PR(0x0AA8) = 5;
-  PR(0x0AA9) = 0x0C;
-  PR(0x0AAA) = 3;
+  sb_tx_flag = 0;
+  sb_tx_cmd = 5;
+  sb_tx_byte0 = 0x0C;
+  sb_tx_byte1 = 3;
   sb_d4cd_transport_edges();
 
-  SBTX_WR(0, PR(0x0AA9));
-  SBTX_WR(1, (uint8_t)(PR(0x0AAA) | ((PR(0x0AAB) & 1) << 7)));
+  SBTX_WR(0, sb_tx_byte0);
+  SBTX_WR(1, (uint8_t)(sb_tx_byte1 | ((sb_tx_flag & 1) << 7)));
   staged = (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08);
   SB_WR(0x0C, staged);
 
-  SB_WR(0x15, PR(0x0AA8));
+  SB_WR(0x15, sb_tx_cmd);
 
   /* d5da(0): the bounded SB-transport TX trigger. */
   { uint8_t tx_done; uint16_t g = 0;
-    PR(0x0AAC) = 0;
+    sb_tx_go_param = 0;
     P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
     SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));
     if (u4lb_edf5_print_budget) {
@@ -57,10 +57,10 @@ static uint8_t u4lb_edf5_route_query(void) {
       uart_putc(' '); uart_puthex(SB_RD(0x28));
       uart_putc('|'); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(SBTX_RD(i)); }
       uart_putc('|'); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i))); }
-      uart_putc('|'); uart_puthex(PR(0x0719)); uart_putc(' '); uart_puthex(PR(0x0758));
-      uart_putc(' '); uart_puthex(PR(0x06ED)); uart_putc(' '); uart_puthex(PR(0x06EE));
-      uart_putc(' '); uart_puthex(PR(0x0775)); uart_putc(' '); uart_puthex(PR(0x0776));
-      uart_putc(' '); uart_puthex(PR(0x0777));
+      uart_putc('|'); uart_puthex(e461_inflight_token); uart_putc(' '); uart_puthex(cm_conn_routing_substate);
+      uart_putc(' '); uart_puthex(u4_fsm_state); uart_putc(' '); uart_puthex(sb_transport_edge_toggle);
+      uart_putc(' '); uart_puthex(u4_route_query_response); uart_putc(' '); uart_puthex(u4_coldboot_seed_gate);
+      uart_putc(' '); uart_puthex(u4_host_desc[0x0]);
       uart_putc('|'); uart_puthex(REG_XFER2_DMA_STATUS); uart_putc(' '); uart_puthex(REG_INT_PCIE_NVME);
       uart_putc(' '); uart_puthex(REG_CPU_CTRL_CC37); uart_putc(' '); uart_puthex(REG_CPU_CTRL_CA60);
       uart_putc('|'); uart_puthex(P1_RD(0x0109)); uart_putc(' '); uart_puthex(SB_RD(0xD8));
@@ -85,7 +85,7 @@ static uint8_t u4lb_edf5_route_query(void) {
   }
 
   REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02; REG_XFER2_DMA_STATUS = 0x01;
-  PR(0x0719) = 0x01;
+  e461_inflight_token = 0x01;
   return 1;
 }
 
@@ -103,10 +103,10 @@ static __code const uint8_t u4lb_branchA_gate_515f[0x13] = {
 };
 
 static void u4lb_cm_conn_routing_setup(void) {
-  uint8_t state = PR(0x0758);
+  uint8_t state = cm_conn_routing_substate;
   if (state == 0x10) {
     if (u4lb_edf5_route_query() != 1) return;
-    PR(0x0758) = 0x11;
+    cm_conn_routing_substate = 0x11;
     return;
   }
   if (state != 0x11) {
@@ -118,83 +118,83 @@ static void u4lb_cm_conn_routing_setup(void) {
   /* state == 0x11: the main confirm body. eda0 returns a selector: 0 = eval the confirm gate,
    * 1 = idle (leave 0x0758), 2 = route-special re-arm. */
   { uint8_t selector;
-    if (PR(0x0775) != 0)      { PR(0x0775) = 0; PR(0x0719) = 0; selector = 0; }
-    else if (PR(0x0719) == 0x02) { PR(0x0719) = 0; selector = 2; }
+    if (u4_route_query_response != 0)      { u4_route_query_response = 0; e461_inflight_token = 0; selector = 0; }
+    else if (e461_inflight_token == 0x02) { e461_inflight_token = 0; selector = 2; }
     else                       { selector = 1; }
-    if (selector == 2) { PR(0x0758) = 0x10; return; }
+    if (selector == 2) { cm_conn_routing_substate = 0x10; return; }
     if (selector != 0) { return; }
   }
 
   /* mode==0 path: gate on the host connect descriptor 0x0777==0x0C. */
-  if (PR(0x0777) != 0x0C) { PR(0x0758) = 0x10; return; }
+  if (u4_host_desc[0x0] != 0x0C) { cm_conn_routing_substate = 0x10; return; }
 
   { static __xdata uint8_t conn_routing_diag_budget = 6;
     if (conn_routing_diag_budget) { conn_routing_diag_budget--;
-      uart_puts("\r\n[cr B9="); uart_puthex(PR(0x07B9)); uart_puts(" 778="); uart_puthex(PR(0x0778));
-      uart_puts(" 81B="); uart_puthex(PR(0x081B)); uart_puts(" CE="); uart_puthex(PR(0x07CE));
-      uart_puts(" CD="); uart_puthex(PR(0x07CD)); uart_puts(" 776="); uart_puthex(PR(0x0776)); uart_putc(']'); } }
+      uart_puts("\r\n[cr B9="); uart_puthex(u4_connect_route_latch); uart_puts(" 778="); uart_puthex(u4_host_desc[0x1]);
+      uart_puts(" 81B="); uart_puthex(u4_work_buf[0x1B]); uart_puts(" CE="); uart_puthex(u4_confirm_input_ce);
+      uart_puts(" CD="); uart_puthex(u4_confirm_input_cd); uart_puts(" 776="); uart_puthex(u4_coldboot_seed_gate); uart_putc(']'); } }
 
   /* 0x0776 connect-confirm computation. */
-  if (PR(0x07B9) != 0) {
-    uint8_t host_status = PR(0x0778);
-    if (((host_status & 0x7F) == 2) || ((PR(0x081B) & 1) == 0) ||
-        (PR(0x07CE) != 0 && PR(0x07CD) == 0)) {
-      PR(0x0776) = 0;
+  if (u4_connect_route_latch != 0) {
+    uint8_t host_status = u4_host_desc[0x1];
+    if (((host_status & 0x7F) == 2) || ((u4_work_buf[0x1B] & 1) == 0) ||
+        (u4_confirm_input_ce != 0 && u4_confirm_input_cd == 0)) {
+      u4_coldboot_seed_gate = 0;
     } else {
       SB_CLR(0xED, 0x80);
     }
   }
   /* e391 width-LUT seed (gated 0x0776==0): the per-descriptor LUT af38 ORs into SBTX[1]. */
-  if (PR(0x0776) == 0) {
+  if (u4_coldboot_seed_gate == 0) {
     uint8_t i;
     for (i = 0; i < 0x13; i++) {
-      PR((uint16_t)(0x06F2u + i)) = u4lb_width_lut_514c[i];
-      PR((uint16_t)(0x0705u + i)) = u4lb_branchA_gate_515f[i];
+      sb_width_lut[(uint16_t)(0x0 + i)] = u4lb_width_lut_514c[i];
+      sb_branchA_gate[(uint16_t)(0x0 + i)] = u4lb_branchA_gate_515f[i];
     }
   }
 
   /* [ConnRout] confirm print + 0x0718 ROUTE-ENABLE. */
-  if (PR(0x0776) == 0 && PR(0x07CE) != 0) {
+  if (u4_coldboot_seed_gate == 0 && u4_confirm_input_ce != 0) {
     uart_puts("[ConnRtmr]");
-    PR(0x0718) = 0;
+    u4_route_enable_latch = 0;
   } else {
     uart_puts("[ConnRout]");
-    PR(0x0718) = 4;
+    u4_route_enable_latch = 4;
   }
 
   /* Latch the 0x077a lane-width bits into 0x0819/0x0751/0x0750. */
-  { uint8_t host_width = PR(0x077A);
-    if ((host_width & 1) && (PR(0x081A) & 1)) { PR(0x0819) = (PR(0x0819) & 0xFE) | 1; }
-    if ((host_width & 0x02) && (PR(0x081A) & 2)) { PR(0x0819) = (PR(0x0819) & 0xFD) | 2; }
-    if ((host_width & 0x10) && (PR(0x081A) & 0x10) && (PR(0x0819) & 1) && (PR(0x0819) & 2)) PR(0x0751) = 1;
-    else PR(0x0751) = 0;
-    if ((host_width & 0x20) && (PR(0x081A) & 0x20)) PR(0x0750) = 2;
-    uart_puts("[Lt77A="); uart_puthex(host_width); uart_puts(" 81A="); uart_puthex(PR(0x081A));
-    uart_puts(" 819="); uart_puthex(PR(0x0819)); uart_puts("]");
-    PR(0x0763) = 0; PR(0x0764) = 0;
+  { uint8_t host_width = u4_host_desc[0x3];
+    if ((host_width & 1) && (u4_work_buf[0x1A] & 1)) { u4_work_buf[0x19] = (u4_work_buf[0x19] & 0xFE) | 1; }
+    if ((host_width & 0x02) && (u4_work_buf[0x1A] & 2)) { u4_work_buf[0x19] = (u4_work_buf[0x19] & 0xFD) | 2; }
+    if ((host_width & 0x10) && (u4_work_buf[0x1A] & 0x10) && (u4_work_buf[0x19] & 1) && (u4_work_buf[0x19] & 2)) lb_lane_width_latch1 = 1;
+    else lb_lane_width_latch1 = 0;
+    if ((host_width & 0x20) && (u4_work_buf[0x1A] & 0x20)) lb_lane_width_latch0 = 2;
+    uart_puts("[Lt77A="); uart_puthex(host_width); uart_puts(" 81A="); uart_puthex(u4_work_buf[0x1A]);
+    uart_puts(" 819="); uart_puthex(u4_work_buf[0x19]); uart_puts("]");
+    u4_phy_gate_a = 0; u4_phy_gate_b = 0;
   }
 
   /* c586: negotiated-rate descriptor (SB[0x6A-0x6D]/[0x74-0x75]) + Gen2 lane-eq retrim. */
   {
-    uint16_t rate = (uint16_t)((uint16_t)PR(0x0749) * 0x20);
+    uint16_t rate = (uint16_t)((uint16_t)sb_lane_flip[0xB] * 0x20);
     uint8_t rate_hi = (uint8_t)(rate >> 8);
-    uint8_t rate_lo = (uint8_t)((rate & 0xFF) | PR(0x0739));
+    uint8_t rate_lo = (uint8_t)((rate & 0xFF) | lb_cap_field[0xB]);
     SB_WR(0x6A, rate_hi); SB_WR(0x6B, rate_lo);
     SB_WR(0x6C, rate_hi); SB_WR(0x6D, rate_lo);
-    SB_WR(0x74, 0x00); SB_WR(0x75, (uint8_t)((PR(0x0750) == 2) ? 0x1F : 0x0F));
-    if (REG_LANE_RATE_C8FF == 0x04 && PR(0x07BA) == 0) {
+    SB_WR(0x74, 0x00); SB_WR(0x75, (uint8_t)((lb_lane_width_latch0 == 2) ? 0x1F : 0x0F));
+    if (REG_LANE_RATE_C8FF == 0x04 && u4_enter_usb_accepted == 0) {
       REG_PHY_LANEA_C294 = (uint8_t)((REG_PHY_LANEA_C294 & 0xF0) | 0x03);
       REG_PHY_LANEA_C293 = (uint8_t)((REG_PHY_LANEA_C293 & 0xFC) | 0x02);
       REG_PHY_LANEB_C314 = (uint8_t)((REG_PHY_LANEB_C314 & 0xF0) | 0x03);
       REG_PHY_LANEB_C313 = (uint8_t)((REG_PHY_LANEB_C313 & 0xFC) | 0x02);
     }
-    if (PR(0x0750) == 1) {
+    if (lb_lane_width_latch0 == 1) {
       REG_PHY_LANEA_C2C5 = (uint8_t)((REG_PHY_LANEA_C2C5 & 0xF0) | 0x0F);
       REG_PHY_LANEB_C345 = (uint8_t)((REG_PHY_LANEB_C345 & 0xF0) | 0x0F);
     }
   }
 
-  PR(0x0758) = 0;
+  cm_conn_routing_substate = 0;
 }
 
 /* State 4 (0x06ED==4) — b0b4: [PcieTunnel-PwrOn] -> Chg2 20G -> [RstRxpll] -> [CDRV ok] ->
@@ -215,7 +215,7 @@ static void u4lb_96fe(uint8_t op) {
 /* d5da: the per-lane PHY-RX/CDR commit + settle handshake. param==1 adds the SB[0x0F]|=1 prologue;
  * param==0 also zeroes the SB2 descriptor tail when SB[0x0C] > 6. */
 static void u4lb_d5da(uint8_t param) {
-  PR(0x0AAC) = param;
+  sb_tx_go_param = param;
   if (param == 1) {
     SB_WR(0x0F, (SB_RD(0x0F) & 0xFE) | 0x01);
   }
@@ -241,13 +241,13 @@ static void u4lb_e07d(void) {
   uint8_t cfg;
   SB_WR(0x15, 0x61);
   SB2_WR(0x00, 0x09);
-  if ((PR(0x0763) | PR(0x0764)) != 0)
+  if ((u4_phy_gate_a | u4_phy_gate_b) != 0)
     SB2_WR(0x00, SB2_RD(0x00) | 0x04);
-  if (PR(0x07B9) != 0)
+  if (u4_connect_route_latch != 0)
     SB2_WR(0x00, SB2_RD(0x00) | 0x10);
-  cfg = (uint8_t)(((PR(0x0750) & 0x0F) << 4)
-                  | ((PR(0x0819) & 0x02) ? 0x02 : 0x00)
-                  | (PR(0x0819) & 0x01));
+  cfg = (uint8_t)(((lb_lane_width_latch0 & 0x0F) << 4)
+                  | ((u4_work_buf[0x19] & 0x02) ? 0x02 : 0x00)
+                  | (u4_work_buf[0x19] & 0x01));
   SB2_WR(0x01, cfg);
   SB_WR(0x0C, (SB_RD(0x0C) & 0x80) | 0x08);
   u4lb_d5da(0);
@@ -291,8 +291,8 @@ static void u4lb_e980(void) {
 
 /* d3b0: Chg2 rate setup (rate=3=20G). SB[0x65] bit4=rate.0, bit5=rate.1; commit via CC10. */
 static void u4lb_d3b0(uint8_t rate) {
-  PR(0x0A5C) = rate;
-  if (PR(0x0750) == 1) {
+  u4lb_width_rate_code = rate;
+  if (lb_lane_width_latch0 == 1) {
     if (rate & 0x01) SB_WR(0x65, (SB_RD(0x65) & 0xEF) | 0x10);
     if (rate & 0x02) SB_WR(0x65, (SB_RD(0x65) & 0xDF) | 0x20);
     uart_puts("\r\nChg2 10G");
@@ -314,7 +314,7 @@ static void u4lb_ec51(void) {
   REG_LANE_TRAIN_CTRL = (REG_LANE_TRAIN_CTRL & 0xF8) | 0x04;
   REG_LANE_TRAIN_MASK_LO = 0xFF; REG_LANE_TRAIN_MASK_HI = 0xFF;
   REG_LANE_TRAIN_ARM = 0x01;
-  PR(0x0774) ^= 0x01;
+  u4_lane_train_trigger ^= 0x01;
 }
 
 /* b226: CC10 settle. */
@@ -328,10 +328,10 @@ static void u4lb_ee57(void) {
 
 /* 98ec: lane-width snapshot producer — arm 0x0758=0x10, run ee57, latch CCE4:CCE5 into 0x768:0x769. */
 static void u4lb_98ec(void) {
-  PR(0x0758) = 0x10;
+  cm_conn_routing_substate = 0x10;
   u4lb_ee57();
-  PR(0x0768) = REG_LANE_WIDTH_CNT_HI;
-  PR(0x0769) = REG_LANE_WIDTH_CNT_LO;
+  lb_lane_width_cnt_hi = REG_LANE_WIDTH_CNT_HI;
+  lb_lane_width_cnt_lo = REG_LANE_WIDTH_CNT_LO;
 }
 
 /* State-4 PCIe-tunnel power / PHY bring-up (e305 -> ee29 -> ed44 -> df61 / a840 / c593 / b8db).
@@ -380,7 +380,7 @@ static void u4lb_ed44(void) {
 
 /* e74e: 0x0B1B=0; CCF8 &= ~0x10; CCF9=4; CCF9=2. */
 static void u4lb_e74e(void) {
-  PR(0x0B1B) = 0;
+  cc_subdemux_src = 0;
   REG_CPU_EXT_CTRL &= 0xEF;
   REG_CPU_EXT_STATUS = 0x04;
   REG_CPU_EXT_STATUS = 0x02;
@@ -451,26 +451,26 @@ static __code const uint8_t u4lb_a840_speed_38cc[8] = { 0x02,0x01,0x03,0x01,0x03
 
 /* a840: PCIe link-speed/width config (B403/B431 + d436 width). gen=0x0AEC, lane=0x0AED. */
 static void u4lb_a840(uint8_t param) {
-  uint8_t gen = PR(0x0AEC);
-  uint8_t lane = PR(0x0AED);
+  uint8_t gen = u4_link_gen;
+  uint8_t lane = u4_link_lane;
   uint8_t usb4;
   uint8_t width_code;
   REG_CPU_CTRL_CA81 &= 0xFE;
   if (gen == 3 && lane == 3) {
-    if ((PR(0x09FA) & 0x81) != 0) {
+    if ((u4_route_mode & 0x81) != 0) {
       uint8_t idx;
-      PR(0x0A5D) = gen; idx = (uint8_t)(PR(0x0A5D) & 0x03);
+      u4lb_gen_index = gen; idx = (uint8_t)(u4lb_gen_index & 0x03);
       gen = u4lb_a840_speed_38cc[(uint8_t)(idx << 1)];
       lane = u4lb_a840_speed_38cc[(uint8_t)((idx << 1) + 1)];
-      if (PR(0x07B9) != 0) lane = 1;
+      if (u4_connect_route_latch != 0) lane = 1;
     } else {
       static __code const uint8_t t5d24[5] = { 0x00, 0x00, 0x02, 0x02, 0x02 };
       static __code const uint8_t t5d29[5] = { 0x01, 0x00, 0x00, 0x01, 0x02 };
-      PR(0x0A5D) = gen;
-      gen = t5d24[PR(0x0A5D)]; lane = t5d29[PR(0x0A5D)];
+      u4lb_gen_index = gen;
+      gen = t5d24[u4lb_gen_index]; lane = t5d29[u4lb_gen_index];
     }
   }
-  usb4 = (uint8_t)(PR(0x09FA) & 0x81);
+  usb4 = (uint8_t)(u4_route_mode & 0x81);
   if (usb4 == 0) {
     if (gen >= 3) {
       REG_CPU_MODE_NEXT &= 0x1F;
@@ -496,19 +496,19 @@ static void u4lb_a840(uint8_t param) {
     if (lane == 1) width_code = 0x0C;
     else if (lane == 0) width_code = 0x0E;
   }
-  PR(0x0A5C) = width_code;
+  u4lb_width_rate_code = width_code;
   REG_TUNNEL_LINK_STATUS = (uint8_t)((REG_TUNNEL_LINK_STATUS & 0xF0) | width_code);
   u4lb_d436(width_code);
-  if ((uint8_t)(PR(0x09FA) & 0x81) != 0) u4lb_ed44();
+  if ((uint8_t)(u4_route_mode & 0x81) != 0) u4lb_ed44();
   (void)param;
 }
 
 /* e305: state-4 PcieTunnel power-on prologue (gated (0x09FA & 0x81)): conditional CA06 mode-next
  * select, ee29, B402 &= ~2, a840. The E764 train and HDDPC strobe follow inline in b0b4. */
 static void u4lb_e305(uint8_t param) {
-  if ((PR(0x09FA) & 0x81) == 0) return;
-  if ((PR(0x0AEC) == 3) ||
-      (((PR(0x0750) != 2) || (PR(0x0751) != 0)) && (PR(0x0750) != 1))) {
+  if ((u4_route_mode & 0x81) == 0) return;
+  if ((u4_link_gen == 3) ||
+      (((lb_lane_width_latch0 != 2) || (lb_lane_width_latch1 != 0)) && (lb_lane_width_latch0 != 1))) {
     REG_CPU_MODE_NEXT &= 0x1F;
   } else {
     REG_CPU_MODE_NEXT = (uint8_t)((REG_CPU_MODE_NEXT & 0x1F) | 0x20);
@@ -530,7 +530,7 @@ static void u4lb_c593(void) {
   P1_WR(0x1335, 0x02);
   v = u4lb_e916();
   P1_WR(0x1335, (uint8_t)((v & 0xFE) | 0x01));
-  if (PR(0x072D) == 0) {
+  if (lb_lane_bonded_flag == 0) {
     v = u4lb_e916();
     P1_WR(0x1335, (uint8_t)(v & 0xFD));
   } else {
@@ -554,15 +554,15 @@ static void u4lb_b8db(void) {
     if ((PR(0x92F8) & 0x0C) == 0) return;
     b8db_lo = 0x01; b8db_hi = 0x28;
     b8db_lo52 = 0x01; b8db_hi52 = 0x3D; b8db_lo54 = 0x01; b8db_hi54 = 0x43;
-  } else if (PR(0x0750) == 1) {
+  } else if (lb_lane_width_latch0 == 1) {
     if (REG_PHY_LANEA_LOCK_C297 & 0x20) return;
     b8db_lo = 0x01; b8db_hi = 0x28;
-    if (PR(0x07BA) == 0) { b8db_lo52=0x01; b8db_hi52=0x47; b8db_lo54=0x01; b8db_hi54=0x4D; }
+    if (u4_enter_usb_accepted == 0) { b8db_lo52=0x01; b8db_hi52=0x47; b8db_lo54=0x01; b8db_hi54=0x4D; }
     else { b8db_lo52=0x01; b8db_hi52=0x3D; b8db_lo54=0x01; b8db_hi54=0x43; }
   } else {
     if (REG_PHY_LANEA_LOCK_C2A7 & 0x20) return;
     b8db_lo = 0x01; b8db_hi = 0x20;
-    if (PR(0x07BA) != 0) { b8db_lo52=0x01; b8db_hi52=0x3E; b8db_lo54=0x01; b8db_hi54=0x42; }
+    if (u4_enter_usb_accepted != 0) { b8db_lo52=0x01; b8db_hi52=0x3E; b8db_lo54=0x01; b8db_hi54=0x42; }
     else { b8db_lo52=0x01; b8db_hi52=0x48; b8db_lo54=0x01; b8db_hi54=0x4C; }
   }
   for (iter = 0; iter < 10; iter++) {
@@ -583,19 +583,19 @@ static void u4lb_b8db(void) {
 static void u4lb_state4_b0b4(void) {
   uart_puts("[b4:A]");
   /* (A) entry / retrain guard: 0x0776 != 0 -> retrain {e07d; b226} x2 */
-  if (PR(0x0776) != 0) {
+  if (u4_coldboot_seed_gate != 0) {
     uint8_t i;
     for (i = 0; i < 2; i++) { u4lb_e07d(); u4lb_b226(); }
   } else {
     /* normal-connect OS-prewrite */
-    if (PR(0x0819) & 0x01) {
-      uint8_t op = (PR(0x0750) == 2) ? 0x85 : 0x81;
+    if (u4_work_buf[0x19] & 0x01) {
+      uint8_t op = (lb_lane_width_latch0 == 2) ? 0x85 : 0x81;
       SB_WR(0x15, op);
       SB_WR(0x0C, (SB_RD(0x0C) & 0x80) | 0x03);
       u4lb_d5da(1);
     }
-    if (PR(0x0819) & 0x02) {
-      uint8_t op = (PR(0x0750) == 2) ? 0xA5 : 0xA1;
+    if (u4_work_buf[0x19] & 0x02) {
+      uint8_t op = (lb_lane_width_latch0 == 2) ? 0xA5 : 0xA1;
       SB_WR(0x15, op);
       SB_WR(0x0C, (SB_RD(0x0C) & 0x80) | 0x03);
       u4lb_d5da(1);
@@ -605,22 +605,22 @@ static void u4lb_state4_b0b4(void) {
   uart_puts("[b4:B]");
 
   /* (B) lane-width ready gate: (0x0768:0x0769) - (CCE4:CCE5) < 0x38 -> abort */
-  { uint16_t width = ((uint16_t)PR(0x0768) << 8) | PR(0x0769);
+  { uint16_t width = ((uint16_t)lb_lane_width_cnt_hi << 8) | lb_lane_width_cnt_lo;
     uint16_t neg   = ((uint16_t)REG_LANE_WIDTH_CNT_HI << 8) | REG_LANE_WIDTH_CNT_LO;
-    uart_puts("[b4:wid="); uart_puthex(PR(0x0768)); uart_puthex(PR(0x0769));
+    uart_puts("[b4:wid="); uart_puthex(lb_lane_width_cnt_hi); uart_puthex(lb_lane_width_cnt_lo);
     uart_puts(" neg="); uart_puthex(REG_LANE_WIDTH_CNT_HI); uart_puthex(REG_LANE_WIDTH_CNT_LO);
-    uart_puts(" 765="); uart_puthex(PR(0x0765)); uart_puthex(PR(0x0766));
-    uart_puts(" 819="); uart_puthex(PR(0x0819)); uart_puts(" 81A="); uart_puthex(PR(0x081A));
-    uart_puts(" 77A="); uart_puthex(PR(0x077A)); uart_puts("]");
+    uart_puts(" 765="); uart_puthex(sb_connect_present); uart_puthex(sb_route_up_trigger);
+    uart_puts(" 819="); uart_puthex(u4_work_buf[0x19]); uart_puts(" 81A="); uart_puthex(u4_work_buf[0x1A]);
+    uart_puts(" 77A="); uart_puthex(u4_host_desc[0x3]); uart_puts("]");
     if ((uint16_t)(width - neg) < 0x0038) { uart_puts("[b4:WIDGATE-abort]"); return; }
   }
 
   /* (C) connect-present gate: 0x0765==0 && 0x0766==0 -> abort */
-  if (PR(0x0765) == 0 && PR(0x0766) == 0) { uart_puts("[b4:CONGATE-abort]"); return; }
+  if (sb_connect_present == 0 && sb_route_up_trigger == 0) { uart_puts("[b4:CONGATE-abort]"); return; }
   uart_puts("[b4:C]");
 
   /* E716/CA06 enable, gated 0x0AF1.0 */
-  if (PR(0x0AF1) & 0x01) {
+  if (u4_connect_gate & 0x01) {
     REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
     phy_cc10_cmd_wait(2, 0, 0x28);
     REG_LINK_STATUS_E716 &= 0xFC;
@@ -633,7 +633,7 @@ static void u4lb_state4_b0b4(void) {
    * the host to move SB[0xA0]/[0xA1] 07->01->02), then the e26a HDDPC strobe. */
   uart_puts("[PcieTunnel-PwrOn]");
   u4lb_e305(1);
-  if (PR(0x09FA) & 0x81) {
+  if (u4_route_mode & 0x81) {
     REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xF7) | 0x08;
     REG_PHY_TIMER_CTRL_E764 &= 0xFB;
     REG_PHY_TIMER_CTRL_E764 &= 0xFE;
@@ -642,28 +642,28 @@ static void u4lb_state4_b0b4(void) {
     if (REG_PHY_RXPLL_STATUS & 0x10) {
       REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFE) | 0x01;
       REG_PHY_TIMER_CTRL_E764 &= 0xFD;
-      PR(0x06E9) = 0;
+      phy_rxpll_train_busy = 0;
     } else {
       REG_PHY_TIMER_CTRL_E764 &= 0xF7;
       REG_PHY_TIMER_CTRL_E764 &= 0xFB;
       REG_PHY_TIMER_CTRL_E764 &= 0xFE;
       REG_PHY_TIMER_CTRL_E764 &= 0xFD;
-      PR(0x06E9) = 1;
+      phy_rxpll_train_busy = 1;
     }
     REG_HDDPC_CTRL = (uint8_t)((REG_HDDPC_CTRL & 0xDF) | 0x20);
   }
 
   /* L0 OS-arm, gated 0x0819.0 */
-  if (PR(0x0819) & 0x01) {
+  if (u4_work_buf[0x19] & 0x01) {
     u4lb_96fe(0x82);
     u4lb_d5da(1);
-    PR(0x081E) = (PR(0x081E) & 0x7F) | 0x80;
+    u4_work_buf[0x1E] = (u4_work_buf[0x1E] & 0x7F) | 0x80;
   }
   /* L1 OS-arm, gated 0x0819.1 */
-  if (PR(0x0819) & 0x02) {
+  if (u4_work_buf[0x19] & 0x02) {
     u4lb_96fe(0xA2);
     u4lb_d5da(1);
-    PR(0x081F) = (PR(0x081F) & 0x7F) | 0x80;
+    u4_work_buf[0x1F] = (u4_work_buf[0x1F] & 0x7F) | 0x80;
   }
 
   uart_puts("[b4:D c2="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350); uart_putc(']');
@@ -687,33 +687,33 @@ static void u4lb_state4_b0b4(void) {
   u4lb_c593();
 
   /* L0 OS1 trigger, gated 0x0819.0 */
-  if (PR(0x0819) & 0x01) {
+  if (u4_work_buf[0x19] & 0x01) {
     uart_puts("[L0 OS1]");
     SB_WR(0x50, 0x02);
     P1_WR(0x010B, P1_RD(0x010B) | 0x01);
-    PR(0x075B) = 0x10; PR(0x0759) = 0x10;
+    lb_loop2_state[0x0] = 0x10; lb_loop1_state[0x0] = 0x10;
   } else {
-    PR(0x075B) = 0x00; PR(0x0759) = 0x00;
+    lb_loop2_state[0x0] = 0x00; lb_loop1_state[0x0] = 0x00;
   }
   /* L1 OS1 trigger, gated 0x0819.1 */
-  if (PR(0x0819) & 0x02) {
+  if (u4_work_buf[0x19] & 0x02) {
     uart_puts("[L1 OS1]");
     SB_WR(0x5A, 0x02);
     P1_WR(0x010B, (P1_RD(0x010B) & 0xFD) | 0x02);
-    PR(0x075C) = 0x10; PR(0x075A) = 0x10;
+    lb_loop2_state[0x1] = 0x10; lb_loop1_state[0x1] = 0x10;
   } else {
-    PR(0x075C) = 0x00; PR(0x075A) = 0x00;
+    lb_loop2_state[0x1] = 0x00; lb_loop1_state[0x1] = 0x00;
   }
 
   /* ec51 Trig-arm */
   u4lb_ec51();
   uart_puts("[c2@ec51="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350);
   uart_puts(" d1="); uart_puthex(REG_PHY_LANEA_STATUS_C2D1); uart_puthex(REG_PHY_LANEB_STATUS_C351);
-  uart_puts(" ab6="); uart_puthex(PR(0x0AB6)); uart_putc(']');
+  uart_puts(" ab6="); uart_puthex(phy_cdr_arm_mask); uart_putc(']');
 
   /* latch negotiated width 0x074E:0x074F = CCE4:CCE5 */
-  PR(0x074E) = REG_LANE_WIDTH_CNT_HI;
-  PR(0x074F) = REG_LANE_WIDTH_CNT_LO;
+  lb_laneA_cl0_latch = REG_LANE_WIDTH_CNT_HI;
+  lb_laneB_cl0_latch = REG_LANE_WIDTH_CNT_LO;
 
   /* eb62(0,5) -> [SB P05] -> state 5 */
   u4lb_eb62(0, 5);
@@ -731,8 +731,8 @@ static uint8_t u4lb_ee6e(uint8_t lane) { return (uint8_t)(SB_RD(lane ? 0x60 : 0x
 
 /* eda0: route-special selector (0=eval-path, 1=idle, 2=route-special); clears 0x0775/0x0719. */
 static uint8_t u4lb_eda0(void) {
-  if (PR(0x0775) != 0) { PR(0x0775) = 0; PR(0x0719) = 0; return 0; }
-  if (PR(0x0719) == 0x02) { PR(0x0719) = 0; return 2; }
+  if (u4_route_query_response != 0) { u4_route_query_response = 0; e461_inflight_token = 0; return 0; }
+  if (e461_inflight_token == 0x02) { e461_inflight_token = 0; return 2; }
   return 1;
 }
 
@@ -741,24 +741,24 @@ static uint8_t u4lb_eda0(void) {
  * 0x0718) and triggers the bounded TX. Returns 1 only when a push was issued. */
 static uint8_t u4lb_e461(void) {
   uint16_t g;
-  if (PR(0x0719) != 0) return 0;
-  if (PR(0x0718) == 0) {
+  if (e461_inflight_token != 0) return 0;
+  if (u4_route_enable_latch == 0) {
     SB_WR(0x04, (uint8_t)((SB_RD(0x04) & 0xFE) | 0x01));
     SB_WR(0x04, (uint8_t)((SB_RD(0x04) & 0xFD) | 0x02));
-    PR(0x0AAB) = 0;
+    sb_tx_flag = 0;
     return 1;
   }
   {
-    PR(0x0AAB) = 0;
-    PR(0x0AA8) = PR(0x0776) ? 0 : PR(0x0718);
-    PR(0x0AA9) = 0x0D;
-    PR(0x0AAA) = 0x04;
+    sb_tx_flag = 0;
+    sb_tx_cmd = u4_coldboot_seed_gate ? 0 : u4_route_enable_latch;
+    sb_tx_byte0 = 0x0D;
+    sb_tx_byte1 = 0x04;
     sb_d4cd_transport_edges();
-    SBTX_WR(0, PR(0x0AA9));
-    SBTX_WR(1, (uint8_t)(PR(0x0AAA) | ((PR(0x0AAB) & 1) << 7)));
+    SBTX_WR(0, sb_tx_byte0);
+    SBTX_WR(1, (uint8_t)(sb_tx_byte1 | ((sb_tx_flag & 1) << 7)));
     SB_WR(0x0C, (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08));
-    SB_WR(0x15, PR(0x0776) ? (uint8_t)((PR(0x0AA8) << 1) | 0x41) : (uint8_t)PR(0x0AA8));
-    PR(0x0AAC) = 0;
+    SB_WR(0x15, u4_coldboot_seed_gate ? (uint8_t)((sb_tx_cmd << 1) | 0x41) : (uint8_t)sb_tx_cmd);
+    sb_tx_go_param = 0;
     P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
     SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));
     uart_puts("[Te="); uart_puthex(SB_RD(0x15)); uart_putc(':'); uart_puthex(SBTX_RD(0)); uart_puthex(SBTX_RD(1));
@@ -773,7 +773,7 @@ static uint8_t u4lb_e461(void) {
     REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;
     (void)SB_RD(0x0C);
     REG_XFER2_DMA_STATUS = 0x01;
-    PR(0x0719) = 0x01;
+    e461_inflight_token = 0x01;
   }
   return 1;
 }
@@ -794,7 +794,7 @@ static void u4lb_8992(uint8_t v) {
 }
 
 /* lane gate: walk lane L iff 0x0819.L (lane-present). */
-static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(PR(0x0819) & (uint8_t)(1u << lane)); }
+static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(u4_work_buf[0x19] & (uint8_t)(1u << lane)); }
 
 /* [s5 ..] diagnostic — print only when a watched lane-state byte changes, to avoid saturating the
  * UART TX FIFO on a fast-iterating walker. */
@@ -802,7 +802,7 @@ static volatile uint8_t __xdata u4lb_s5_last759, u4lb_s5_last75b, u4lb_s5_seen, 
 static volatile uint8_t __xdata u4lb_s5_last775, u4lb_s5_lastaf38, u4lb_s5_lasttx;
 static void u4lb_s5_diag(void) {
   __xdata uint8_t state0, state1, sba0, host_desc, af, tx;
-  state0 = PR(0x0759); state1 = PR(0x075B); sba0 = SB_RD(0xA0); host_desc = PR(0x0775);
+  state0 = lb_loop1_state[0x0]; state1 = lb_loop2_state[0x0]; sba0 = SB_RD(0xA0); host_desc = u4_route_query_response;
   af = af38_t50; tx = SBTX_RD(4);
   if (u4lb_s5_seen && state0 == u4lb_s5_last759 && state1 == u4lb_s5_last75b && sba0 == u4lb_s5_lasta0
       && host_desc == u4lb_s5_last775 && af == u4lb_s5_lastaf38 && tx == u4lb_s5_lasttx) return;
@@ -814,12 +814,12 @@ static void u4lb_s5_diag(void) {
   uart_puts(" A="); uart_puthex(sba0); uart_puthex(SB_RD(0xA1));
   uart_puts(" 775="); uart_puthex(host_desc);
   uart_puts(" E764="); uart_puthex(REG_PHY_TIMER_CTRL_E764); uart_puts(" E762="); uart_puthex(REG_PHY_RXPLL_STATUS);
-  uart_puts(" ED="); uart_puthex(PR(0x06ED));
-  uart_puts(" snap="); uart_puthex(PR(0x0779)); uart_puthex(PR(0x077A));
+  uart_puts(" ED="); uart_puthex(u4_fsm_state);
+  uart_puts(" snap="); uart_puthex(u4_host_desc[0x2]); uart_puthex(u4_host_desc[0x3]);
   uart_puts(" pll="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350);
   uart_puts(" TX="); { uint8_t i; for (i = 0; i < 6; i++) uart_puthex(SBTX_RD(i)); }
-  uart_puts(" w81C="); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(PR((uint16_t)(0x081Cu + i))); }
-  uart_puts(" 776="); uart_puthex(PR(0x0776));
+  uart_puts(" w81C="); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(u4_work_buf[(uint16_t)(0x1C + i)]); }
+  uart_puts(" 776="); uart_puthex(u4_coldboot_seed_gate);
   uart_puts(" af38["); uart_puthex(af38_t50); uart_putc('/'); uart_puthex(af38_t53); uart_putc('/'); uart_puthex(af38_t51); uart_putc('/'); uart_puthex(af38_t4f); uart_putc('/'); uart_puthex(af38_t6f0); uart_putc(']');
   uart_puts(" 6A="); uart_puthex(SB_RD(0x6A)); uart_puthex(SB_RD(0x6B)); uart_puthex(SB_RD(0x6C)); uart_puthex(SB_RD(0x6D));
   uart_putc(']');
@@ -833,23 +833,23 @@ static void u4lb_8501(void) { }
  * (>=0x0F) reset to 0x00. Composes the device TX[2:3] CL-walk value from work[0x071A+walk_idx]. */
 static void u4lb_lp1_finalize(uint8_t lane) {
   __xdata uint8_t walk_idx;
-  if (PR(0x075F + lane) >= 0x0F) { PR(0x0759 + lane) = 0x00; return; }
-  PR(0x075F + lane)++;
-  walk_idx = (uint8_t)((PR(0x075D + lane) + 1) & 0x0F);
-  PR(0x075D + lane) = walk_idx;
-  PR(0x081C + lane) = (uint8_t)(PR((uint16_t)(0x071A + walk_idx)) | 0x10);
-  PR(0x0800 + (uint8_t)(lane + walk_idx)) |= 0x80;
-  PR(0x0759 + lane) = 0x60;
+  if (lb_settle_counter[lane] >= 0x0F) { lb_loop1_state[lane] = 0x00; return; }
+  lb_settle_counter[lane]++;
+  walk_idx = (uint8_t)((lb_lane_desc_idx[lane] + 1) & 0x0F);
+  lb_lane_desc_idx[lane] = walk_idx;
+  u4_work_buf[0x1C + lane] = (uint8_t)(sb_lane_desc[(uint16_t)(0x0 + walk_idx)] | 0x10);
+  u4_work_buf[(uint8_t)(lane + walk_idx)] |= 0x80;
+  lb_loop1_state[lane] = 0x60;
 }
 
 /* 8174 width-settle poll: advance to 0x60 (via finalize) when the negotiated width pair has settled
  * vs the read-only CCE4:CCE5 counter; else leave state 0x40 to retry. */
 static void u4lb_lp1_width_settle(uint8_t lane) {
   __xdata uint16_t widthA, widthB, neg; __xdata uint8_t train_tgl;
-  widthA = (uint16_t)(((uint16_t)PR(0x076C + 2*lane) << 8) | PR(0x076D + 2*lane));
+  widthA = (uint16_t)(((uint16_t)lb_width_pairA[2*lane] << 8) | lb_width_pairA[0x1 + 2*lane]);
   if (widthA == 0) { u4lb_lp1_finalize(lane); return; }
-  widthB   = (uint16_t)(((uint16_t)PR(0x0770 + 2*lane) << 8) | PR(0x0771 + 2*lane));
-  train_tgl = PR(0x0774);
+  widthB   = (uint16_t)(((uint16_t)lb_width_pairB[2*lane] << 8) | lb_width_pairB[0x1 + 2*lane]);
+  train_tgl = u4_lane_train_trigger;
   if ((uint8_t)widthB == train_tgl && (uint8_t)(widthB >> 8) == 0) { u4lb_lp1_finalize(lane); return; }
   neg = (uint16_t)(((uint16_t)REG_LANE_WIDTH_CNT_HI << 8) | REG_LANE_WIDTH_CNT_LO);
   if ((uint16_t)((widthA - 1) - neg) >= 0x00C8) { u4lb_lp1_finalize(lane); return; }
@@ -862,44 +862,44 @@ static void u4lb_walk_8000(void) {
   __xdata uint8_t lane, state;
   for (lane = 0; lane < 2; lane++) {
     if (!u4lb_lane_gate(lane)) continue;
-    state = PR(0x0759 + lane);
+    state = lb_loop1_state[lane];
 
     if (state == 0x10) {
-      if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x30;
+      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x30;
     }
     else if (state == 0x20) {
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
-        __xdata uint8_t snap = PR(0x077B + lane);
+        __xdata uint8_t snap = u4_host_desc[0x4 + lane];
         if ((snap & 0x80) == 0) {
-          PR(0x0759 + lane) = 0x20;
+          lb_loop1_state[lane] = 0x20;
         } else {
           SB_WR(0x40, (uint8_t)(lane ? 2 : 1));
-          PR(0x076C + 2*lane) = 0x00;
-          PR(0x076D + 2*lane) = 0x00;
-          PR(0x081C + lane) |= 0x20;
-          PR(0x0759 + lane) = 0x40;
+          lb_width_pairA[2*lane] = 0x00;
+          lb_width_pairA[0x1 + 2*lane] = 0x00;
+          u4_work_buf[0x1C + lane] |= 0x20;
+          lb_loop1_state[lane] = 0x40;
         }
         u4lb_8501();
       } else if (selector == 2) {
-        PR(0x0759 + lane) = 0x20;
+        lb_loop1_state[lane] = 0x20;
       }
     }
     else if (state == 0x30) {
-      PR(0x075F + lane) = 0x00;
-      PR(0x0759 + lane) = 0x50;
+      lb_settle_counter[lane] = 0x00;
+      lb_loop1_state[lane] = 0x50;
     }
     else if (state == 0x40) {
-      if (u4lb_ee6e(lane) != 0 && PR(0x075F + lane) != 0) {
-        if (PR(0x0AB3) == 0) {
+      if (u4lb_ee6e(lane) != 0 && lb_settle_counter[lane] != 0) {
+        if (phy_lane_gate == 0) {
           SB_WR(lane ? 0x5A : 0x50, 0x01);
         }
-        PR(0x081C + lane) |= 0x40;
-        PR(0x081C + lane) = 0x00;
+        u4_work_buf[0x1C + lane] |= 0x40;
+        u4_work_buf[0x1C + lane] = 0x00;
         if ((REG_PHY_ORIENT_C2C3 & 0x01) || (REG_VENDOR_CTRL_C343 & 0x01)) {
-          if ((PR(0x0819) & 0x03) != 0) {
-            PR(0x081C + lane) = (uint8_t)((PR(0x081C + lane) | 0x40) & 0x7F);
-            PR(0x081D + lane) = (uint8_t)(((PR(0x081D + lane) | 0x10) + 1) & 0x7F);
+          if ((u4_work_buf[0x19] & 0x03) != 0) {
+            u4_work_buf[0x1C + lane] = (uint8_t)((u4_work_buf[0x1C + lane] | 0x40) & 0x7F);
+            u4_work_buf[0x1D + lane] = (uint8_t)(((u4_work_buf[0x1D + lane] | 0x10) + 1) & 0x7F);
           }
         }
       } else {
@@ -907,106 +907,106 @@ static void u4lb_walk_8000(void) {
       }
     }
     else if (state == 0x50) {
-      if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x70;
+      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x70;
     }
     else if (state == 0x60) {
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
-        __xdata uint8_t snap = PR(0x077B + lane);
+        __xdata uint8_t snap = u4_host_desc[0x4 + lane];
         if ((snap & 0xC0) == 0xC0 &&
-            (snap & 0x0F) == (uint8_t)(PR(0x081C + lane) & 0x0F)) {
-          if (PR(0x0AB3)) u4lb_e9e7();
+            (snap & 0x0F) == (uint8_t)(u4_work_buf[0x1C + lane] & 0x0F)) {
+          if (phy_lane_gate) u4lb_e9e7();
           SB_WR(0x40, (uint8_t)(lane ? 2 : 1));
           u4lb_ee57();
-          PR(0x076C + 2*lane) = REG_LANE_WIDTH_CNT_HI;
-          PR(0x076D + 2*lane) = REG_LANE_WIDTH_CNT_LO;
-          PR(0x0770 + 2*lane) = 0x00;
-          PR(0x0771 + 2*lane) = PR(0x0774);
-          PR(0x0759 + lane) = 0x80;
+          lb_width_pairA[2*lane] = REG_LANE_WIDTH_CNT_HI;
+          lb_width_pairA[0x1 + 2*lane] = REG_LANE_WIDTH_CNT_LO;
+          lb_width_pairB[2*lane] = 0x00;
+          lb_width_pairB[0x1 + 2*lane] = u4_lane_train_trigger;
+          lb_loop1_state[lane] = 0x80;
         } else {
-          PR(0x0759 + lane) = 0x60;
+          lb_loop1_state[lane] = 0x60;
         }
         u4lb_8501();
       } else if (selector == 2) {
-        PR(0x0759 + lane) = 0x60;
+        lb_loop1_state[lane] = 0x60;
       }
     }
     else if (state == 0x70) {
       if (u4lb_ee6e(lane)) {
-        PR(0x081C + lane) |= 0x10;
-        PR(0x081C + lane) |= 0x40;
-        PR(0x0819 + lane) &= 0x7F;
+        u4_work_buf[0x1C + lane] |= 0x10;
+        u4_work_buf[0x1C + lane] |= 0x40;
+        u4_work_buf[0x19 + lane] &= 0x7F;
       }
-      PR(0x0759 + lane) = 0x90;
+      lb_loop1_state[lane] = 0x90;
     }
     else if (state == 0x80) {
       if (u4lb_ee6e(lane)) {
-        PR(0x081C + lane) |= 0x40;
+        u4_work_buf[0x1C + lane] |= 0x40;
       }
-      PR(0x081C + lane) &= 0x7F;
-      PR(0x0759 + lane) = 0xA0;
+      u4_work_buf[0x1C + lane] &= 0x7F;
+      lb_loop1_state[lane] = 0xA0;
     }
     else if (state == 0x90) {
-      if (u4lb_e461() == 1) PR(0x0759 + lane) = 0xA1;
+      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0xA1;
     }
     else if (state == 0xA0) {
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
-        if ((PR(0x077B + lane) & 0xC0) == 0x80) PR(0x0759 + lane) = 0x50;
-        else                                    PR(0x0759 + lane) = 0xA0;
+        if ((u4_host_desc[0x4 + lane] & 0xC0) == 0x80) lb_loop1_state[lane] = 0x50;
+        else                                    lb_loop1_state[lane] = 0xA0;
         u4lb_8501();
       } else if (selector == 2) {
-        PR(0x0759 + lane) = 0xA0;
+        lb_loop1_state[lane] = 0xA0;
       }
     }
     else {
-      PR(0x081C + lane) &= 0xEF;
-      PR(0x081C + lane) &= 0x7F;
-      PR(0x0819 + lane) &= 0xDF;
-      PR(0x0759 + lane) = 0x20;
+      u4_work_buf[0x1C + lane] &= 0xEF;
+      u4_work_buf[0x1C + lane] &= 0x7F;
+      u4_work_buf[0x19 + lane] &= 0xDF;
+      lb_loop1_state[lane] = 0x20;
     }
   }
   /* LOOP2: the CL-state walker (state @0x075B+lane). */
   for (lane = 0; lane < 2; lane++) {
     if (!u4lb_lane_gate(lane)) continue;
-    state = PR(0x075B + lane);
+    state = lb_loop2_state[lane];
     if (state == 0x10) {
-      PR(0x081E + lane) |= 0x80;
-      PR(0x081E + lane) &= 0xBF;
-      PR(0x075B + lane) = 0x20;
+      u4_work_buf[0x1E + lane] |= 0x80;
+      u4_work_buf[0x1E + lane] &= 0xBF;
+      lb_loop2_state[lane] = 0x20;
     } else if (state == 0x20) {
-      if (u4lb_e461() == 1) PR(0x075B + lane) = 0x30;
+      if (u4lb_e461() == 1) lb_loop2_state[lane] = 0x30;
     } else if (state == 0x30) {
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
-        __xdata uint8_t snap = PR(0x0779 + lane);
-        if ((snap >> 4) & 1) PR(0x075B + lane) = 0x00;
-        else if (((snap >> 7) & 1) == 0) PR(0x075B + lane) = 0x20;
+        __xdata uint8_t snap = u4_host_desc[0x2 + lane];
+        if ((snap >> 4) & 1) lb_loop2_state[lane] = 0x00;
+        else if (((snap >> 7) & 1) == 0) lb_loop2_state[lane] = 0x20;
         else {
           __xdata uint8_t cl_idx = (uint8_t)(snap & 0x0F), cap, cl_cfg_hi = 0, cl_cfg_lo = 0;
-          PR(0x0761 + lane) = cl_idx;
-          PR(0x081E + lane) &= 0xF0;
-          PR(0x081E + lane) |= cl_idx;
-          PR(0x081E + lane) |= 0x40;
-          cap = PR(0x0AB4 + lane);
-          if ((cap >> 1) & 1) cl_cfg_lo = PR(0x072E + cl_idx);
-          if (cap & 1) { __xdata uint16_t m = (uint16_t)(PR(0x073E + cl_idx) * 0x20); cl_cfg_lo |= (uint8_t)m; cl_cfg_hi |= (uint8_t)(m >> 8); }
+          lb_cl_value[lane] = cl_idx;
+          u4_work_buf[0x1E + lane] &= 0xF0;
+          u4_work_buf[0x1E + lane] |= cl_idx;
+          u4_work_buf[0x1E + lane] |= 0x40;
+          cap = phy_lane_cap[lane];
+          if ((cap >> 1) & 1) cl_cfg_lo = lb_cap_field[cl_idx];
+          if (cap & 1) { __xdata uint16_t m = (uint16_t)(sb_lane_flip[cl_idx] * 0x20); cl_cfg_lo |= (uint8_t)m; cl_cfg_hi |= (uint8_t)(m >> 8); }
           uart_puts(lane ? "\r\nL1:CL0 " : "\r\nL0:CL0 ");
           uart_puthex(cl_cfg_hi); uart_puthex(cl_cfg_lo);
           SB_WR(0x6A + 2 * lane, cl_cfg_hi);
           SB_WR(0x6B + 2 * lane, cl_cfg_lo);
           u4lb_ea7c(cl_idx, lane);
-          PR(0x075B + lane) = 0x50;
+          lb_loop2_state[lane] = 0x50;
         }
-      } else if (selector == 2) PR(0x075B + lane) = 0x20;
+      } else if (selector == 2) lb_loop2_state[lane] = 0x20;
     } else if (state == 0x50) {
-      if (u4lb_e461() == 1) PR(0x075B + lane) = 0x60;
+      if (u4lb_e461() == 1) lb_loop2_state[lane] = 0x60;
     } else if (state == 0x60) {
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
-        if ((PR(0x0779 + lane) >> 7) & 1) PR(0x075B + lane) = 0x50;
-        else { PR(0x081E + lane) &= 0xBF; PR(0x075B + lane) = 0x20; }
-      } else if (selector == 2) PR(0x075B + lane) = 0x50;
+        if ((u4_host_desc[0x2 + lane] >> 7) & 1) lb_loop2_state[lane] = 0x50;
+        else { u4_work_buf[0x1E + lane] &= 0xBF; lb_loop2_state[lane] = 0x20; }
+      } else if (selector == 2) lb_loop2_state[lane] = 0x50;
     }
   }
 }
@@ -1017,122 +1017,122 @@ static void u4lb_walk_850b(void) {
   /* LOOP1: state @0x075B+lane. */
   for (lane = 0; lane < 2; lane++) {
     if (!u4lb_lane_gate(lane)) continue;
-    state = PR(0x075B + lane);
+    state = lb_loop2_state[lane];
     if (state == 0x11) {
       __xdata uint8_t r = u4lb_eda0(); selector = r;
-      if (r == 0) PR(0x075B + lane) = 0x20;
-      else if (r == 1) PR(0x075B + lane) = 0x10;
+      if (r == 0) lb_loop2_state[lane] = 0x20;
+      else if (r == 1) lb_loop2_state[lane] = 0x10;
     } else if (state == 0x20) {
       __xdata uint8_t r = u4lb_eda0(); selector = r;
-      if (r == 0) { if (PR(0x0779) == 0) PR(0x075B + lane) = 0x30; else PR(0x075B + lane) = 0x20; }
-      else if (r != 2) PR(0x075B + lane) = 0x20;
+      if (r == 0) { if (u4_host_desc[0x2] == 0) lb_loop2_state[lane] = 0x30; else lb_loop2_state[lane] = 0x20; }
+      else if (r != 2) lb_loop2_state[lane] = 0x20;
     } else if (state == 0x21) {
-      if (u4lb_ee6e(lane) == 0) PR(0x075B + lane) = 0x40;
+      if (u4lb_ee6e(lane) == 0) lb_loop2_state[lane] = 0x40;
     } else if (state == 0x30) {
       if (u4lb_e461() == 1) {
-        __xdata uint8_t snap = PR(0x0B26 + lane);
-        if (!((snap >> 4) & 1)) PR(0x075B + lane) = 0x00;
-        else if ((snap >> 7) & 1) { PR(0x0761 + lane) = (uint8_t)(snap & 0x0F); PR(0x075B + lane) = 0x50; }
-        else PR(0x075B + lane) = 0x30;
+        __xdata uint8_t snap = lb_cl_status[lane];
+        if (!((snap >> 4) & 1)) lb_loop2_state[lane] = 0x00;
+        else if ((snap >> 7) & 1) { lb_cl_value[lane] = (uint8_t)(snap & 0x0F); lb_loop2_state[lane] = 0x50; }
+        else lb_loop2_state[lane] = 0x30;
       }
     } else if (state == 0x40) {
-      __xdata uint8_t cap = PR(0x0AB4 + lane), cl_idx = PR(0x0761 + lane), cl_cfg_hi = 0, cl_cfg_lo = 0;
-      if ((cap >> 1) & 1) cl_cfg_lo = PR(0x072E + cl_idx);
-      if (cap & 1) { __xdata uint16_t m = (uint16_t)(PR(0x073E + cl_idx) * 0x20); cl_cfg_lo |= (uint8_t)m; cl_cfg_hi |= (uint8_t)(m >> 8); }
+      __xdata uint8_t cap = phy_lane_cap[lane], cl_idx = lb_cl_value[lane], cl_cfg_hi = 0, cl_cfg_lo = 0;
+      if ((cap >> 1) & 1) cl_cfg_lo = lb_cap_field[cl_idx];
+      if (cap & 1) { __xdata uint16_t m = (uint16_t)(sb_lane_flip[cl_idx] * 0x20); cl_cfg_lo |= (uint8_t)m; cl_cfg_hi |= (uint8_t)(m >> 8); }
       uart_puts(lane ? "\r\nL1:CL0 " : "\r\nL0:CL0 ");
       uart_puthex(cl_cfg_hi); uart_puthex(cl_cfg_lo);
       u4lb_ea7c(cl_idx, lane);
-      PR(0x075B + lane) = 0x51;
+      lb_loop2_state[lane] = 0x51;
     } else if (state == 0x50) {
-      PR(0x075B + lane) = 0x60;
+      lb_loop2_state[lane] = 0x60;
     } else if (state == 0x51) {
       __xdata uint8_t v;
-      PR(0x0B2C + lane) |= 0x80;
-      v = (uint8_t)((PR(0x0B2C + lane) & 0xF0) | PR(0x0761 + lane));
-      PR(0x0B2C + lane) = v;
-      if (v == 0) PR(0x075B + lane) = 0x61;
+      lb_cl0_width[lane] |= 0x80;
+      v = (uint8_t)((lb_cl0_width[lane] & 0xF0) | lb_cl_value[lane]);
+      lb_cl0_width[lane] = v;
+      if (v == 0) lb_loop2_state[lane] = 0x61;
     } else if (state == 0x60) {
-      if (u4lb_e461() == 1) { if (PR(0x0779) == 0) PR(0x075B + lane) = 0x70; else PR(0x075B + lane) = 0x60; }
+      if (u4lb_e461() == 1) { if (u4_host_desc[0x2] == 0) lb_loop2_state[lane] = 0x70; else lb_loop2_state[lane] = 0x60; }
     } else if (state == 0x61) {
-      if (u4lb_e461() == 1) PR(0x075B + lane) = 0x71;
+      if (u4lb_e461() == 1) lb_loop2_state[lane] = 0x71;
     } else if (state == 0x70) {
       if (u4lb_e461() == 1) {
-        __xdata uint8_t snap = PR(0x0B26 + lane);
-        if (!((snap >> 7) & 1)) PR(0x075B + lane) = 0x30;
-        else if (PR(0x0761 + lane) != 0x07) PR(0x075B + lane) = 0x30;
-        else PR(0x075B + lane) = 0x70;
+        __xdata uint8_t snap = lb_cl_status[lane];
+        if (!((snap >> 7) & 1)) lb_loop2_state[lane] = 0x30;
+        else if (lb_cl_value[lane] != 0x07) lb_loop2_state[lane] = 0x30;
+        else lb_loop2_state[lane] = 0x70;
       }
     } else {
-      if (u4lb_ee6e(lane) == 0) PR(0x075B + lane) = 0x11;
+      if (u4lb_ee6e(lane) == 0) lb_loop2_state[lane] = 0x11;
     }
   }
   /* width-limit one-shot + LOOP2 (state @0x0759+lane). */
-  if (PR(0x075B) == 0 && PR(0x075C) == 0) {
-    if (PR(0x0767) == 0) {
-      if (PR(0x0819) & 0x01) u4lb_8992(0x86);
-      if ((PR(0x0819) >> 1) & 0x01) u4lb_8992(0xA6);
-      PR(0x0767) = 1;
+  if (lb_loop2_state[0x0] == 0 && lb_loop2_state[0x1] == 0) {
+    if (lb_walk_oneshot_flag == 0) {
+      if (u4_work_buf[0x19] & 0x01) u4lb_8992(0x86);
+      if ((u4_work_buf[0x19] >> 1) & 0x01) u4lb_8992(0xA6);
+      lb_walk_oneshot_flag = 1;
     }
     for (lane = 0; lane < 2; lane++) {
       if (!u4lb_lane_gate(lane)) continue;
-      state = PR(0x0759 + lane);
+      state = lb_loop1_state[lane];
       if (state == 0x10) {
-        if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x21;
+        if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x21;
       } else if (state == 0x20) {
         if (u4lb_e461() == 1) {
-          if ((PR(0x0B28 + lane) >> 7) & 1) { SB_WR(0x40, (uint8_t)(u4lb_ee6e(lane) ? 2 : 1)); PR(0x0759 + lane) = 0x30; }
-          else PR(0x0759 + lane) = 0x20;
+          if ((lb_eq_status[lane] >> 7) & 1) { SB_WR(0x40, (uint8_t)(u4lb_ee6e(lane) ? 2 : 1)); lb_loop1_state[lane] = 0x30; }
+          else lb_loop1_state[lane] = 0x20;
         }
       } else if (state == 0x21) {
-        if (u4lb_eda0() != 0) PR(0x081C + lane) |= 0x10;
-        PR(0x0759 + lane) = 0x40;
+        if (u4lb_eda0() != 0) u4_work_buf[0x1C + lane] |= 0x10;
+        lb_loop1_state[lane] = 0x40;
       } else if (state == 0x30) {
         if (u4lb_eda0() != 0) {
-          if (PR(0x075F + lane) != 0) PR(0x0759 + lane) = 0x50;
-          else { uart_puts("\r\n(lim)"); PR(0x0759 + lane) = 0x60; }
+          if (lb_settle_counter[lane] != 0) lb_loop1_state[lane] = 0x50;
+          else { uart_puts("\r\n(lim)"); lb_loop1_state[lane] = 0x60; }
         }
       } else if (state == 0x40) {
         uart_puts("EQ");
         SB_WR(0x50, (uint8_t)(u4lb_ee6e(lane) ? 2 : 1));
-        PR(0x0759 + lane) = 0x51;
+        lb_loop1_state[lane] = 0x51;
       } else if (state == 0x50) {
-        PR(0x0B2A + lane) |= 0x10;
-        if (u4lb_e461() == 1) PR(0x0759 + lane) = 0x52;
+        lb_loop2_scratch[lane] |= 0x10;
+        if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x52;
       } else if (state == 0x51) {
         __xdata uint8_t r = u4lb_eda0();
-        if (r == 0) { if (PR(0x0779) != 0) PR(0x0759 + lane) = 0x51; else { uart_puts("\r\n(lim)"); PR(0x075B + lane) = 0x00; } }
-        else if (r != 2) PR(0x0759 + lane) = 0x51;
+        if (r == 0) { if (u4_host_desc[0x2] != 0) lb_loop1_state[lane] = 0x51; else { uart_puts("\r\n(lim)"); lb_loop2_state[lane] = 0x00; } }
+        else if (r != 2) lb_loop1_state[lane] = 0x51;
       } else if (state == 0x52) {
-        PR(0x075F + lane)++;
-        PR(0x075D + lane) = (uint8_t)((PR(0x075D + lane) + 1) & 0x0F);
-        PR(0x0759 + lane) = 0x70;
+        lb_settle_counter[lane]++;
+        lb_lane_desc_idx[lane] = (uint8_t)((lb_lane_desc_idx[lane] + 1) & 0x0F);
+        lb_loop1_state[lane] = 0x70;
       } else if (state == 0x60) {
-        __xdata uint8_t walk_idx = PR(0x075D + lane);
-        PR(0x071A + walk_idx) |= 0xA0;
-        PR(0x0B2A + lane) = walk_idx;
-        if (walk_idx == 0) PR(0x0759 + lane) = 0x80;
+        __xdata uint8_t walk_idx = lb_lane_desc_idx[lane];
+        sb_lane_desc[walk_idx] |= 0xA0;
+        lb_loop2_scratch[lane] = walk_idx;
+        if (walk_idx == 0) lb_loop1_state[lane] = 0x80;
       } else if (state == 0x70) {
         __xdata uint8_t r = u4lb_eda0();
-        if (r == 0) { if (PR(0x0779) == 0) { SB_WR(0x40, (uint8_t)(u4lb_ee6e(lane) ? 2 : 1)); PR(0x0759 + lane) = 0x90; } else PR(0x0759 + lane) = 0x70; }
-        else if (r != 2) PR(0x0759 + lane) = 0x70;
+        if (r == 0) { if (u4_host_desc[0x2] == 0) { SB_WR(0x40, (uint8_t)(u4lb_ee6e(lane) ? 2 : 1)); lb_loop1_state[lane] = 0x90; } else lb_loop1_state[lane] = 0x70; }
+        else if (r != 2) lb_loop1_state[lane] = 0x70;
       } else if (state == 0x80) {
-        PR(0x0759 + lane) = 0xA0;
+        lb_loop1_state[lane] = 0xA0;
       } else if (state == 0x90) {
-        PR(0x0B2A + lane) &= 0x7F;
-        if (u4lb_e461() == 1) PR(0x0759 + lane) = 0xA1;
+        lb_loop2_scratch[lane] &= 0x7F;
+        if (u4lb_e461() == 1) lb_loop1_state[lane] = 0xA1;
       } else if (state == 0xA0) {
         __xdata uint8_t r = u4lb_eda0();
-        if (r == 0) { if (PR(0x0779) == 0) PR(0x0759 + lane) = 0xB0; else PR(0x0759 + lane) = 0xA0; }
-        else if (r != 2) PR(0x0759 + lane) = 0xA0;
+        if (r == 0) { if (u4_host_desc[0x2] == 0) lb_loop1_state[lane] = 0xB0; else lb_loop1_state[lane] = 0xA0; }
+        else if (r != 2) lb_loop1_state[lane] = 0xA0;
       } else if (state == 0xA1) {
-        if (u4lb_ee6e(lane) == 0) { uart_puts("\r\n(lim)"); PR(0x075B + lane) = 0x60; }
-        else PR(0x0759 + lane) = 0x50;
+        if (u4lb_ee6e(lane) == 0) { uart_puts("\r\n(lim)"); lb_loop2_state[lane] = 0x60; }
+        else lb_loop1_state[lane] = 0x50;
       } else {
-        PR(0x0800 + lane) &= 0xEF;
-        PR(0x0800 + lane) &= 0x7F;
-        PR(0x081C + lane) &= 0xDF;
-        PR(0x075F + lane) = 0x00;
-        PR(0x0759 + lane) = 0x20;
+        u4_work_buf[lane] &= 0xEF;
+        u4_work_buf[lane] &= 0x7F;
+        u4_work_buf[0x1C + lane] &= 0xDF;
+        lb_settle_counter[lane] = 0x00;
+        lb_loop1_state[lane] = 0x20;
       }
     }
   }
@@ -1143,7 +1143,7 @@ static void u4lb_walk_850b(void) {
 static void u4lb_state5(void) {
   DPX = 0x00;
   u4lb_s5_diag();
-  if (PR(0x0718) == 0x04) u4lb_walk_8000();
+  if (u4_route_enable_latch == 0x04) u4lb_walk_8000();
   else                    u4lb_walk_850b();
   DPX = 0x00;
 }
@@ -1151,13 +1151,13 @@ static void u4lb_state5(void) {
 /* e672 — the lane-bond FSM dispatcher, called from cb10's tail (gated 0x06ED!=0).
  *   3 -> cm_conn_routing_setup; 4 -> b0b4; 5 -> finalise when all sub-lane states clear, else the walker. */
 static void u4lb_e672(void) {
-  uint8_t state = PR(0x06ED);
+  uint8_t state = u4_fsm_state;
   if (state == 0x04) {
     u4lb_state4_b0b4();
     return;
   }
   if (state == 0x05) {
-    if (PR(0x075B) == 0 && PR(0x0759) == 0 && PR(0x075C) == 0 && PR(0x075A) == 0) {
+    if (lb_loop2_state[0x0] == 0 && lb_loop1_state[0x0] == 0 && lb_loop2_state[0x1] == 0 && lb_loop1_state[0x1] == 0) {
       u4lb_eb62(0, 0);
       return;
     }

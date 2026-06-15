@@ -51,7 +51,7 @@ static void sb_lane_flip_init(void) {
   P1_CLR(0x0100, 0x40);
   P1_CLR(0x0100, 0x80);
 
-  if (PR(0x07BA) != 0 || PR(0x07B9) != 0) P1_CLR(0x0100, 0x01);
+  if (u4_enter_usb_accepted != 0 || u4_connect_route_latch != 0) P1_CLR(0x0100, 0x01);
   else                                    P1_SET(0x0100, 0x01);
 
   if (flip) {
@@ -62,7 +62,7 @@ static void sb_lane_flip_init(void) {
     P1_CLR(0x0101, 0x03);
   }
 
-  if (PR(0x07BA) != 0 || PR(0x07B9) != 0) {
+  if (u4_enter_usb_accepted != 0 || u4_connect_route_latch != 0) {
     P1_WR(0x0101, (P1_RD(0x0101) & 0xEF) | 0x10);
     P1_CLR(0x0101, 0x20);
     P1_SET(0x0101, 0x80);
@@ -75,7 +75,7 @@ static void sb_lane_flip_init(void) {
 
   SB_WR(0xD1, (SB_RD(0xD1) & 0xEF) | 0x10);
   SB_WR(0x49, 0xA0);
-  PR(0x06EC) = 0;
+  u4_conn_consequence_done = 0;
 
   SB_WR(0x94, 0x02); SB_WR(0x95, 0x71); SB_WR(0x96, 0x00);
   SB_WR(0x98, 0x3E); SB_WR(0x99, 0x80);
@@ -93,10 +93,10 @@ static void sb_lane_flip_init(void) {
   SB_CLR(0x2C, 0x01);
   REG_INT_CTRL = (REG_INT_CTRL & 0xF7) | 0x08;
   SB_CLR(0x67, 0x40);
-  PR(0x072B) = 0x07; PR(0x072C) = 0x07;
+  lb_laneA_cl_latch = 0x07; lb_laneB_cl_latch = 0x07;
   if (REG_LANE_RATE_C8FF == 0x04) {
     uint8_t k;
-    for (k = 0; k < 0x10; k++) PR((uint16_t)(0x073E + k)) = sb_lane_rate_desc[k];
+    for (k = 0; k < 0x10; k++) sb_lane_flip[(uint16_t)(0x0 + k)] = sb_lane_rate_desc[k];
   }
 }
 
@@ -123,21 +123,21 @@ static __code const uint8_t branchA_gate[0x13] = {
 
 static void sb_rom_descriptor_load(void) {
   uint8_t i;
-  for (i = 0; i < 0x64; i++) PR(0x0800 + i) = drom_identity[i];
-  PR(0x0804) = PR(0x0A57);
-  PR(0x0805) = PR(0x0A58);
-  if (!(PR(0x09F9) & 0x80)) PR(0x081B) &= ~0x02;
-  for (i = 0; i < 0x10; i++) PR(0x071A + i) = lane_descriptor[i];
+  for (i = 0; i < 0x64; i++) u4_work_buf[i] = drom_identity[i];
+  u4_work_buf[0x4] = pd_product_pid_lo;
+  u4_work_buf[0x5] = pd_product_pid_hi;
+  if (!(u4_mode_flag & 0x80)) u4_work_buf[0x1B] &= ~0x02;
+  for (i = 0; i < 0x10; i++) sb_lane_desc[i] = lane_descriptor[i];
   for (i = 0; i < 0x13; i++) {
-    PR((uint16_t)(0x06F2u + i)) = width_lut[i];
-    PR((uint16_t)(0x0705u + i)) = branchA_gate[i];
+    sb_width_lut[(uint16_t)(0x0 + i)] = width_lut[i];
+    sb_branchA_gate[(uint16_t)(0x0 + i)] = branchA_gate[i];
   }
-  if (PR(0x09F5)) PR(0x081A) = (uint8_t)((PR(0x081A) & 0xDF) | 0x20);
-  if (PR(0x09F6) == 0) PR(0x081A) &= 0xED;
+  if (u4_cap20g_gate0) u4_work_buf[0x1A] = (uint8_t)((u4_work_buf[0x1A] & 0xDF) | 0x20);
+  if (u4_cap20g_gate1 == 0) u4_work_buf[0x1A] &= 0xED;
 
-  PR(0x0750) = 1; PR(0x0775) = 0; PR(0x0765) = 0; PR(0x0766) = 0; PR(0x0767) = 0;
-  PR(0x06ED) = 0; PR(0x0758) = 0; PR(0x075D) = 0x0F; PR(0x075E) = 0x0F; PR(0x0776) = 1;
-  PR(0x072A) = 0; PR(0x072D) = 0;
+  lb_lane_width_latch0 = 1; u4_route_query_response = 0; sb_connect_present = 0; sb_route_up_trigger = 0; lb_walk_oneshot_flag = 0;
+  u4_fsm_state = 0; cm_conn_routing_substate = 0; lb_lane_desc_idx[0x0] = 0x0F; lb_lane_desc_idx[0x1] = 0x0F; u4_coldboot_seed_gate = 1;
+  sb_cdf5_substate_arm = 0; lb_lane_bonded_flag = 0;
   SB_WR(0x2C, 0x04);
   SB_WR(0x28, 0x08);
   SB_WR(0x2A, 0x08);
@@ -146,12 +146,12 @@ static void sb_rom_descriptor_load(void) {
   SB_WR(0xC9, 0x10); SB_WR(0xC9, 0x20);
   SB_WR(0xC9, 0x40); SB_WR(0xC9, 0x80);
   SB_WR(0x66, 0x08); SB_WR(0x66, 0x40);
-  PR(0x06EE) = SB_RD(0x24) & 0x01;
-  PR(0x06EF) = SB_RD(0x80) & 0x01;
-  PR(0x06F1) = (uint8_t)((SB_RD(0x24) & 0x06) >> 1);
-  PR(0x0719) = 0;
+  sb_transport_edge_toggle = SB_RD(0x24) & 0x01;
+  sb_link_edge_toggle = SB_RD(0x80) & 0x01;
+  sb_active_port_rr = (uint8_t)((SB_RD(0x24) & 0x06) >> 1);
+  e461_inflight_token = 0;
   REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;
-  PR(0x074E) = 0; PR(0x074F) = 0;
+  lb_laneA_cl0_latch = 0; lb_laneB_cl0_latch = 0;
   SB_CLR(0xD4, 0x20);
   SB_WR(0x8F, (SB_RD(0x8F) & 0xEF) | 0x10);
 }
@@ -189,7 +189,7 @@ static void sb_block_init(void) {
   SB_CLR(0x67, 0x24);
   SB_WR(0x9E, 0x10); SB_WR(0x9E, 0x20);
   SB_CLR(0x9F, 0x30);
-  PR(0x06EC) = 0;
+  u4_conn_consequence_done = 0;
 
   sb_rom_descriptor_load();
 
@@ -206,7 +206,7 @@ static void sb_block_init(void) {
   REG_PHY_LANEB_C35C &= 0xC0;
 
   /* PHY lane config */
-  PR(0x0AB3) = 0; PR(0x0AB4) = 3; PR(0x0AB5) = 3; PR(0x0AB6) = 0;
+  phy_lane_gate = 0; phy_lane_cap[0x0] = 3; phy_lane_cap[0x1] = 3; phy_cdr_arm_mask = 0;
   REG_PHY_ORIENT_C2C3 &= 0xFE; REG_PHY_ORIENT_C2C3 &= 0xFD;
   REG_PHY_ORIENT_C2C3 = (REG_PHY_ORIENT_C2C3 & 0xC3) | 0x1C; REG_PHY_ORIENT_C2C3 &= 0xBF;
   REG_PHY_LANEA_CDR_C2CB &= 0xFB;
@@ -276,20 +276,20 @@ static void u4c_sb_desc_commit(void) {
 
 /* SB[0x1C].0 = !connect. */
 static void u4c_edbd(void) {
-  if (PR(0x07BA) == 0) SB_SET(0x1C, 0x01);
+  if (u4_enter_usb_accepted == 0) SB_SET(0x1C, 0x01);
   else                 SB_CLR(0x1C, 0x01);
 }
 
 /* Engine pre-config before ccb3/c270 program descriptors. */
 static void u4c_e5b0(void) {
-  PR(0x097A) = 0;
+  sb_descr_engine_scratch = 0;
   P12_WR(0x4C, (uint8_t)(P12_RD(0x4C) & 0xFE));
   P12_WR(0x03, 0x80);
   P12_WR(0x90, (uint8_t)(P12_RD(0x90) & 0xFB));
   P12_WR(0x8F, 0x80);
   P12_WR(0x90, (uint8_t)(P12_RD(0x90) & 0xDF));
   P12_WR(0x8F, 0x20);
-  PR(0x09F0) = 0; PR(0x09F1) = 0; PR(0x09F2) = 0; PR(0x09F3) = 0;
+  sb_notify_flag0 = 0; sb_notify_flag1 = 0; sb_notify_flag2 = 0; sb_notify_flag3 = 0;
 }
 
 /* Lane-config descriptor: main descriptor + two 0x09FB-gated sub-descriptors. */
@@ -301,14 +301,14 @@ static void u4c_ccb3(uint8_t width_byte) {
   P12_WR(0x3C, 0x00); P12_WR(0x3D, 0x01);
   P12_WR(0x3E, 0x01); P12_WR(0x3F, 0x00);
   u4c_sb_desc_commit();
-  gate = PR(0x09FB);
+  gate = u4_lane_gate_sel;
   if (!(gate & 0x01)) {
     (void)P12_RD(0x34);
     eng_a31c(0x34, (uint8_t)((gate & 0xF0) | 0x07));
     eng_a2df(0x35, 0x02);
     u4c_sb_desc_commit();
   }
-  gate = PR(0x09FB);
+  gate = u4_lane_gate_sel;
   if (!((gate >> 1) & 0x01)) {
     (void)P12_RD(0x34);
     eng_a348(0x34, (uint8_t)((gate & 0xF0) | 0x07));
@@ -323,45 +323,45 @@ static void u4c_c270(uint8_t width_byte) {
   (void)P12_RD(0x34);
   eng_a308(0x34, width_byte);
   eng_a2df(0x35, 0x00);
-  P12_WR(0x3C, PR(0x0B19));
-  P12_WR(0x3D, PR(0x0B1A));
-  P12_WR(0x3E, PR(0x0A57));
-  P12_WR(0x3F, PR(0x0A58));
+  P12_WR(0x3C, sb_eng_data_lo);
+  P12_WR(0x3D, sb_eng_data_hi);
+  P12_WR(0x3E, pd_product_pid_lo);
+  P12_WR(0x3F, pd_product_pid_hi);
   u4c_sb_desc_commit();
   (void)P12_RD(0x34);
-  eng_a308(0x34, PR(0x0A58));
+  eng_a308(0x34, pd_product_pid_hi);
   eng_a2df(0x35, 0x07);
-  P12_WR(0x3C, PR(0x0B17));
-  P12_WR(0x3D, PR(0x0B18));
-  P12_WR(0x3E, PR(0x0B19));
-  P12_WR(0x3F, PR(0x0B1A));
+  P12_WR(0x3C, sb_eng_data3c_a);
+  P12_WR(0x3D, sb_eng_data3d_a);
+  P12_WR(0x3E, sb_eng_data_lo);
+  P12_WR(0x3F, sb_eng_data_hi);
   u4c_sb_desc_commit();
   (void)P12_RD(0x34);
-  eng_a308(0x34, PR(0x0B1A));
+  eng_a308(0x34, sb_eng_data_hi);
   eng_a2df(0x35, 0x08);
-  P12_WR(0x3C, PR(0x0B13));
-  P12_WR(0x3D, PR(0x0B14));
-  P12_WR(0x3E, PR(0x0B15));
-  P12_WR(0x3F, PR(0x0B16));
+  P12_WR(0x3C, sb_eng_data3c_b);
+  P12_WR(0x3D, sb_eng_data3d_b);
+  P12_WR(0x3E, sb_eng_data3e_b);
+  P12_WR(0x3F, sb_eng_data3f_b);
   u4c_sb_desc_commit();
 }
 
 /* Per-route descriptor latch. */
 static void u4c_d556(void) {
-  if (PR(0x09FA) & 0x02) {
+  if (u4_route_mode & 0x02) {
     PR(0x0250) = 0x02; PR(0x0251) = 0xC3;
   }
-  if (PR(0x09F9) & 0x80) {
-    PR(0x0247) = PR(0x0B19); PR(0x0248) = PR(0x0B1A);
+  if (u4_mode_flag & 0x80) {
+    PR(0x0247) = sb_eng_data_lo; PR(0x0248) = sb_eng_data_hi;
   }
 }
 
 /* Tunnel/lane-rate train path: width ramp + bounded PHY-lock wait + E710 rate latch + link-up. */
 static void u4c_bcd7_tail(void) {
-  if (PR(0x09FA) & 0x81) {
+  if (u4_route_mode & 0x81) {
     REG_CPU_MODE_NEXT &= 0xEF;
     sb_pcie_width_ramp(0x0F);
-    if (PR(0x0AF1) & 0x10) {
+    if (u4_connect_gate & 0x10) {
       uint16_t g = 0;
       while (((REG_UART_TFBF & 0x1F) != 0x10) && ++g < 0x0800);
       g = 0;
@@ -381,21 +381,21 @@ static void sb_assert(void) {
   u4c_edbd();
   P1_SET(0x0000, 0x02);
   u4c_e5b0();
-  boot_phy_dd42((PR(0x09FA) & 0x02) ? 2 : 1);
+  boot_phy_dd42((u4_route_mode & 0x02) ? 2 : 1);
 
   u4c_bcd7_tail();
 
-  { uint8_t route_flags = PR(0x09FA);
+  { uint8_t route_flags = u4_route_mode;
     if (route_flags & 0x02) {
       PR(0x924C) = (PR(0x924C) & 0xF7) | 0x08;
     }
   }
 
-  PR(0x09FB) = 0x02;
+  u4_lane_gate_sel = 0x02;
   u4c_ccb3(0x81);
   u4c_c270(0x81);
   u4c_d556();
-  PR(0x07FF) = 0;
+  pd_cm_dispatch_sel = 0;
   sb_lane_flip_init();
   sb_block_init();
   sb_asserted = 1;
@@ -411,8 +411,8 @@ static void sb_assert(void) {
   uart_puts("]");
 
   uart_puts("[HMSB:");
-  uart_puthex(PR(0x0AF1)); uart_puthex(REG_INT_PCIE_NVME); uart_puthex(REG_PHY_MODE_E302);
-  uart_puthex(PR(0x09F9)); uart_puthex(PR(0x09FA)); uart_puthex(REG_NVME_EVENT_STATUS);
+  uart_puthex(u4_connect_gate); uart_puthex(REG_INT_PCIE_NVME); uart_puthex(REG_PHY_MODE_E302);
+  uart_puthex(u4_mode_flag); uart_puthex(u4_route_mode); uart_puthex(REG_NVME_EVENT_STATUS);
   uart_puthex(REG_USB_PHY_CTRL_91C0); uart_puthex(REG_PHY_COMPLETION_E318);
   uart_putc('|');
   { uint16_t off; for (off = 0; off < 0x100; off++) uart_puthex(SB_RD(off)); }

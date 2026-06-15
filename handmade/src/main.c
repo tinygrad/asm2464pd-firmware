@@ -5,6 +5,7 @@
 
 #include "types.h"
 #include "registers.h"
+#include "usb4_state.h"
 #include "usb.h"
 #include "gpio.h"
 
@@ -620,7 +621,7 @@ void main(void) {
           if (XDATA_REG8V(0x06ED) == prev) break;
       } }
       // cb10 tail: clear the in-flight e461 token once the host has posted its descriptor.
-      if (PR(0x072A) != 0) (void)u4lb_eda0();
+      if (sb_cdf5_substate_arm != 0) (void)u4lb_eda0();
       IE |= IE_EA;
       // Track FSM stall: count when 0x06ED makes no progress, reset when it advances.
       if (XDATA_REG8V(0x06ED) == fsm_before) { if (fsm_stall < 0xFF) fsm_stall++; }

@@ -92,28 +92,28 @@ static void cc_ctrl_enable_events(void) {
 /* Reset the PD policy-engine state block, set substate=init, seed timers, enable CC events. */
 static void pd_internal_state_init(void) {
   uart_puts("[InternalPD_StateInit]");
-  PR(0x07B7) = 0; PR(0x07B8) = 0;
-  PR(0x07C3) = 0; PR(0x07C4) = 0;
-  PR(0x07C7) = 0;
-  PR(0x07C5) = 0;
-  PR(0x07C2) = 0;
-  PR(0x07C1) = 0;
-  PR(0x07E3) = 0;
-  PR(0x07BD) = 1;
-  PR(0x07D5) = (REG_CMD_CTRL_E400 & 0x40) ? 0x10 : 0x01;
-  if (PR(0x07DE) == 0) PR(0x07CA) = 2;
-  PR(0x07DE) = 0; PR(0x07DF) = 0;
-  PR(0x07B9) = 0; PR(0x07BA) = 0;
-  PR(0x07CC) = 0;
-  PR(0x07CB) = 0;
-  PR(0x07CD) = 0; PR(0x07CE) = 0; PR(0x07CF) = 0;
-  PR(0x07BB) = 0;
-  PR(0x07C8) = 0;
-  PR(0x07BE) = 0;
-  PR(0x07BC) = 0;
+  pd_tx_staged_pending = 0; pd_contract_state = 0;
+  pd_tx_msgid_counter = 0; pd_tx_msg_len = 0;
+  pd_selected_pdo_idx = 0;
+  pd_pdo_selection_valid = 0;
+  pd_rx_num_data_obj = 0;
+  pd_rx_slot_idx = 0;
+  pd_state_07e3 = 0;
+  pd_msg_substate = 1;
+  pd_rx_slot_mask = (REG_CMD_CTRL_E400 & 0x40) ? 0x10 : 0x01;
+  if (pd_softreset_pending == 0) pd_sop_field = 2;
+  pd_softreset_pending = 0; pd_hardreset_done = 0;
+  u4_connect_route_latch = 0; u4_enter_usb_accepted = 0;
+  u4_route_confirm_07cc = 0;
+  pd_state_07cb = 0;
+  u4_confirm_input_cd = 0; u4_confirm_input_ce = 0; u4_confirm_input_cf = 0;
+  u4_connect_pending = 0;
+  pd_bist_mode = 0;
+  pd_usb3_fallback_flag = 0;
+  pd_role_state = 0;
   cc_ctrl_enable_events();
-  PR(0x07E0) = 5; PR(0x07E1) = 0; PR(0x07E2) = 0;
-  PR(0x07DA) = 1; PR(0x07DB) = 0x2C; PR(0x07DC) = 0; PR(0x07DD) = 0x64;
+  pd_timer_e = 5; pd_timer_f = 0; pd_timer_g = 0;
+  pd_timer_a = 1; pd_timer_b = 0x2C; pd_timer_c = 0; pd_timer_d = 0x64;
 }
 
 /* Transmit a USB-PD HARD RESET to force the host to re-send Source_Cap. No-op once USB4 is up. */
@@ -142,7 +142,7 @@ static void pd_drive_hard_reset(void) {
   for (guard = 0; ((REG_CMD_STATUS_E402 & 0x0E) || (REG_CMD_BUSY_STATUS & 0x01)) && guard < 0x4000; guard++);
   REG_CMD_BUSY_STATUS |= 0x01;
   for (guard = 0; (REG_CMD_BUSY_STATUS & 0x01) && guard < 0x4000; guard++);
-  PR(0x07DF) = 1;
+  pd_hardreset_done = 1;
 }
 
 /* Route the C806/C80A PD/system interrupt aggregate to the 8051 EX1 line so INT1 fires. */
@@ -157,7 +157,7 @@ static void pd_int1_enable_group(void) {
 /* Top-level keystone bring-up: enable INT1, force USB4 mode, init PD PHY + state. */
 static void pd_keystone_init(void) {
   pd_int1_enable_group();
-  PR(0x09F9) = 0x87;
+  u4_mode_flag = 0x87;
   cc_pd_phy_term_init();
   pd_internal_state_init();
 }
@@ -197,8 +197,8 @@ static uint8_t usb4_mode_entry_commit(void);
 
 /* CC23.1 re-init / SB-reconnect event. */
 static void cc_cc23_reinit_event(void) {
-  PR(0x07E8) = 0x00;
-  PR(0x0B2F) = 0x01;
+  u4_connect_gate_e8 = 0x00;
+  u4_reinit_pending = 0x01;
 }
 
 /* Type-C error-recovery (diagnostic print only). */
@@ -214,7 +214,7 @@ static void pd_cc81_hard_reset_4(void) {
 
 /* Enqueue a PD control message. */
 static void pd_queue_ctrl_msg(uint8_t code) {
-  PR(0x0AA3) = code;
+  u4_routerop_op_len = code;
   REG_PHY_LINK_CTRL = 0x00;
 }
 
@@ -224,7 +224,7 @@ static void cc_cc99_default_event(void) {
 
 /* CCF9.1 sub-demux on 0x0A9D (copied from 0x0B1B). */
 static void cc_ccf9_subdemux(void) {
-  PR(0x0A9D) = PR(0x0B1B);
+  u4_routerop_desc0 = cc_subdemux_src;
 }
 
 /* INT1 timer-tick PD/USB4 policy-engine tick: services the 6 CC per-channel event regs (bit1=event). */
@@ -245,10 +245,10 @@ static void cc_pd_timer_tick(void) {
     REG_TIMER3_CSR = 0x02;
   }
   if (REG_CPU_INT_CTRL & 0x02) {                 /* CC81.1: CC attach/detach */
-    uint8_t substate = PR(0x07BD);
+    uint8_t substate = pd_msg_substate;
     if (substate == 0x0E || substate == 0x0D) {      /* Data_Reset / Enter_USB pending */
       REG_CPU_INT_CTRL = 0x02;
-      if (PR(0x07BC) != 0) pd_queue_ctrl_msg(0x3B);
+      if (pd_role_state != 0) pd_queue_ctrl_msg(0x3B);
       cc_state_full_reset();
     } else {
       pd_cc81_hard_reset_4();
@@ -258,19 +258,19 @@ static void cc_pd_timer_tick(void) {
   if (REG_CPU_DMA_INT & 0x02) {                 /* CC91.1: 1s sender-response timeout -> commit USB4 mode */
     REG_CPU_DMA_INT = 0x02;
     uart_puts("[1 sec time out]\n");
-    PR(0x07BB) = 0x01;
-    PR(0x09FA) = 0x04;
-    PR(0x0AE2) = usb4_mode_entry_commit();
+    u4_connect_pending = 0x01;
+    u4_route_mode = 0x04;
+    u4_entered_usb_mode = usb4_mode_entry_commit();
   }
   if (REG_XFER_DMA_CFG & 0x02) {                 /* CC99.1: role-dependent reset */
-    uint8_t role = PR(0x07BC);
+    uint8_t role = pd_role_state;
     if (role == 0x02) { pd_queue_ctrl_msg(0x3C); pd_drive_hard_reset(); }
     else if (role == 0x03) { pd_queue_ctrl_msg(0xFF); }
     else { cc_cc99_default_event(); REG_XFER_DMA_CFG = 0x02; }
   }
   if (REG_XFER2_DMA_STATUS & 0x02) {                 /* CCD9.1 */
     REG_XFER2_DMA_STATUS = 0x02;
-    PR(0x0719) = 0x02;
+    e461_inflight_token = 0x02;
   }
   if (REG_CPU_EXT_STATUS & 0x02) {                 /* CCF9.1 */
     REG_CPU_EXT_STATUS = 0x02;

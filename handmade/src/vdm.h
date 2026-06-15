@@ -15,7 +15,7 @@ static void usb4_connect_u4(void);
 /* Build the VDM-header VDO into the command registers. */
 static void pd_vdm_hdr_build(uint8_t cmdtype, uint8_t cmd) {
   REG_CMD_PARAM = (uint8_t)((((uint8_t)(cmdtype << 6)) | cmd) & 0xCF);
-  REG_CMD_STATUS = (PR(0x07CA) == 1) ? 0x80 : 0xA8;
+  REG_CMD_STATUS = (pd_sop_field == 1) ? 0x80 : 0xA8;
   REG_CMD_ISSUE = 0x00;
   REG_CMD_TAG = 0xFF;
 }
@@ -26,12 +26,12 @@ static void vdm_nak(uint8_t cmd, uint8_t svid_lo, uint8_t svid_hi) {
   pd_vdm_hdr_build(2, cmd);
   REG_CMD_ISSUE = svid_lo;
   REG_CMD_TAG = svid_hi;
-  PR(0x07C4) = 6;
+  pd_tx_msg_len = 6;
 }
 
 /* Discover_Identity responder: build the ID ACK VDO chain. */
 static void vdm_build_discover_id(void) {
-  uint8_t sop = PR(0x07CA);
+  uint8_t sop = pd_sop_field;
   uint8_t mode_bits, gen_bits;
 
   pd_tx_set_sop_header((sop == 2) ? 5 : 4, 0x0F);
@@ -40,42 +40,42 @@ static void vdm_build_discover_id(void) {
   REG_CMD_LBA_0 = VDM_VID_LO;
   REG_CMD_LBA_1 = VDM_VID_HI;
   REG_CMD_LBA_2 = (sop == 2) ? 0x40 : 0x00;
-  if (PR(0x07BC) == 0 && (PR(0x09F9) & 0x80))
+  if (pd_role_state == 0 && (u4_mode_flag & 0x80))
     REG_CMD_LBA_3 = 0x54;
   else
     REG_CMD_LBA_3 = 0x50;
 
   REG_CMD_COUNT_LOW = 0; REG_CMD_COUNT_HIGH = 0; REG_CMD_LENGTH_LOW = 0; REG_CMD_LENGTH_HIGH = 0; REG_CMD_RESP_TAG = 0;
 
-  REG_CMD_CTRL = PR(0x0A57);
-  REG_CMD_TIMEOUT = PR(0x0A58);
+  REG_CMD_CTRL = pd_product_pid_lo;
+  REG_CMD_TIMEOUT = pd_product_pid_hi;
 
   if (sop == 2) {
-    mode_bits = PR(0x09F9);
+    mode_bits = u4_mode_flag;
     gen_bits = mode_bits & 0x03;
-    PR(0x0AA8) = (gen_bits != 0) ? 3 : 2;
-    if (mode_bits & 0x80) PR(0x0AA8) |= 0x08;
-    if (PR(0x07BC) == 0) REG_CMD_PARAM_L = PR(0x0AA8);
+    sb_tx_cmd = (gen_bits != 0) ? 3 : 2;
+    if (mode_bits & 0x80) sb_tx_cmd |= 0x08;
+    if (pd_role_state == 0) REG_CMD_PARAM_L = sb_tx_cmd;
     else                 REG_CMD_PARAM_L = 2;
     REG_CMD_PARAM_H = 0;
     REG_CMD_EXT_PARAM_0 = 0x80;
-    if (PR(0x07BC) == 0 && gen_bits != 0) REG_CMD_EXT_PARAM_1 = 0x6D;
+    if (pd_role_state == 0 && gen_bits != 0) REG_CMD_EXT_PARAM_1 = 0x6D;
     else                                  REG_CMD_EXT_PARAM_1 = 0x65;
   }
 
-  PR(0x07C4) = (sop == 2) ? 0x16 : 0x12;
+  pd_tx_msg_len = (sop == 2) ? 0x16 : 0x12;
 }
 
 /* Discover_SVIDs responder: ACK with SVID 0x8087, else NAK. */
 static void vdm_build_discover_sids(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
-  if (((uint8_t)~rx_svid_hi | rx_svid_lo) == 0 && (PR(0x09F9) & 0x80)) {
+  if (((uint8_t)~rx_svid_hi | rx_svid_lo) == 0 && (u4_mode_flag & 0x80)) {
     pd_tx_set_sop_header(2, 0x0F);
     pd_vdm_hdr_build(1, 2);
     REG_CMD_LBA_0 = 0x00;
     REG_CMD_LBA_1 = 0x00;
     REG_CMD_LBA_2 = VDM_TBT_SVID_LO;
     REG_CMD_LBA_3 = VDM_TBT_SVID_HI;
-    PR(0x07C4) = 0x0A;
+    pd_tx_msg_len = 0x0A;
     return;
   }
   vdm_nak(2, rx_svid_lo, rx_svid_hi);
@@ -83,7 +83,7 @@ static void vdm_build_discover_sids(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
 
 /* Discover_Modes responder: ACK TBT3 mode for SVID 0x8087, else NAK. */
 static void vdm_build_discover_modes(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
-  if (rx_svid_hi == 0x80 && rx_svid_lo == 0x87 && (PR(0x09F9) & 0x80)) {
+  if (rx_svid_hi == 0x80 && rx_svid_lo == 0x87 && (u4_mode_flag & 0x80)) {
     pd_tx_set_sop_header(2, 0x0F);
     pd_vdm_hdr_build(1, 3);
     REG_CMD_ISSUE = VDM_TBT_SVID_LO;
@@ -92,7 +92,7 @@ static void vdm_build_discover_modes(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
     REG_CMD_LBA_1 = 0x00;
     REG_CMD_LBA_2 = 0x00;
     REG_CMD_LBA_3 = 0x00;
-    PR(0x07C4) = 0x0A;
+    pd_tx_msg_len = 0x0A;
     return;
   }
   vdm_nak(3, rx_svid_lo, rx_svid_hi);
@@ -100,40 +100,40 @@ static void vdm_build_discover_modes(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
 
 /* Device-side USB4 mode-entry latch. */
 static uint8_t usb4_mode_entry_commit(void) {
-  uint8_t mode_flags = PR(0x09F9);
+  uint8_t mode_flags = u4_mode_flag;
   if (mode_flags & 0x40) {
-    PR(0x0ACD) = 3;
-    PR(0x0ACE) = 1;
+    u4_mode_entry_class = 3;
+    u4_mode_entry_param = 1;
     PR(0x92E1) = 0x10;
     REG_USB_INT_MASK_9090 &= 0x7F;
     return 4;
   }
-  PR(0x0ACD) = 1;
-  PR(0x0ACE) = ((mode_flags & 0x81) == 0) ? 0x0D : 0x05;
+  u4_mode_entry_class = 1;
+  u4_mode_entry_param = ((mode_flags & 0x81) == 0) ? 0x0D : 0x05;
   return 1;
 }
 
 /* EnterMode responder: enter TBT alt-mode for SVID 0x8087, else generic ACK. */
 static void vdm_handle_enter_mode(uint8_t objpos, uint8_t svid_lo, uint8_t svid_hi) {
-  PR(0x0AA8) = svid_lo;
-  PR(0x0AA9) = svid_hi;
-  PR(0x0AAA) = objpos;
+  sb_tx_cmd = svid_lo;
+  sb_tx_byte0 = svid_hi;
+  sb_tx_byte1 = objpos;
 
-  if (svid_lo == 0x87 && svid_hi == 0x80 && (PR(0x09F9) & 0x80) && PR(0x07BC) == 0) {
+  if (svid_lo == 0x87 && svid_hi == 0x80 && (u4_mode_flag & 0x80) && pd_role_state == 0) {
     pd_tx_set_sop_header(1, 0x0F);
     pd_vdm_hdr_build(1, 4);
-    PR(0x07C4) = 6;
-    PR(0x07B9) = 1;
-    PR(0x07BB) = 1;
+    pd_tx_msg_len = 6;
+    u4_connect_route_latch = 1;
+    u4_connect_pending = 1;
     uart_puts("[Enter_TBT]");
     return;
   }
   pd_tx_set_sop_header(1, 0x0F);
   pd_vdm_hdr_build(2, 4);
-  REG_CMD_STATUS |= (PR(0x0AAA) & 0x07);
+  REG_CMD_STATUS |= (sb_tx_byte1 & 0x07);
   REG_CMD_ISSUE = svid_lo;
   REG_CMD_TAG = svid_hi;
-  PR(0x07C4) = 6;
+  pd_tx_msg_len = 6;
 }
 
 /* Enter_USB Data Message handler: latch USB4 mode, Accept, or Reject. */
@@ -144,35 +144,35 @@ static void pd_handle_enter_usb(void) {
   uint8_t mode = (uint8_t)((PR(vdo0 + 3) & 0x70) >> 4);
   uint8_t mode_flags;
 
-  PR(0x0AA6) = mode;
+  u4_routerop_port = mode;
   pd_tx_buf_clear();
 
-  mode_flags = PR(0x09F9);
+  mode_flags = u4_mode_flag;
   if ((mode_flags & 0x03) == 0) {
     REG_CMD_CFG_E405 &= 0xF8;
-    PR(0x09FA) = 4;
+    u4_route_mode = 4;
     usb4_mode_entry_commit();
-    PR(0x0AE2) = mode;
-  } else if (mode == 2 && PR(0x07BC) == 0) {
+    u4_entered_usb_mode = mode;
+  } else if (mode == 2 && pd_role_state == 0) {
     pd_tx_set_sop_header(0, 3);
     if (cable_cur) {
-      PR(0x07BB) = 1;
+      u4_connect_pending = 1;
       uart_puts("[Enter_USB 4]");
-      PR(0x07BA) = 1;
-      PR(0x09FA) |= 0x04;
-      PR(0x07E8) = 1;
+      u4_enter_usb_accepted = 1;
+      u4_route_mode |= 0x04;
+      u4_connect_gate_e8 = 1;
     }
   } else {
     pd_tx_set_sop_header(0, 4);
   }
 
-  PR(0x07C4) = 2;
+  pd_tx_msg_len = 2;
   pd_tx_commit_engine();
 
-  if (PR(0x07BA) != 0) {
+  if (u4_enter_usb_accepted != 0) {
     uart_puts("[Connect_U4]");
-    if (PR(0x07ED) != 0) {
-      PR(0x07ED) = 0;
+    if (u4_connect_oneshot_suppress != 0) {
+      u4_connect_oneshot_suppress = 0;
     } else {
       usb4_connect_u4();
     }
@@ -202,12 +202,12 @@ static void vdm_tx_dispatch(void) {
   objpos  = PR(vdo0 + 1) & 0x07;
   svid_lo = PR(vdo0 + 2);
   svid_hi = PR(vdo0 + 3);
-  PR(0x0AA5) = cmd;
-  PR(0x0AA3) = objpos;
-  PR(0x0AA6) = svid_lo;
-  PR(0x0AA7) = svid_hi;
+  u4_routerop_flag = cmd;
+  u4_routerop_op_len = objpos;
+  u4_routerop_port = svid_lo;
+  u4_routerop_svid_hi = svid_hi;
 
-  if (PR(0x07BC) != 0) {
+  if (pd_role_state != 0) {
     vdm_nak(cmd, svid_lo, svid_hi);
     vdm_tx_strobe_commit();
     return;
