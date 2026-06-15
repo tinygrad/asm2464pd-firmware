@@ -699,6 +699,7 @@ void main(void) {
    * uses those cells LIVE (e869/d47f/ee29 recovery); is_usb2/dma_dwords moved to the XSEG. (audit C2) */
   { uint8_t z; for (z = 0; z <= (0x0B58 - 0x0B45); z++) XDATA_REG8V(0x0B45 + z) = 0; }
   sb_con_print_budget = 6;
+  af38_s3_budget = 30;         /* [a3] state-3 af38 TX dump budget (GOAL-1 stock-vs-handmade compare) */
   u4lb_edf5_print_budget = 40; /* [EDF5] route-query dump budget */
   u4lb_s5_print_budget = 60;   /* [S5] state-5 CL-walker dump budget (XSEG now in chip-CM RAM) */
   isr_dbg_budget = 20; isr_dbg_budget2 = 20; isr_dbg_budget3 = 20;   /* TRIAGE: post-walker hang */
@@ -715,15 +716,6 @@ void main(void) {
   uint8_t kicks = 0;
   uint8_t sb_diag_count = 0;
   while (1) {
-    /* DEADLOCK-BREAK (SESSION 2026-06-11i): the C80A.5 storm starves this loop SO hard it never ran a
-     * single iteration after [SB Init] (HW-confirmed). So the ISR's FIRST connect consequence now
-     * masks IE_EX1 itself (sb_ex1_mask_pending=2) and the storm stops on that IRET, letting THIS loop
-     * finally run. Print a marker the first time we observe the masked state. The loop pumps the armed
-     * FSM (0x06ED=3 -> cb10->e672->[ConnRout]) below, then re-enables IE_EX1 once it advances. */
-    if (sb_ex1_mask_pending == 2 && !XDATA_REG8V(0x0B54)) {
-      XDATA_REG8V(0x0B54) = 1;
-      uart_puts("[EX1masked 6ed="); uart_puthex(XDATA_REG8V(0x06ED)); uart_puts("]\n");
-    }
     /* ===== FIX#3 (GOFWD): FSM-advance HOISTED to the TOP of the loop, before any delay/prints =====
      * Stock's super-loop (main_boot_and_superloop@0x2FB4) runs `if((0x09F9&0x83)&&0x06EC){EA=0;cb10();
      * ...EA=1;}` FIRST, delay-free and UART-free, so cb10->e672->[ConnRout]->b0b4 runs within us of the
@@ -754,26 +746,35 @@ void main(void) {
       { uint8_t pmp, prev; for (pmp = 0; pmp < 4; pmp++) {
           prev = XDATA_REG8V(0x06ED);
           u4lb_e672();
-          if (XDATA_REG8V(0x06ED) == 5) uart_putc('P');   /* post-e672 at state-5 (unbudgeted, 1 per pump break) */
           if (XDATA_REG8V(0x06ED) == prev) break;
       } }
+      /* cb10 TAIL (CODE_BANK1::cbb4): if([0x072A]!=0) cdf5(); cdf5's load-bearing head = LCALL eda0,
+       * which clears the in-flight e461 token 0x0719 once the host has posted its descriptor
+       * ([0x0775]!=0). The handmade omitted this entirely, so the token set by the FIRST e461 push
+       * (LOOP1 0x10 / LOOP2 0x10) was never cleared and every later push (LOOP1 0x50/0x90, LOOP2
+       * 0x20/0x50) parked forever. 0x072A is armed =1 in state-3 (a74b) and stays set, so this polls
+       * every super-loop iteration -- byte-true to stock (cdf5's 0x072A-clear is the uncommon
+       * R5==[0x07]!=1 restage path; the common path is eda0-only, leaving 0x072A set). */
+      if (PR(0x072A) != 0) (void)u4lb_eda0();
       IE |= IE_EA;
-      if (XDATA_REG8V(0x06ED) == 5) uart_putc('T');        /* tail reached after pump (state-5) */
       /* FIX#4 stall tracking: if the FSM made no 0x06ED progress this iteration, count toward the
        * 8a89-fallback threshold; reset the counter as soon as it advances. */
       if (XDATA_REG8V(0x06ED) == fsm_before) { if (fsm_stall < 0xFF) fsm_stall++; }
       else                                   { fsm_stall = 0; }
-      /* DEADLOCK-BREAK: while IE_EX1 is masked (sb_ex1_mask_pending==2) keep pumping the armed FSM with
-       * the storm suppressed. RE-ENABLE IE_EX1 only once the FSM has actually ADVANCED past state-3
-       * (0x06ED != 3 -> [ConnRout] confirmed and the engine moved on to b0b4/tunnel), at which point we
-       * need the SB-router lane-bond/CL0 events again. If the FSM is stuck at state-3 (the host
-       * connect-descriptor gate 0x0777!=0x0C -- host-driven per USB4_GOFWD_PLAN B#4), KEEP EX1 masked
-       * so the loop stays alive and keeps pumping rather than re-starving on the storm. */
-      if (sb_ex1_mask_pending == 2 && XDATA_REG8V(0x06ED) != 3) {
-        sb_ex1_mask_pending = 3;              /* 3 = done (one-shot; do not re-mask) */
-        IE |= IE_EX1;
-        uart_puts("[EX1unmask 6ed="); uart_puthex(XDATA_REG8V(0x06ED)); uart_puts("]\n");
-      }
+    }
+
+    /* [Pend Int] SB router-op responder (CODE_BANK1::a5d8), DEFERRED off the a066 INT1 ISR (sp=0x7F
+     * stack cliff -- same reason cd3f/af38/eaac run here). The ISR flags sb_pend_int_pending when it
+     * sees SB[0x26].1; we also re-check the live bit here in case the edge arrives between ISRs. W1C
+     * SB[0x26].1 + run the body in the super-loop. a5d8 reads the host's 0x0998-0x099B router-op
+     * descriptor and pushes the SB-transport TX answer (e1cb/e2b9) -- the missing piece that advances
+     * the lanes to CL0 so the PCIe tunnel / AMD GPU enumerates. Bounded; run under EA=0 like cb10. */
+    if (sb_pend_int_pending || (SB_RD(0x26) & 0x02)) {
+      sb_pend_int_pending = 0;
+      IE &= (uint8_t)~IE_EA;
+      if (SB_RD(0x26) & 0x02) SB_WR(0x26, 0x02);   /* a156: W1C SB[0x26].1 */
+      sb_a5d8_pend_int();                          /* a5d8: router-op responder */
+      IE |= IE_EA;
     }
 
     /* FIX#4 (GOFWD): bank0_8a89 drive DEFERRED off the connect critical path. In STOCK 8a89 is reached

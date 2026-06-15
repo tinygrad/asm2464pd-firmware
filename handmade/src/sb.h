@@ -157,6 +157,18 @@ static __code const uint8_t sb_drom_213d[0x64] = {
 static __code const uint8_t sb_lane_desc_21d4[0x10] = {
   0x0B,0x0B,0x0B,0x0B,0x0B,0x0B,0x0C,0x0C, 0x0C,0x0C,0x0C,0x07,0x07,0x07,0x07,0x07
 };
+/* e391 width-LUT seed tables (CODE 0x514c / 0x515f, read_memory byte-exact). STOCK CAPTURE (2026-06-15)
+ * proved e391 runs ONCE at COLD BOOT (before UART; gated 0x0776==0 which only holds at first boot before
+ * the loader sets it to 1) seeding XDATA[0x06F2..0x0704]; the values persist into state-3 (06FE=0x03,
+ * 06FF=0x04). af38 ORs PR(0x06F2+dat50) into SBTX[1] (the connect descriptor's sub-byte the host validates).
+ * The handmade's gated e391 (usb4_lanebond.h) runs in the super-loop AFTER the a066-ISR af38, so the
+ * state-3 af38 read the UNSEEDED 0x55 -> SBTX[1]=0x55 (vs stock 0x03). Seed the LUT HERE at SB init. */
+static __code const uint8_t sb_width_lut_514c[0x13] = {
+  0x04,0x04,0x00,0x04,0x04,0x00,0x00,0x00, 0x04,0x04,0x01,0x00, 0x03,0x04,0x00,0x04, 0x00,0x00,0x10
+};
+static __code const uint8_t sb_branchA_gate_515f[0x13] = {
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00, 0x01,0x01,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x01
+};
 
 static void sb_rom_descriptor_load(void) {
   uint8_t i;
@@ -166,7 +178,17 @@ static void sb_rom_descriptor_load(void) {
   PR(0x0805) = PR(0x0A58);
   /* if not USB4-cap (0x09F9.7 clear): clear DROM[0x1B].1 */
   if (!(PR(0x09F9) & 0x80)) PR(0x081B) &= ~0x02;
-  for (i = 0; i < 0x10; i++) PR(0x0700 + i) = sb_lane_desc_21d4[i];
+  /* PHASE-DIFF FIX (byte-true, self-verified): stock b7e4 `MOV A,#0x1a; ADD A,idx; LCALL 99d8` + 99d8
+   * sets DPH=0x07 -> dest = 0x0700+(0x1A+i) = 0x071A+i, NOT 0x0700+i. The old base left 0x071A..0x0729
+   * (the 81d4 walk-value source work[0x071A+r7]) zero AND clobbered 0x0700..0x070F. */
+  for (i = 0; i < 0x10; i++) PR(0x071A + i) = sb_lane_desc_21d4[i];
+  /* STOCK-CAPTURE FIX: seed the af38 width LUT (0x06F2+i) + BRANCH-A presence gate (0x0705+i) at SB init,
+   * mirroring stock's cold-boot e391 (the only 0x06FE/0x0705 writer). Without this the state-3 af38 SBTX[1]
+   * for the 0x0C connect descriptor was the uninit 0x55 instead of 0x03, so the host never escalated 05->63. */
+  for (i = 0; i < 0x13; i++) {
+    PR((uint16_t)(0x06F2u + i)) = sb_width_lut_514c[i];
+    PR((uint16_t)(0x0705u + i)) = sb_branchA_gate_515f[i];
+  }
   /* b7a4 0x081A.5 (20G lane-present bit): if 0x09F5 set, SET bit5.
    * NOTE: stock also has a conditional clear-back here (clear bit5 if
    *   (0x07BA!=0 && 0x07CC<3) || (0x07B9!=0 && 0x07CF in {1,2})) that is OMITTED until 0x07CC is
@@ -193,6 +215,9 @@ static void sb_rom_descriptor_load(void) {
   SB_WR(0x66, 0x08); SB_WR(0x66, 0x40);          /* SB[0x66]=8 then 0x40 */
   PR(0x06EE) = SB_RD(0x24) & 0x01;               /* 0x6EE = SB[0x24].0 */
   PR(0x06EF) = SB_RD(0x80) & 0x01;               /* 0x6EF = SB[0x80].0 */
+  PR(0x06F1) = (uint8_t)((SB_RD(0x24) & 0x06) >> 1);  /* PHASE-DIFF FIX: b8b7 LCALL 999e = 0x06F1 =
+                                                       * (SB[0x24]&6)>>1 (the active-PORT latch). a066
+                                                       * services a connect channel only when 0x06F1==idx. */
   PR(0x0719) = 0;
   REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;          /* 97ef: CCD9 strobe */
   PR(0x074E) = 0; PR(0x074F) = 0;                /* 9874: zero per-lane CL0 latches */
@@ -212,7 +237,9 @@ static void sb_block_init(void) {
    * c306(0xC20E) zeroes C20E/C20F/C210 + c307(0,0xC214) zeroes C214/C215/C216; C211/C212/C217
    * are NOT written (left at default). */
   REG_PHY_RXPLL_RESET = 0; REG_PHY_CTRL_C20F = 0; PR(0xC210) = 0;   /* c306(0xC20E) */
+  PR(0xC211) = 0; PR(0xC212) = 0;                  /* PHASE-DIFF FIX: e0d9 R7=0/e11d path also zeroes these */
   PR(0xC214) = 0; PR(0xC215) = 0; PR(0xC216) = 0;   /* c307(0, 0xC214) */
+  PR(0xC217) = 0;                                  /* PHASE-DIFF FIX: e11d zeroes C217 too (C213 untouched) */
 
   /* page-1 0x010100 head: clear bits 0,4,6,7 (net &= ~0xD1) */
   P1_CLR(0x0100, 0x10);
@@ -221,13 +248,21 @@ static void sb_block_init(void) {
   P1_CLR(0x0100, 0x01);
 
   /* --- SB block writes (DPX=1) --- */
-  SB_WR(0x2C, 0x01); SB_WR(0x2C, 0x02);          /* net SB[0x2c]=2 */
+  /* FAITHFUL: stock bb37 @bb57 calls func_9797 (which hardcodes R1=0x2c, A=0x01 -> SB[0x2C]=0x01),
+   * then bb5a INC A / bb5b LCALL 0be6 -> SB[0x2C]=0x02. So stock bb37 DOES write SB[0x2C]=0x01;0x02
+   * here, BEFORE the bb5e SB[0x26] write. This is NOT spurious. (A prior session wrongly deleted it,
+   * misreading func_9797 as not touching SB[0x2C].) SB[0x2C].1 reads back 0xF1 in the stock trace not
+   * because stock avoids setting it, but because the HW/host auto-clears bit1 once the descriptor is
+   * consumed — stock sets bit1 in THREE places (bb57, b230@b35d, a066@a0f2) yet the trace is always
+   * 0xF1. The handmade 0xF3 is a SYMPTOM of the host never advancing (SB[0x18] stuck at 0x04), not the
+   * cause. Do NOT delete this write. */
+  SB_WR(0x2C, 0x01); SB_WR(0x2C, 0x02);          /* bb57-bb5b: func_9797(0x2C<-1) + inc + 0be6(0x2C<-2) */
   SB_WR(0x26, 0x02);
   SB_WR(0x66, 0x01);                              /* transient (overridden below) */
   SB_CLR(0x2D, 0x01); SB_WR(0x2D, (SB_RD(0x2D) & 0xFD) | 0x02);  /* net b0=0, b1=1 */
   SB_CLR(0x29, 0x08);
   SB_CLR(0x2B, 0x08);
-  SB_CLR(0xC8, 0xF0);                             /* clr bits 4,5,6,7 */
+  SB_CLR(0xC8, 0x90);                             /* PHASE-DIFF FIX: stock bb80 96b2(clr bit4)+anl 0x7f = clr bits 4,7 ONLY (not 5,6) */
   SB_CLR(0x27, 0x02);
   SB_CLR(0x67, 0x81);                             /* clr bits 0,7 */
   SB_WR(0x81, 0x08);
@@ -280,6 +315,17 @@ static void sb_block_init(void) {
   /* bc51: if (0x09F7 < 2) lcall func_05a2 (trampoline -> bank1 0xC523 connect-state helper).
    * Not transcribed: it does NOT touch the SB-page target bytes (0xBA/0xBD set above), and 0x09F7
    * is >=2 on the happy connect path. Documented omission. */
+
+  /* [KB] GOAL-2 KEYSTONE READBACK: immediately after the [SB Init] keystone writes, read back the SB
+   * cells we just wrote (SB[0x81]=0x08, SB[0x66]=0x20, SB[0x9E]=0x20) plus SB[0x2C]/[0x2D]/[0xC9].
+   * If these read the written value -> the writes LAND (real cells). If they read 0/garbage -> the
+   * writes are write-only strobes (or not landing). Same readback added to stock for the discriminator. */
+  uart_puts("[KB 81="); uart_puthex(SB_RD(0x81));
+  uart_puts(" 66=");    uart_puthex(SB_RD(0x66));
+  uart_puts(" 9E=");    uart_puthex(SB_RD(0x9E));
+  uart_puts(" 2C=");    uart_puthex(SB_RD(0x2C));
+  uart_puts(" 2D=");    uart_puthex(SB_RD(0x2D));
+  uart_puts(" C9=");    uart_puthex(SB_RD(0xC9)); uart_putc(']');
 }
 
 /* d436: program B434 lane-ramp x4 + B436. Stock ramps B434 up to `width` (0xF) across 4 lanes. */

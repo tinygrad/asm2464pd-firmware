@@ -109,7 +109,14 @@ static uint8_t u4lb_edf5_route_query(void) {
   PR(0x0AA8) = 5;                              /* 0xAA8 = param_3 = 5 (-> SB[0x15] TX command) */
   PR(0x0AA9) = 0x0C;                           /* 0xAA9 = R7 = 0x0C (-> SBTX[0]) */
   PR(0x0AAA) = 3;                              /* 0xAAA = R5 = 3  (-> SBTX[1] base) */
-  sb_transport_substate_poll();                /* e2c4: d4cd (drain pending SB[0x28].3 edges) */
+  /* e2c4 (byte-true, route wf area-D blocker fix): the state-3 edf5 route-query push MUST drain the host
+   * transport+link edges via the REAL d4cd (cd3f->af38/eaac) -- same as stock e2b9@e2c4 / e1cb@e1d6, and
+   * same as the state-5 e461 push (which already does this). It was wrongly stubbed to the no-op
+   * sb_transport_substate_poll(). Without it, af38 BRANCH-A never accumulates the host descriptor into
+   * work[0x0800] across the SB[0x18] climb 00->05->05, so the device never emits the 0104 6324 TX that
+   * drives the host to SB[0x18]=0x63 -> the route topology never establishes -> truncated host descriptor
+   * (0C0300F3) -> no state-5 0x87 CL grant. */
+  sb_d4cd_transport_edges();                   /* e2c4: LCALL 0xd4cd */
 
   SBTX_WR(0, PR(0x0AA9));                       /* 997e: SBTX[0] = 0xAA9 (=7) */
   /* 9923(A=0xAAB(=0), 0xAAA(=5)): SBTX[1] = 5; returns 0 -> JZ branch (e2d7) */
@@ -195,6 +202,18 @@ static uint8_t u4lb_edf5_route_query(void) {
  * config) -- they configure the tunnel adapter; reproduced as a marker so the [ConnRout] confirm +
  * 0x0718 + advance still happen and the FSM proceeds to state 4.
  * ==================================================================================== */
+
+/* e391 LUT-seed ROM tables (read_memory byte-exact from fw_tinygrad.bin):
+ *   CODE 0x514c[0x13] = per-descriptor-type WIDTH LUT -> XDATA[0x06F2+i]. af38 ORs LUT[dat50] into
+ *     SBTX[1] (976e read). index 0x0C->0x03, 0x0D->0x04 (the host-expected device TX 0D04 header).
+ *   CODE 0x515f[0x13] = the af38 BRANCH-A presence gate -> XDATA[0x0705+i] (afca: !=0 required). */
+static __code const uint8_t u4lb_width_lut_514c[0x13] = {
+  0x04,0x04,0x00,0x04,0x04,0x00,0x00,0x00, 0x04,0x04,0x01,0x00, 0x03,0x04,0x00,0x04, 0x00,0x00,0x10
+};
+static __code const uint8_t u4lb_branchA_gate_515f[0x13] = {
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00, 0x01,0x01,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x01
+};
+
 static void u4lb_cm_conn_routing_setup(void) {
   uint8_t st = PR(0x0758);
   if (st == 0x10) {
@@ -240,6 +259,14 @@ static void u4lb_cm_conn_routing_setup(void) {
    * branch (param_2==0): gate 0x0777==0x0C else 0x0758=0x10/ret. */
   if (PR(0x0777) != 0x0C) { PR(0x0758) = 0x10; return; }
 
+  /* TRACE: the e391-enable chain. 0x0776 clears to 0 (-> e391 LUT seed) ONLY if 0x07B9!=0 AND
+   * ((0x0778&0x7f)==2 || (0x081B&1)==0 || (0x07CE!=0 && 0x07CD==0)). Show all inputs. */
+  { static __xdata uint8_t crbud = 6;
+    if (crbud) { crbud--;
+      uart_puts("\r\n[cr B9="); uart_puthex(PR(0x07B9)); uart_puts(" 778="); uart_puthex(PR(0x0778));
+      uart_puts(" 81B="); uart_puthex(PR(0x081B)); uart_puts(" CE="); uart_puthex(PR(0x07CE));
+      uart_puts(" CD="); uart_puthex(PR(0x07CD)); uart_puts(" 776="); uart_puthex(PR(0x0776)); uart_putc(']'); } }
+
   /* 0x0776 connect-confirm computation (a850..): if 0x07B9 set, validate. */
   if (PR(0x07B9) != 0) {
     uint8_t b778 = PR(0x0778);
@@ -251,9 +278,28 @@ static void u4lb_cm_conn_routing_setup(void) {
       SB_CLR(0xED, 0x80);
     }
   }
-  /* if 0x0776==0 -> e391() routing-descriptor seed (ROM 0x514c/0x515f -> PHY descriptor regs +
-   * d221 PHY load). Deep PHY layer -- documented-omitted (it seeds the routing descriptor the
-   * tunnel adapter reads; the [ConnRout]/0x0718 confirm below is the load-bearing FSM effect). */
+  /* a863: if (0x0776 == 0) e391(). GAP-1 ROOT CAUSE FIX (2026-06-15): e391 was DOCUMENTED-OMITTED
+   * as "deep PHY layer", but its FIRST action (e392-e3c0) is the per-descriptor WIDTH-LUT SEED that
+   * af38 reads -- NOT PHY. Byte-true from CODE_BANK1::e391:
+   *   for i=0..0x12: XDATA[0x06F2+i] = ROM[0x514c+i];   (the 976e width LUT af38 ORs into SBTX[1])
+   *                  XDATA[0x0705+i] = ROM[0x515f+i];   (the af38 BRANCH-A `0x0705+dat50!=0` gate)
+   * With it omitted, XDATA[0x06FF] read uninit 0x55 -> af38 set SBTX[1]=0x55 -> device TX = 0D55 0000
+   * 8080 (host expects 0D04). ROM[0x514c][0x0D]=0x04, [0x0C]=0x03 (read_memory byte-exact). The Loop-2
+   * tail (e3c3-e3d6: d221(0x26+i)=0 x8) IS the deep-PHY descriptor zero and stays placeholder-omitted.
+   * Stock gate: 0x0776==0 (cleared above on the 0x07B9 path / left by b7a4). Port the seed loop. */
+  if (PR(0x0776) == 0) {   /* stock a863/a867 gate. NOTE (cont8): the HW agent proved the FIRST state-3
+                            * divergence is af38 SBTX[1]=0x55 (handmade) vs 0x03 (stock) for the 0x0C
+                            * connect descriptor = unseeded PR(0x06FE), seeded by THIS e391 loop. But e391
+                            * runs in the super-loop AFTER the a066-ISR's first af38, so even forced it is
+                            * too late for the host-fork af38. Faithful fix needs the stock 0x07B9/0x0776
+                            * lifecycle resolved (likely stock 0x07B9!=0 -> EnterMode runs e391 early). */
+    uint8_t i;
+    for (i = 0; i < 0x13; i++) {
+      PR((uint16_t)(0x06F2u + i)) = u4lb_width_lut_514c[i];   /* e392-e3a7: XDATA[0x06F2+i] = ROM[0x514c+i] */
+      PR((uint16_t)(0x0705u + i)) = u4lb_branchA_gate_515f[i]; /* e3a8-e3bb: XDATA[0x0705+i] = ROM[0x515f+i] */
+    }
+    /* e3c3-e3d6 (Loop 2): d221(0x26+i)=0 x8 -- deep-PHY descriptor-region zero, placeholder-omitted. */
+  }
 
   /* a878: the [ConnRout] confirm print + 0x0718 ROUTE-ENABLE. */
   if (PR(0x0776) == 0 && PR(0x07CE) != 0) {
@@ -980,9 +1026,13 @@ static uint8_t u4lb_e461(void) {
     PR(0x0AA8) = PR(0x0776) ? 0 : PR(0x0718);      /* e1cb p3 = 0 (9966 CLR A); e2b9 p3 = 0x0718 (=4) */
     PR(0x0AA9) = 0x0D;                             /* p2 -> SBTX[0] */
     PR(0x0AAA) = 0x04;                             /* p1 -> SBTX[1] */
-    /* (stock e2b9 head calls d4cd here; omitted from the super-loop walker -- the a066 INT1 ISR already
-     * drives the SB transport-edge alternation, and keeping cd3f/af38 out of the walker call tree keeps
-     * af38's locals overlayable (IRAM/DSEG budget). The host response is captured by the ISR's d4cd.) */
+    /* IN-PUSH d4cd (byte-true to stock e2c4/e1d6 -- both e2b9 and e1cb `lcall func_d4cd` here, AFTER the
+     * 0xAA8/9/A stores and BEFORE 997e writes SBTX[0]). This drains the host's pending transport/link edge
+     * -> cd3f -> af38 rebuilds SBTX[2:6] from the 0x0800 work-buffer (work[0x0814..0x0817] -> SBTX[2..5])
+     * IN THE SAME push pass, so SBTX[2:6] is fresh at the d5da transmit below. Without it, af38 runs only
+     * asynchronously in the a066 ISR and SBTX[2:6] is stale/0 at transmit -> host posts 0D04 0000 -> the
+     * LOOP2 0x30 snap.7 gate never fires. Runs in the super-loop walker (EA=0), not the ISR. */
+    sb_d4cd_transport_edges();                     /* e2c4/e1d6: lcall func_d4cd */
     SBTX_WR(0, PR(0x0AA9));                         /* 997e: SBTX[0] = 0x0D */
     SBTX_WR(1, (uint8_t)(PR(0x0AAA) | ((PR(0x0AAB) & 1) << 7)));   /* 9923: SBTX[1] = 0x04 | (0xAAB.0<<7) */
     SB_WR(0x0C, (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08));   /* 9695 read + status = (SB[0x0C]&0x80)|8 -> SB[0x0C] */
@@ -992,7 +1042,10 @@ static uint8_t u4lb_e461(void) {
     PR(0x0AAC) = 0;
     P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
     SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));
-    uart_puts("[Te="); uart_puthex(SB_RD(0x15)); uart_putc(':'); uart_puthex(SBTX_RD(0)); uart_puthex(SBTX_RD(1)); uart_putc(']');  /* e461 route-query TX trace */
+    uart_puts("[Te="); uart_puthex(SB_RD(0x15)); uart_putc(':'); uart_puthex(SBTX_RD(0)); uart_puthex(SBTX_RD(1));
+    uart_puts(" 2c="); uart_puthex(SB_RD(0x2C)); uart_puts(" 0c="); uart_puthex(SB_RD(0x0C));
+    uart_puts(" 18="); uart_puthex(SB_RD(0x18)); uart_puts(" 26="); uart_puthex(SB_RD(0x26));
+    uart_puts(" rx="); { uint8_t i; for (i = 0; i < 6; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i))); } uart_putc(']');  /* e461 41 TX channel + RX-plane */
     SB_WR(0x10, 0x01);                              /* SB[0x10] = 1 (TX go) */
     g = 0; while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { }   /* wait SB[0x2C].2 (bounded) */
     SB_WR(0x2C, 0x04);                              /* W1C SB[0x2C].2 */
@@ -1030,12 +1083,14 @@ static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(PR(0x0819) & (uin
  * FIFO fills ~64-75 bytes -- that saturation is why only ONE full [S5] line ever survived). A SHORT
  * marker per state change tells us if the walker actually advances (running) or is stuck (hung). */
 static volatile uint8_t __xdata u4lb_s5_last759, u4lb_s5_last75b, u4lb_s5_seen, u4lb_s5_lasta0;
-static volatile uint8_t __xdata u4lb_s5_last775;
+static volatile uint8_t __xdata u4lb_s5_last775, u4lb_s5_lastaf38, u4lb_s5_lasttx;
 static void u4lb_s5_diag(void) {
-  __xdata uint8_t a, b, a0, h;
+  __xdata uint8_t a, b, a0, h, af, tx;
   a = PR(0x0759); b = PR(0x075B); a0 = SB_RD(0xA0); h = PR(0x0775);
+  af = af38_t50; tx = SBTX_RD(4);   /* also reprint when af38 processes a new descriptor or TX[4] changes */
   if (u4lb_s5_seen && a == u4lb_s5_last759 && b == u4lb_s5_last75b && a0 == u4lb_s5_lasta0
-      && h == u4lb_s5_last775) return;
+      && h == u4lb_s5_last775 && af == u4lb_s5_lastaf38 && tx == u4lb_s5_lasttx) return;
+  u4lb_s5_lastaf38 = af; u4lb_s5_lasttx = tx;
   if (!u4lb_s5_print_budget) return;
   u4lb_s5_print_budget--;
   u4lb_s5_seen = 1; u4lb_s5_last759 = a; u4lb_s5_last75b = b; u4lb_s5_lasta0 = a0; u4lb_s5_last775 = h;
@@ -1046,6 +1101,13 @@ static void u4lb_s5_diag(void) {
   uart_puts(" ED="); uart_puthex(PR(0x06ED));
   uart_puts(" snap="); uart_puthex(PR(0x0779)); uart_puthex(PR(0x077A));  /* CL snap 0x0779/0x077A */
   uart_puts(" pll="); uart_puthex(PR(0xC2D0)); uart_puthex(PR(0xC350));   /* C2D0/C350 bit6 PLL-lock (stock=F4) */
+  /* TX-WALK diag: device 0x2900 TX plane (stock walks 0D04 0000->7B7B 8080), the 0x0800 work-buffer the
+   * walker stages + af38 BRANCH-B echoes into TX[2+], and SB[0x6A:6D] (the 0c7a CL-config target). */
+  uart_puts(" TX="); { uint8_t i; for (i = 0; i < 6; i++) uart_puthex(SBTX_RD(i)); }
+  uart_puts(" w81C="); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(PR((uint16_t)(0x081Cu + i))); }  /* af38 echo window 0x081C..0x0823 (dat53(0x0D)=0x1C); TX[2:3]=0x081C/1D walk, TX[4:5]=0x081E/1F=8080 */
+  uart_puts(" 776="); uart_puthex(PR(0x0776));   /* e391 gate: seed runs iff 0x0776==0 */
+  uart_puts(" af38["); uart_puthex(af38_t50); uart_putc('/'); uart_puthex(af38_t53); uart_putc('/'); uart_puthex(af38_t51); uart_putc('/'); uart_puthex(af38_t4f); uart_putc('/'); uart_puthex(af38_t6f0); uart_putc(']');  /* last af38 in s5: dat50/dat53/dat51/dat4f/06F0 */
+  uart_puts(" 6A="); uart_puthex(SB_RD(0x6A)); uart_puthex(SB_RD(0x6B)); uart_puthex(SB_RD(0x6C)); uart_puthex(SB_RD(0x6D));
   uart_putc(']');
 }
 
@@ -1063,6 +1125,14 @@ static void u4lb_lp1_finalize(uint8_t lane) {
   PR(0x075F + lane)++;                                                   /* 81e5-81ea: bump counter */
   r7 = (uint8_t)((PR(0x075D + lane) + 1) & 0x0F);
   PR(0x075D + lane) = r7;
+  /* 81f8-8211 (the composing write = the device TX[2:3] CL-walk value). BYTE-TRUE (wf-verified vs
+   * CODE_BANK1::81f8-8211, read_memory code[0x21ae]=0x1C): stock does NOT read the old 0x081C; it loads
+   * 969e->A=code[0x21ae]=0x1C, ANL #0xF0 -> R5=0x10 (constant high nibble), then work[0x081C+lane] =
+   * work[0x071A + work[0x075D+lane]] | 0x10. r7 == work[0x075D+lane] (stored above). work[0x071A+r7] is
+   * the lane-desc walk source (seeded 0B/0C/07 by the 0x071A SB-init seed); af38 (dat53(0x0D)=0x1C) echoes
+   * work[0x081C/1D] -> device TX[2:3], walking toward 7B7B so the host advances SB[0xA1] 07->01.
+   * (Was WRONG: read+ANDed old 0x081C and omitted the |0x10.) */
+  PR(0x081C + lane) = (uint8_t)(PR((uint16_t)(0x071A + r7)) | 0x10);
   PR(0x0800 + (uint8_t)(lane + r7)) |= 0x80;                             /* 8212-821c: lane-cfg shadow bit7 */
   PR(0x0759 + lane) = 0x60;                                              /* 821d: state 0x40 -> 0x60 */
 }
@@ -1205,7 +1275,11 @@ static void u4lb_walk_8000(void) {
     if (!u4lb_lane_gate(lane)) continue;
     s = PR(0x075B + lane);
     if (s == 0x10) {
-      PR(0x0802 + lane) |= 0x80;
+      /* stock 0x83a5 (byte-true, real ROM): 9887->A=code[0x21ae]+lane=0x1C+lane; 9803->DPTR=0x0800+(A+2)
+       * =0x081E+lane |= 0x80; 9805(same +2 base)->0x081E+lane &= 0xBF. BOTH ops on the SAME cell 0x081E+lane.
+       * work[0x081E]/[0x081F] = the lane-present mask that af38 (dat53(0x0D)=0x1C) echoes into SBTX[4]/[5] =
+       * the 8080 CL-request header. (b0b4 also writes 0x081E/0x081F=0x80.) */
+      PR(0x081E + lane) |= 0x80;
       PR(0x081E + lane) &= 0xBF;
       PR(0x075B + lane) = 0x20;
     } else if (s == 0x20) {
@@ -1219,7 +1293,10 @@ static void u4lb_walk_8000(void) {
         else {
           __xdata uint8_t v = (uint8_t)(snap & 0x0F), cap, d23 = 0, d24 = 0;
           PR(0x0761 + lane) = v;
-          PR(0x0802 + lane) &= 0xF0;
+          /* stock 0x83f2-0x842a (byte-true, self-disassembled): all three RMW on 0x081E+lane. 8402 9803(R6=
+           * 0x1C+lane)->0x081E+lane &=0xF0; 840c 9805(0x1E+lane)->0x081E+lane |= *(0x0761+lane)=v; 8424
+           * 9803(lane+R7=lane+0x1C)->0x081E+lane |= 0x40 (R7=0x1C from 9996->9997, NOT v). */
+          PR(0x081E + lane) &= 0xF0;
           PR(0x081E + lane) |= v;
           PR(0x081E + lane) |= 0x40;
           cap = PR(0x0AB4 + lane);
@@ -1238,8 +1315,10 @@ static void u4lb_walk_8000(void) {
     } else if (s == 0x60) {
       __xdata uint8_t r = u4lb_eda0();
       if (r == 0) {
+        /* stock 8000 LOOP2 0x60 (byte-true, self-verified via decompile): snap.7 SET -> state 0x50; snap.7
+         * CLEAR -> *(0x081E+lane)&=0xBF (9887=0x1C+lane, 9803=+2 -> 0x081E+lane), state 0x20. */
         if ((PR(0x0779 + lane) >> 7) & 1) PR(0x075B + lane) = 0x50;
-        else { PR(0x0802 + lane) &= 0xBF; PR(0x075B + lane) = 0x20; }
+        else { PR(0x081E + lane) &= 0xBF; PR(0x075B + lane) = 0x20; }
       } else if (r == 2) PR(0x075B + lane) = 0x50;
     }
   }
@@ -1404,8 +1483,7 @@ static void u4lb_e672(void) {
       u4lb_eb62(0, 0);         /* e672: all sub-lane states clear -> finalise */
       return;
     }
-    u4lb_state5();             /* 0x0718==4 -> 8000, else 850b (both omitted markers) */
-    uart_putc('E');            /* TRIAGE: e672 regained control after state5 */
+    u4lb_state5();             /* 0x0718==4 -> 8000, else 850b */
     return;
   }
   if (st == 0x03) {
