@@ -40,6 +40,14 @@ static __code const uint8_t sb_lane_rate_desc[0x10] = {
   0x00,0x06,0x0B,0x0E,0x13,0x00,0x05,0x0A, 0x0E,0x11,0x00,0x05,0x08,0x0D,0x00,0x04
 };
 
+/* per-CL cap-field source (stock ROM CODE:0x0a92), seeded into lb_cap_field[0x072E] alongside
+ * sb_lane_flip. c586/cm_SBER/the LOOP2 CL-emit OR this into the CL config low byte
+ * (cl_cfg_lo |= lb_cap_field[cl_idx]); leaving it uninitialised reads the 0x55 XDATA poison and the
+ * device emits e.g. CL0 01F5 instead of stock 0103 -> host refuses CL0 (SB[0xA1] stalls at 0x01). */
+static __code const uint8_t sb_cap_field_desc[0x10] = {
+  0x00,0x00,0x00,0x00,0x00,0x01,0x01,0x01, 0x01,0x01,0x03,0x03,0x03,0x03,0x07,0x02
+};
+
 /* Runs FIRST: orientation/connect lane map + SB-PHY-RX descriptor + mailbox strobe. */
 static void sb_lane_flip_init(void) {
   uint8_t flip = REG_PHY_VENDOR_CTRL_C6DB & 0x01;
@@ -94,9 +102,15 @@ static void sb_lane_flip_init(void) {
   REG_INT_CTRL = (REG_INT_CTRL & 0xF7) | 0x08;
   SB_CLR(0x67, 0x40);
   lb_laneA_cl_latch = 0x07; lb_laneB_cl_latch = 0x07;
+  /* clear the cap-field (stock boot-clears XDATA; the handmade does not -> 0x55 poison) then seed
+   * it + the lane-flip table from ROM when the link is the Gen3 (C8FF==0x04) rate. */
+  { uint8_t k; for (k = 0; k < 0x10; k++) lb_cap_field[(uint16_t)(0x0 + k)] = 0; }
   if (REG_LANE_RATE_C8FF == 0x04) {
     uint8_t k;
-    for (k = 0; k < 0x10; k++) sb_lane_flip[(uint16_t)(0x0 + k)] = sb_lane_rate_desc[k];
+    for (k = 0; k < 0x10; k++) {
+      sb_lane_flip[(uint16_t)(0x0 + k)] = sb_lane_rate_desc[k];
+      lb_cap_field[(uint16_t)(0x0 + k)] = sb_cap_field_desc[k];
+    }
   }
 }
 
