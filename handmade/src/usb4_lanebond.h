@@ -147,9 +147,16 @@ static void u4lb_cm_conn_routing_setup(void) {
   /* e391 width-LUT seed (gated 0x0776==0): the per-descriptor LUT af38 ORs into SBTX[1]. */
   if (u4_coldboot_seed_gate == 0) {
     uint8_t i;
-    for (i = 0; i < 0x13; i++) {
+    for (i = 0; i < 0x13; i++) {            /* e391 LOOP1: 0x06F2+i / 0x0705+i width+gate LUT */
       sb_width_lut[(uint16_t)(0x0 + i)] = u4lb_width_lut_514c[i];
       sb_branchA_gate[(uint16_t)(0x0 + i)] = u4lb_branchA_gate_515f[i];
+    }
+    /* e391 LOOP2 (e3c3-e3d3): d221 zeroes XDATA[0x0B26..0x0B2D] = the CL-walk shadows, on EVERY
+     * conn-routing seed. Latent on cold boot (SDCC zeroes XDATA) but the live AMD path is a connect
+     * STORM: on re-connect the walker would otherwise read STALE lb_cl_status/lb_eq_status/
+     * lb_loop2_scratch/lb_cl0_width and poison the snap&0x80/&0x10 CL-walk gates. */
+    for (i = 0; i < 2; i++) {
+      lb_cl_status[i] = 0; lb_eq_status[i] = 0; lb_loop2_scratch[i] = 0; lb_cl0_width[i] = 0;
     }
   }
 
@@ -904,15 +911,14 @@ static void u4lb_lp1_width_settle(uint8_t lane) {
   if ((uint16_t)((widthA - 1) - neg) >= 0x00C8) { u4lb_lp1_finalize(lane); return; }
 }
 
-/* stock 8000: every e461-bearing dispatch (84f3/84fa) advances on the LANE-STATUS byte bVar3, NOT on
- * whether e461 actually pushed. 9a11 (CODE_BANK1::9a11) returns const A=1; the 8000-head shift loop
- * RLC-shifts it left `lane` times => bVar3 = 1<<lane. 84fa = `LCALL e461; MOV A,R7; XRL #1; RET` =>
- * returns bVar3^1 (e461 result discarded), and the dispatch advances on (bVar3^1)==0 i.e. bVar3==1
- * (true only for lane0). The handmade previously gated these states on `u4lb_e461()==1`, which returns
- * 0 once the 0x0719 in-flight token is set -> HARD PARK (HW-observed at LOOP2 0x20). e461 must be
- * called for side-effect only; advance on the lane status. The lane gate (work[0x19] bit) is already
- * applied upstream by u4lb_lane_gate(), so this returns the raw 1<<lane to byte-match 9a11+shift. */
-static uint8_t u4lb_lane_status_b3(uint8_t lane) { return (uint8_t)(1u << lane); }
+/* stock 8000: the e461-bearing dispatches (84f3/84fa @8069/8251/831a/83bd/84a3) advance on the
+ * e461 PUSH RESULT. 84f3/84fa = `LCALL e461; MOV A,R7; XRL #1; RET`. e461 CLOBBERS R7 -- it sets
+ * R7=#0 when the 0x0719 in-flight token is set (e467, early RET) and R7=#1 on every push (e4a3),
+ * so 84f3 returns push^1 and the caller's JZ advances exactly when e461 ISSUED A PUSH. That is
+ * `if (u4lb_e461()==1)`. (The Ghidra decompile `return param_1^1` is an ARTIFACT: param_1 maps to
+ * R7, which e461 overwrites -- verified in stock_ghidra_export.c e461 @50792 + disasm e467/e4a3.)
+ * A prior session mis-read this as a 1<<lane lane-status gate, which killed lane1 (mask 0x02 != 1);
+ * reverted to the byte-true e461-result gate. */
 
 /* 8000: primary state-5 walker (0x0718==4). LOOP1 state@0x0759+lane (connect-arm/retrain edges),
  * LOOP2 state@0x075B+lane (the CL-state walk). LOOP1 dispatches through the 0def jump table @802a
@@ -934,9 +940,8 @@ static void u4lb_walk_8000(void) {
       lb_loop1_state[lane] = 0x20;
     }
     else if (state == 0x20) {
-      /* 8069: LCALL 84f3 (e461 side-effect); JZ -> 0x30 on bVar3==1. */
-      (void)u4lb_e461();
-      if (u4lb_lane_status_b3(lane) == 1) lb_loop1_state[lane] = 0x30;
+      /* 8069 LCALL 84f3: advance on the e461 push result (R7=1 push / 0 in-flight). */
+      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x30;
     }
     else if (state == 0x30) {
       /* 807a: route-special selector; on snap.7 set, arm the lane (SB[0x40]) + work[0x1C]|=0x20
@@ -984,9 +989,8 @@ static void u4lb_walk_8000(void) {
       }
     }
     else if (state == 0x60) {
-      /* 8251: LCALL 84f3 (e461 side-effect); JZ -> 0x70 on bVar3==1. */
-      (void)u4lb_e461();
-      if (u4lb_lane_status_b3(lane) == 1) lb_loop1_state[lane] = 0x70;
+      /* 8251 LCALL 84f3: advance on the e461 push result. */
+      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x70;
     }
     else if (state == 0x70) {
       /* 8262: snap&0xC0==0xC0 + low-nibble match -> arm width pairs -> 0x80, else stay 0x60. */
@@ -1030,9 +1034,8 @@ static void u4lb_walk_8000(void) {
       lb_loop1_state[lane] = 0xA0;
     }
     else if (state == 0xA0) {
-      /* 831a: LCALL 84fa (e461 side-effect); JNZ stay, else -> 0xA1 (lane bonded) on bVar3==1. */
-      (void)u4lb_e461();
-      if (u4lb_lane_status_b3(lane) == 1) lb_loop1_state[lane] = 0xA1;
+      /* 831a LCALL 84fa: advance to 0xA1 (lane bonded) on the e461 push result. */
+      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0xA1;
     }
     else if (state == 0xA1) {
       /* 8327: bonded monitor; host re-train request (snap&0xC0==0x80) re-enters 0x50, else 0xA0. */
@@ -1056,10 +1059,10 @@ static void u4lb_walk_8000(void) {
       u4_work_buf[0x1E + lane] &= 0xBF;
       lb_loop2_state[lane] = 0x20;
     } else if (state == 0x20) {
-      /* 83bd: LCALL 84fa (e461 side-effect); JZ -> 0x30 on bVar3==1 (else stay). The old
-       * `if (e461()==1)` HARD-PARKED here once 0x0719 was in-flight (HW-confirmed). */
-      (void)u4lb_e461();
-      if (u4lb_lane_status_b3(lane) == 1) lb_loop2_state[lane] = 0x30;
+      /* 83bd LCALL 84fa: advance on the e461 push result (waits here while 0x0719 in-flight, which
+       * is the intended one-push-at-a-time serialization -- the cycle is unblocked by the host ack
+       * clearing 0x0719 via eda0, not by forcing the advance). */
+      if (u4lb_e461() == 1) lb_loop2_state[lane] = 0x30;
     } else if (state == 0x30) {
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
@@ -1084,9 +1087,8 @@ static void u4lb_walk_8000(void) {
         }
       } else if (selector == 2) lb_loop2_state[lane] = 0x20;
     } else if (state == 0x50) {
-      /* 84a3: LCALL e461 (side-effect); MOV A,R7; XRL #1; JNZ stay; else -> 0x60 on bVar3==1. */
-      (void)u4lb_e461();
-      if (u4lb_lane_status_b3(lane) == 1) lb_loop2_state[lane] = 0x60;
+      /* 84a3 LCALL e461; MOV A,R7; XRL #1; JNZ stay: advance on the e461 push result. */
+      if (u4lb_e461() == 1) lb_loop2_state[lane] = 0x60;
     } else if (state == 0x60) {
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
