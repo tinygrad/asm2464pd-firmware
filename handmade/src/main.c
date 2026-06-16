@@ -635,16 +635,6 @@ void main(void) {
           lb_walk_throttle_snap_lo = d_lo;
         }
       }
-      /* deep-dive rank-1 (2026-06-16): the host stays at tbadapters "Training/Bonding" because the
-       * device's E764 RX-PLL train never completes -- pll=F4F4 (PLL locked) but E762=00 so E762.4
-       * (the RXPLL "trained/ready" latch) stays clear and phy_rxpll_train_busy=1. Stock runs the cdc6
-       * train in state-4; re-drive it per state-5 walker pass while busy so E762.4 can latch under the
-       * host's live lane-training pattern, completing the train so the host advances Training->CL0. */
-      if (XDATA_REG8V(0x06ED) == 5) {
-        u4lb_e764_rxpll_train();   /* re-drive EVERY state-5 pass (not just while busy) -- keep the
-                                    * train polling E762.4 under the host's live stimulus to push the
-                                    * snap past 28xx toward the 3C3C bond-confirm */
-      }
       // cb10 tail: send the deferred router-op CONFIG-READ RESPONSE (stock cdf5) the host blocks on.
       // u4lb_eda0() (called here for its 0x0775/0x0719 token-clear side-effect) yields the selector
       // cdf5 needs (0/2 => build+TX the lane-config response; 1 => nothing this pass, arm stays set).
