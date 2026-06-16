@@ -272,6 +272,31 @@ static void u4lb_e9e7(void) {
   uart_puts("[Done]");
 }
 
+/* cdc6 E764 RX-PLL train (stock CODE:cdc6): ramp E764 (set bit3, clear 2/1/0, set bit1), cc10 settle,
+ * then poll E762.4 (the RX-PLL "trained/ready" latch). If set -> finish E764->0x19 (set bit0, clear
+ * bit1) and clear the busy flag 0x06E9; else clear E764 bits 3-0 and leave busy=1. Re-driven per
+ * state-5 walker pass while busy so E762.4 can latch under the host's LIVE lane-training stimulus
+ * (stock runs it in state-4; the handmade got E762=00 once and never re-drove it -> the host's lane
+ * adapters loop Training/Bonding and never reach CL0). */
+static void u4lb_e764_rxpll_train(void) {
+  REG_PHY_TIMER_CTRL_E764 = (uint8_t)((REG_PHY_TIMER_CTRL_E764 & 0xF7) | 0x08);
+  REG_PHY_TIMER_CTRL_E764 &= 0xFB;
+  REG_PHY_TIMER_CTRL_E764 &= 0xFE;
+  REG_PHY_TIMER_CTRL_E764 = (uint8_t)((REG_PHY_TIMER_CTRL_E764 & 0xFD) | 0x02);
+  phy_cc10_cmd_wait(1, 7, 0xCF);
+  if (REG_PHY_RXPLL_STATUS & 0x10) {
+    REG_PHY_TIMER_CTRL_E764 = (uint8_t)((REG_PHY_TIMER_CTRL_E764 & 0xFE) | 0x01);
+    REG_PHY_TIMER_CTRL_E764 &= 0xFD;
+    phy_rxpll_train_busy = 0;
+  } else {
+    REG_PHY_TIMER_CTRL_E764 &= 0xF7;
+    REG_PHY_TIMER_CTRL_E764 &= 0xFB;
+    REG_PHY_TIMER_CTRL_E764 &= 0xFE;
+    REG_PHY_TIMER_CTRL_E764 &= 0xFD;
+    phy_rxpll_train_busy = 1;
+  }
+}
+
 /* ebde: rate-lock settle — pulse C20F then spin (bounded) for the C2D0.5 / C350.5 lock bits. */
 static void u4lb_ebde(void) {
   REG_PHY_CTRL_C20F = 0xFF;
@@ -641,22 +666,7 @@ static void u4lb_state4_b0b4(void) {
   uart_puts("[PcieTunnel-PwrOn]");
   u4lb_e305(1);
   if (u4_route_mode & 0x81) {
-    REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xF7) | 0x08;
-    REG_PHY_TIMER_CTRL_E764 &= 0xFB;
-    REG_PHY_TIMER_CTRL_E764 &= 0xFE;
-    REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFD) | 0x02;
-    phy_cc10_cmd_wait(1, 7, 0xCF);
-    if (REG_PHY_RXPLL_STATUS & 0x10) {
-      REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFE) | 0x01;
-      REG_PHY_TIMER_CTRL_E764 &= 0xFD;
-      phy_rxpll_train_busy = 0;
-    } else {
-      REG_PHY_TIMER_CTRL_E764 &= 0xF7;
-      REG_PHY_TIMER_CTRL_E764 &= 0xFB;
-      REG_PHY_TIMER_CTRL_E764 &= 0xFE;
-      REG_PHY_TIMER_CTRL_E764 &= 0xFD;
-      phy_rxpll_train_busy = 1;
-    }
+    u4lb_e764_rxpll_train();   /* cdc6 E764 RX-PLL train (now re-driven per state-5 pass while busy) */
     REG_HDDPC_CTRL = (uint8_t)((REG_HDDPC_CTRL & 0xDF) | 0x20);
   }
 
@@ -848,6 +858,7 @@ static void u4lb_s5_diag(void) {
   uart_puts(" A="); uart_puthex(sba0); uart_puthex(SB_RD(0xA1));
   uart_puts(" 775="); uart_puthex(host_desc);
   uart_puts(" E764="); uart_puthex(REG_PHY_TIMER_CTRL_E764); uart_puts(" E762="); uart_puthex(REG_PHY_RXPLL_STATUS);
+  uart_puts(" 6E9="); uart_puthex(phy_rxpll_train_busy);
   uart_puts(" ED="); uart_puthex(u4_fsm_state);
   uart_puts(" hd="); { uint8_t i; for (i = 2; i < 7; i++) uart_puthex(u4_host_desc[i]); }
   uart_puts(" snap="); uart_puthex(u4_host_desc[0x2]); uart_puthex(u4_host_desc[0x3]);

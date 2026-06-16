@@ -636,6 +636,14 @@ void main(void) {
           lb_walk_throttle_snap_lo = REG_LANE_WIDTH_CNT_LO;
         }
       }
+      /* deep-dive rank-1 (2026-06-16): the host stays at tbadapters "Training/Bonding" because the
+       * device's E764 RX-PLL train never completes -- pll=F4F4 (PLL locked) but E762=00 so E762.4
+       * (the RXPLL "trained/ready" latch) stays clear and phy_rxpll_train_busy=1. Stock runs the cdc6
+       * train in state-4; re-drive it per state-5 walker pass while busy so E762.4 can latch under the
+       * host's live lane-training pattern, completing the train so the host advances Training->CL0. */
+      if (XDATA_REG8V(0x06ED) == 5 && phy_rxpll_train_busy != 0) {
+        u4lb_e764_rxpll_train();
+      }
       // cb10 tail: clear the in-flight e461 token once the host has posted its descriptor.
       if (sb_cdf5_substate_arm != 0) (void)u4lb_eda0();
       IE |= IE_EA;
