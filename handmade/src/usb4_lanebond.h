@@ -818,12 +818,17 @@ static void u4lb_8992(uint8_t v) {
   u4lb_d5da(1);
 }
 
-/* lane gate: walk lane L iff 0x0819.L (lane-present). */
-/* Stock 8000 head (8010-801e): the per-lane present mask is 1<<(lane+1) (a 2-bit stride: lane0
- * tests 0x0819 bit1, lane1 bit2), gated against XDATA[0x0819]=work[0x19] (ROM[0x21AD]=0x19).
- * The handmade previously tested (1<<lane) (bit0/bit1) -> with 0x0819=0x03 it walked BOTH lanes,
- * whereas stock walks lane0 ONLY (0x03 = bit1 set / bit2 clear). HW-confirmed via clb st= dump. */
-static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(u4_work_buf[0x19] & (uint8_t)(1u << (lane + 1))); }
+/* lane gate: walk lane L iff 0x0819.L (lane-present mask = 1<<lane). */
+/* Stock 8000 head (8006-801e): ROM[0x21AD]=0x19 -> 96a7 reads XDATA[0x0819]=work[0x19] (=R5);
+ * 9a11 sets A=1, R0 = (lane_counter 0x21)+1; then `SJMP 8015` jumps straight to `DJNZ R0,8010`
+ * which executes the RLC-left body (R0-1) times (the initial SJMP skips one body pass). Net shift
+ * of A=1 is therefore `lane`, NOT `lane+1`: lane0 mask = 1<<0 = 0x01 (bit0), lane1 mask = 1<<1 =
+ * 0x02 (bit1). (801e ANL/ORL/JNZ then gates on work[0x19] & mask.) With work[0x19]=0x03 BOTH lanes
+ * walk -> the stock 2-lane bond (work[0x081C]=work[0x081D]=0x7B, host posts 2487 lane0=24/lane1=87,
+ * SB[0xA0]=SB[0xA1]->0x02). The earlier 1<<(lane+1) read mis-counted the DJNZ-after-SJMP loop and
+ * forced a lane0-only walk (work[0x081D]=0x00) so the host never 2-lane bonded. HW-confirmed via the
+ * stock |w= work-shadow dump (w=7B7B... 2-lane) vs the lane0-only handmade (w=7B00...). */
+static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(u4_work_buf[0x19] & (uint8_t)(1u << lane)); }
 
 /* [s5 ..] diagnostic — print only when a watched lane-state byte changes, to avoid saturating the
  * UART TX FIFO on a fast-iterating walker. */
