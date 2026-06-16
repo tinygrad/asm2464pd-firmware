@@ -980,8 +980,11 @@ static void u4lb_walk_8000(void) {
         lb_loop1_state[lane] = 0x00;
         if ((REG_PHY_ORIENT_C2C3 & 0x01) || (REG_VENDOR_CTRL_C343 & 0x01)) {
           if ((u4_work_buf[0x19] & 0x03) != 0) {
-            u4_work_buf[0x1C + lane] = (uint8_t)((u4_work_buf[0x1C + lane] | 0x40) & 0x7F);
-            u4_work_buf[0x1D + lane] = (uint8_t)(((u4_work_buf[0x1D + lane] | 0x10) + 1) & 0x7F);
+            /* 813c-816b: work_buf[0x1C] and [0x1D] are LANE-INDEPENDENT here (9997=0x1C, 9916=0x1D,
+             * no lane add), each |=0x10 |=0x40 &=0x7F. The handmade's `+lane`, the dropped |0x10/|0x40,
+             * and the bogus data `+1` (a stock index-arith artifact) were all transcription bugs. */
+            u4_work_buf[0x1C] |= 0x10; u4_work_buf[0x1C] |= 0x40; u4_work_buf[0x1C] &= 0x7F;
+            u4_work_buf[0x1D] |= 0x10; u4_work_buf[0x1D] |= 0x40; u4_work_buf[0x1D] &= 0x7F;
           }
         }
       } else {
