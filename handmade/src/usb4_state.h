@@ -102,6 +102,8 @@ volatile __xdata __at(0x0766) uint8_t sb_route_up_trigger;   /* route-up trigger
 volatile __xdata __at(0x0767) uint8_t lb_walk_oneshot_flag;   /* state-5 walker one-shot guard flag (set on first pass) */
 volatile __xdata __at(0x0768) uint8_t lb_lane_width_cnt_hi;   /* lane-width counter snapshot hi = CCE4 (98f5) */
 volatile __xdata __at(0x0769) uint8_t lb_lane_width_cnt_lo;   /* lane-width counter snapshot lo = CCE5 (98fa) */
+volatile __xdata __at(0x076A) uint8_t lb_walk_throttle_snap_hi;   /* cb10 running CCE4 snapshot (e672 width-delta throttle) */
+volatile __xdata __at(0x076B) uint8_t lb_walk_throttle_snap_lo;   /* cb10 running CCE5 snapshot */
 volatile __xdata __at(0x0774) uint8_t u4_lane_train_trigger;   /* ec51 lane-train trigger toggled ^=1; state-5 [Trig] */
 volatile __xdata __at(0x0775) uint8_t u4_route_query_response;   /* host route-query response flag set by eaac (cleared by eda0) */
 volatile __xdata __at(0x0776) uint8_t u4_coldboot_seed_gate;   /* e391 cold-boot width-LUT seed gate / connect-confirm (==0) */

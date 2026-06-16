@@ -613,13 +613,29 @@ void main(void) {
         uart_puts("[LB arm]");
         u4lb_eb62(0, 3);
         u4lb_98ec();   // snapshot CCE4:CCE5 lane-width into 0x768:0x769
+        lb_walk_throttle_snap_hi = REG_LANE_WIDTH_CNT_HI;   // seed cb10's running snapshot (0x076A:0x076B)
+        lb_walk_throttle_snap_lo = REG_LANE_WIDTH_CNT_LO;
       }
-      // Pump e672 up to 4x per iteration; break when 0x06ED stops advancing.
-      { uint8_t pmp, prev; for (pmp = 0; pmp < 4; pmp++) {
-          prev = XDATA_REG8V(0x06ED);
+      /* stock cb10 e672 gate (CODE_BANK1::cb87-cbbd, byte-true): when 0x06ED!=0, re-arm the LANE_TRAIN
+       * HW via ee57()->ec51() (CCE0-CCE3 + 0x0774 toggle) so the device keeps emitting fresh training
+       * symbols EVERY pass, and step the walker e672 ONCE only when the PHY lane-width counter
+       * CCE4:CCE5 has moved >=2 since the last pass, re-snapshotting after. This paces the CL walker to
+       * host lane-training progress. The handmade previously free-ran e672 4x with NO re-arm and NO
+       * throttle, so the device stopped emitting training symbols at the 2D2D plateau and the host
+       * withheld the SB[0xA0] 0x01->0x02 confirm (deep-dive 2026-06-16). */
+      if (XDATA_REG8V(0x06ED) != 0) {
+        uint16_t cce, snap, delta;
+        u4lb_ee57();
+        cce   = (uint16_t)(((uint16_t)REG_LANE_WIDTH_CNT_HI << 8) | REG_LANE_WIDTH_CNT_LO);
+        snap  = (uint16_t)(((uint16_t)lb_walk_throttle_snap_hi << 8) | lb_walk_throttle_snap_lo);
+        delta = (uint16_t)(snap - cce);
+        if (delta >= 2) {
           u4lb_e672();
-          if (XDATA_REG8V(0x06ED) == prev) break;
-      } }
+          u4lb_ee57();
+          lb_walk_throttle_snap_hi = REG_LANE_WIDTH_CNT_HI;
+          lb_walk_throttle_snap_lo = REG_LANE_WIDTH_CNT_LO;
+        }
+      }
       // cb10 tail: clear the in-flight e461 token once the host has posted its descriptor.
       if (sb_cdf5_substate_arm != 0) (void)u4lb_eda0();
       IE |= IE_EA;
