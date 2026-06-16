@@ -91,6 +91,7 @@ SEP_D = 0x5E80               # "|D="
 SEP_L = 0x5E88               # "|L="
 SEP_2B = 0x5E90              # "|2b="
 SEP_W = 0x5E98               # "|w="
+SEP_C = 0x5EA0               # "|C=" CL-bond regs SB[0x66]/[0x6A-0x6D]/[0x9E]
 CAVE_TX = 0x5F00
 CAVE_EAAC = 0x6200
 
@@ -229,6 +230,11 @@ def build_field_block():
     code += puthex_sb(0x2800 + 0xA1)
     for a in (0xE302, 0xE751, 0xE764, 0xC8FF):
         code += puthex_xdata(a)
+    # "|C=" CL-bond regs (the host validates these to advance the snap 2D->2C->3C):
+    #   SB[0x66] Lane-Bonded, SB[0x6A-0x6D] CL config, SB[0x9E] CL0 events (DPX=1)
+    code += puts_code(SEP_C)
+    for off in (0x66, 0x6A, 0x6B, 0x6C, 0x6D, 0x9E):
+        code += puthex_sb(0x2800 + off)
     # close
     code += mov_dptr(UART_TX) + b"\x74\x5d\xf0"     # ']'
     return bytes(code)
@@ -304,6 +310,7 @@ def apply_patch(body):
     write_cave(body, SEP_H, b"|H=\x00", "H")
     write_cave(body, SEP_D, b"|D=\x00", "D")
     write_cave(body, SEP_L, b"|L=\x00", "L")
+    write_cave(body, SEP_C, b"|C=\x00", "C")
     write_cave(body, SEP_2B, b"|2b=\x00", "2b")
     write_cave(body, SEP_W, b"|w=\x00", "w")
 
