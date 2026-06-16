@@ -857,6 +857,7 @@ static void u4lb_s5_diag(void) {
   uart_puts("\r\n[s5 9="); uart_puthex(state0); uart_putc('/'); uart_puthex(state1);
   uart_puts(" A="); uart_puthex(sba0); uart_puthex(SB_RD(0xA1));
   uart_puts(" 775="); uart_puthex(host_desc);
+  uart_puts(" 719="); uart_puthex(e461_inflight_token);
   uart_puts(" E764="); uart_puthex(REG_PHY_TIMER_CTRL_E764); uart_puts(" E762="); uart_puthex(REG_PHY_RXPLL_STATUS);
   uart_puts(" 6E9="); uart_puthex(phy_rxpll_train_busy);
   uart_puts(" ED="); uart_puthex(u4_fsm_state);
@@ -903,6 +904,16 @@ static void u4lb_lp1_width_settle(uint8_t lane) {
   if ((uint16_t)((widthA - 1) - neg) >= 0x00C8) { u4lb_lp1_finalize(lane); return; }
 }
 
+/* stock 8000: every e461-bearing dispatch (84f3/84fa) advances on the LANE-STATUS byte bVar3, NOT on
+ * whether e461 actually pushed. 9a11 (CODE_BANK1::9a11) returns const A=1; the 8000-head shift loop
+ * RLC-shifts it left `lane` times => bVar3 = 1<<lane. 84fa = `LCALL e461; MOV A,R7; XRL #1; RET` =>
+ * returns bVar3^1 (e461 result discarded), and the dispatch advances on (bVar3^1)==0 i.e. bVar3==1
+ * (true only for lane0). The handmade previously gated these states on `u4lb_e461()==1`, which returns
+ * 0 once the 0x0719 in-flight token is set -> HARD PARK (HW-observed at LOOP2 0x20). e461 must be
+ * called for side-effect only; advance on the lane status. The lane gate (work[0x19] bit) is already
+ * applied upstream by u4lb_lane_gate(), so this returns the raw 1<<lane to byte-match 9a11+shift. */
+static uint8_t u4lb_lane_status_b3(uint8_t lane) { return (uint8_t)(1u << lane); }
+
 /* 8000: primary state-5 walker (0x0718==4). LOOP1 state@0x0759+lane (connect-arm/retrain edges),
  * LOOP2 state@0x075B+lane (the CL-state walk). LOOP1 dispatches through the 0def jump table @802a
  * = [target_hi,target_lo,match]: 0x10->804f 0x20->8069 0x30->807a 0x40->80ca 0x50->80d7 0x60->8251
@@ -923,8 +934,9 @@ static void u4lb_walk_8000(void) {
       lb_loop1_state[lane] = 0x20;
     }
     else if (state == 0x20) {
-      /* 8069: e461 route push -> 0x30. */
-      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x30;
+      /* 8069: LCALL 84f3 (e461 side-effect); JZ -> 0x30 on bVar3==1. */
+      (void)u4lb_e461();
+      if (u4lb_lane_status_b3(lane) == 1) lb_loop1_state[lane] = 0x30;
     }
     else if (state == 0x30) {
       /* 807a: route-special selector; on snap.7 set, arm the lane (SB[0x40]) + work[0x1C]|=0x20
@@ -972,8 +984,9 @@ static void u4lb_walk_8000(void) {
       }
     }
     else if (state == 0x60) {
-      /* 8251: e461 route push -> 0x70. */
-      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x70;
+      /* 8251: LCALL 84f3 (e461 side-effect); JZ -> 0x70 on bVar3==1. */
+      (void)u4lb_e461();
+      if (u4lb_lane_status_b3(lane) == 1) lb_loop1_state[lane] = 0x70;
     }
     else if (state == 0x70) {
       /* 8262: snap&0xC0==0xC0 + low-nibble match -> arm width pairs -> 0x80, else stay 0x60. */
@@ -1017,8 +1030,9 @@ static void u4lb_walk_8000(void) {
       lb_loop1_state[lane] = 0xA0;
     }
     else if (state == 0xA0) {
-      /* 831a: e461 -> 0xA1 (lane bonded). */
-      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0xA1;
+      /* 831a: LCALL 84fa (e461 side-effect); JNZ stay, else -> 0xA1 (lane bonded) on bVar3==1. */
+      (void)u4lb_e461();
+      if (u4lb_lane_status_b3(lane) == 1) lb_loop1_state[lane] = 0xA1;
     }
     else if (state == 0xA1) {
       /* 8327: bonded monitor; host re-train request (snap&0xC0==0x80) re-enters 0x50, else 0xA0. */
@@ -1042,7 +1056,10 @@ static void u4lb_walk_8000(void) {
       u4_work_buf[0x1E + lane] &= 0xBF;
       lb_loop2_state[lane] = 0x20;
     } else if (state == 0x20) {
-      if (u4lb_e461() == 1) lb_loop2_state[lane] = 0x30;
+      /* 83bd: LCALL 84fa (e461 side-effect); JZ -> 0x30 on bVar3==1 (else stay). The old
+       * `if (e461()==1)` HARD-PARKED here once 0x0719 was in-flight (HW-confirmed). */
+      (void)u4lb_e461();
+      if (u4lb_lane_status_b3(lane) == 1) lb_loop2_state[lane] = 0x30;
     } else if (state == 0x30) {
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
@@ -1067,7 +1084,9 @@ static void u4lb_walk_8000(void) {
         }
       } else if (selector == 2) lb_loop2_state[lane] = 0x20;
     } else if (state == 0x50) {
-      if (u4lb_e461() == 1) lb_loop2_state[lane] = 0x60;
+      /* 84a3: LCALL e461 (side-effect); MOV A,R7; XRL #1; JNZ stay; else -> 0x60 on bVar3==1. */
+      (void)u4lb_e461();
+      if (u4lb_lane_status_b3(lane) == 1) lb_loop2_state[lane] = 0x60;
     } else if (state == 0x60) {
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
