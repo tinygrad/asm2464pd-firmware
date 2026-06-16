@@ -3254,6 +3254,7 @@ void bank1_edbd_stub_0575(void)
 
 
 
+// >>> HANDMADE: u4c_e0d9 @ handmade/src/usb4.h:9  (PHY descriptor seed: mode==4 writes the PHY RXPLL/CDR trim registers ()
 void bank1_e0d9_stub_057a(byte param_1)
 
 {
@@ -3518,6 +3519,7 @@ void bank1_ed02_stub_0610(ushort param_1,byte param_2)
 
 
 
+// >>> HANDMADE: u4lb_e9e7 @ handmade/src/usb4_lanebond.h:264  (RstRxpll: reset the RX PLL via C20E + two CC10 settles)
 void bank1_e9e7_stub_0615(ushort param_1,undefined1 param_2,byte param_3)
 
 {
@@ -11261,6 +11263,7 @@ void FUN_CODE_4b8b(void)
 // make
 // the host raise C80A.5 — not sufficient on its own.
 
+// >>> HANDMADE: usb4_irq_arm @ handmade/src/usb4_irq.h:242  (init_sys_flags arming tail not covered by pd_int1_enable_group: REG_CP)
 void FUN_CODE_4be6(void)
 
 {
@@ -23692,6 +23695,7 @@ void set_0x07de_to_1(void)
 
 
 
+// >>> HANDMADE: pd_rx_ptr @ handmade/src/pd_dispatch.h:15  (Compute RX buffer base 0xE440+0x20*slot and stash it into pd_rx_ptr_hi)
 void FUN_CODE_96d4(undefined1 param_1,char param_2)
 
 {
@@ -23704,6 +23708,7 @@ void FUN_CODE_96d4(undefined1 param_1,char param_2)
 
 
 
+// >>> HANDMADE: pd_rx_ptr_get @ handmade/src/pd_dispatch.h:23  (Re-read the stashed 16-bit RX buffer pointer from xdata 0x07BF/0x07C0)
 undefined1 FUN_CODE_96e1(void)
 
 {
@@ -25761,6 +25766,7 @@ void FUN_CODE_a2de(byte param_1,byte param_2)
 
 
 
+// >>> HANDMADE: eng_a2df @ handmade/src/sb.h:263  (descriptor-engine primitive: write ENGINE[cur]=v then RMW ENGINE[cur+1)
 void FUN_CODE_a2df(byte param_1,byte param_2)
 
 {
@@ -25843,6 +25849,7 @@ void FUN_CODE_a301(undefined1 param_1)
 
 
 
+// >>> HANDMADE: eng_a308 @ handmade/src/sb.h:259  (descriptor-engine primitive: write ENGINE[cur]=(v&0xF0)|0x0F then RMW )
 void FUN_CODE_a308(byte param_1,byte param_2)
 
 {
@@ -25859,6 +25866,7 @@ void FUN_CODE_a308(byte param_1,byte param_2)
 
 
 
+// >>> HANDMADE: eng_a30c @ handmade/src/sb.h:256  (descriptor-engine primitive: write ENGINE[cur]=v then RMW ENGINE[cur+1)
 void FUN_CODE_a30c(byte param_1,byte param_2)
 
 {
@@ -25888,6 +25896,7 @@ void FUN_CODE_a310(byte param_1)
 
 
 
+// >>> HANDMADE: eng_a31c @ handmade/src/sb.h:266  (descriptor-engine primitive: write ENGINE[cur]=v then two-step RMW ENG)
 void FUN_CODE_a31c(byte param_1,byte param_2)
 
 {
@@ -25906,6 +25915,7 @@ void FUN_CODE_a31c(byte param_1,byte param_2)
 
 
 
+// >>> HANDMADE: eng_a327 @ handmade/src/sb.h:274  (descriptor-engine primitive: write ENGINE[cur]=v then RMW ENGINE[cur] )
 void FUN_CODE_a327(byte param_1,byte param_2)
 
 {
@@ -25959,6 +25969,7 @@ void FUN_CODE_a344(byte param_1,byte param_2)
 
 
 
+// >>> HANDMADE: eng_a348 @ handmade/src/sb.h:271  (descriptor-engine primitive: write ENGINE[cur]=v then dummy read ENGIN)
 void FUN_CODE_a348(byte param_1,byte param_2)
 
 {
@@ -29356,6 +29367,7 @@ void FUN_CODE_bcd0(undefined1 param_1)
 
 
 
+// >>> HANDMADE: u4c_bcd7_tail @ handmade/src/sb.h:374  (tunnel/lane-rate train tail of usb4_connect_u4 (FUN_CODE_bcd7()!=0 bra)
 byte FUN_CODE_bcd7(void)
 
 {
@@ -29389,6 +29401,7 @@ void FUN_CODE_bce7(undefined1 param_1,ushort param_2)
 
 
 
+// >>> HANDMADE: boot_phy_bceb_set0 @ handmade/src/boot_phy.h:49  (Set bit0 of an XDATA register (RMW: (val & 0xFE) | 0x01))
 void FUN_CODE_bceb(byte *addr)
 
 {
@@ -29398,6 +29411,7 @@ void FUN_CODE_bceb(byte *addr)
 
 
 
+// >>> HANDMADE: u4c_bcf2 @ handmade/src/usb4_connect.h:15  (RMW helper: sets bit1 of REG_TIMER_ENABLE_B and _A. Implements stock F)
 void FUN_CODE_bcf2(void)
 
 {
@@ -29453,6 +29467,7 @@ void FUN_CODE_bd0d(ushort param_1)
 
 
 
+// >>> HANDMADE: u4c_bd14 @ handmade/src/usb4_connect.h:17  (RMW helper: clears bit1 of REG_TIMER_ENABLE_B and _A. Implements stock)
 void FUN_CODE_bd14(void)
 
 {
@@ -29489,6 +29504,7 @@ void set_b5(undefined1 *param_1)
 
 
 
+// >>> HANDMADE: u4c_bd2a @ handmade/src/usb4_connect.h:14  (RMW helper: clears bits 5 and 6 of a register (PR(a) &= 0xDF; &= 0xBF))
 void FUN_CODE_bd2a(ushort param_1)
 
 {
@@ -29519,6 +29535,7 @@ void FUN_CODE_bd3a(ushort param_1)
 
 
 
+// >>> HANDMADE: u4c_bd41 @ handmade/src/usb4_connect.h:16  (RMW helper: clears bit1 of REG_TIMER_CTRL_CC3B. Implements stock FUN_C)
 void FUN_CODE_bd41(void)
 
 {
@@ -29582,6 +29599,7 @@ void FUN_CODE_bd65(ushort param_1)
 
 
 
+// >>> HANDMADE: u4c_bd6c @ handmade/src/usb4_connect.h:20  (Pumps the link controller (CA00/CA0A inline = stock dcd4 call) then re)
 char FUN_CODE_bd6c(void)
 
 {
@@ -30159,6 +30177,7 @@ void FUN_CODE_c1f9(undefined1 param_1,undefined1 param_2,undefined1 param_3,unde
 
 
 
+// >>> HANDMADE: u4c_c270 @ handmade/src/sb.h:336  (DROM PID descriptors: emits three descriptors the host CM reads back ()
 void FUN_CODE_c270(byte param_1,byte param_2)
 
 {
@@ -31063,6 +31082,7 @@ byte FUN_CODE_c942(undefined1 param_1,undefined1 param_2,char param_3)
 
 
 
+// >>> HANDMADE: bank0_c9a8 @ handmade/src/usb4_connect.h:193  (Host-link-event connect dispatcher: gates on u4_route_mode&0x04 + conn)
 void FUN_CODE_c9a8(undefined1 param_1)
 
 {
@@ -31611,6 +31631,7 @@ byte FUN_CODE_ccac(void)
 
 
 
+// >>> HANDMADE: u4c_ccb3 @ handmade/src/sb.h:310  (lane-config descriptor: main descriptor + two 0x09FB-gated sub-descrip)
 void FUN_CODE_ccb3(byte param_1,byte param_2)
 
 {
@@ -32175,6 +32196,7 @@ void boot_phy_d0d3_typec_sbu(void)
 
 
 
+// >>> HANDMADE: boot_phy_d118 @ handmade/src/boot_phy.h:31  (Write LTSSM ctrl, run a PHY settle command (cc10 0,0), return the LTSS)
 undefined1 FUN_CODE_d118(undefined1 param_1,ushort param_2)
 
 {
@@ -32868,6 +32890,7 @@ void bank0_d6bc(char param_1,char param_2,char param_3)
 
 
 
+// >>> HANDMADE: u4lb_d702 @ handmade/src/usb4_lanebond.h:432  (CC10-mailbox lane-mask bit-distributor (plane-2 0x78AF..0x7BAF slot bi)
 void FUN_CODE_d702(byte param_1,char param_2,byte param_3,byte param_4)
 
 {
@@ -33292,6 +33315,7 @@ void FUN_CODE_da13(undefined1 param_1)
 
 
 
+// >>> HANDMADE: pd_da51 @ handmade/src/pd.h:29  (Programs PD-engine RDO/CRC timing constants E401/E406/E407/E408 (gated)
 void FUN_CODE_da51(void)
 
 {
@@ -33702,6 +33726,7 @@ void FUN_CODE_dd0b(void)
 
 
 
+// >>> HANDMADE: vdm_nak @ handmade/src/vdm.h:24  (Refactored helper: build a VDM NAK echoing the received SVID. In stock)
 void FUN_CODE_dd0e(void)
 
 {
@@ -33750,6 +33775,7 @@ void pd_tx_set_sop_header(byte param_1)
 
 
 
+// >>> HANDMADE: boot_phy_dd42 @ handmade/src/boot_phy.h:82  (Program the E7E3 PHY config latch (REG_PHY_LINK_CTRL) from a mode sele)
 void FUN_CODE_dd42(char param_1)
 
 {
@@ -34040,6 +34066,7 @@ void FUN_CODE_df47(ushort param_1,byte param_2,byte param_3)
 
 
 
+// >>> HANDMADE: cc_ccf9_subdemux @ handmade/src/pd.h:226  (CCF9.1 sub-demux: copies u4_routerop_desc0 (0x0A9D) from cc_subdemux_s)
 void FUN_CODE_df79(void)
 
 {
@@ -35562,6 +35589,7 @@ void phy_cmd_cc10_and_wait(undefined1 param_1,byte param_2)
 
 
 
+// >>> HANDMADE: pd_arm_cc_timer @ handmade/src/pd_dispatch.h:46  (Arm the CC sender-response/PS-transition timer: write CC82/CC83 thresh)
 void FUN_CODE_e81b(undefined1 param_1,char param_2)
 
 {
@@ -35673,6 +35701,7 @@ void FUN_CODE_e876(void)
 
 
 
+// >>> HANDMADE: cc_cc99_default_event @ handmade/src/pd.h:222  (CC99.1 default branch. Empty stub in handmade; stock FUN_CODE_e883 cle)
 void FUN_CODE_e883(void)
 
 {
@@ -35841,6 +35870,7 @@ void FUN_CODE_e914(void)
 
 
 
+// >>> HANDMADE: u4lb_e916 @ handmade/src/usb4_lanebond.h:554  (Returns the plane-2 0x2805 read that seeds the 0x1335 RMWs in c593)
 void FUN_CODE_e916(byte param_1)
 
 {
@@ -36094,6 +36124,7 @@ void FUN_CODE_e974(void)
 
 
 
+// >>> HANDMADE: u4lb_lane_gate @ handmade/src/usb4_lanebond.h:841  (Lane gate: walk lane L iff work[0x19] & (1<<lane); transcribes the 800)
 char FUN_CODE_BANK1__8000
                (char param_1,undefined1 param_2,byte param_3,byte param_4,byte param_5,byte param_6)
 
@@ -38389,6 +38420,7 @@ byte FUN_CODE_BANK1__84fa(byte param_1)
 
 
 
+// >>> HANDMADE: u4lb_8501 @ handmade/src/usb4_lanebond.h:877  (Banked SB-transport drain/poll; non-load-bearing, implemented as a del)
 void FUN_CODE_BANK1__8501(void)
 
 {
@@ -38398,6 +38430,7 @@ void FUN_CODE_BANK1__8501(void)
 
 
 
+// >>> HANDMADE: u4lb_walk_850b @ handmade/src/usb4_lanebond.h:1101  (Alternate state-5 walker (0x0718!=4); dead on the live AMD path, kept )
 void FUN_CODE_BANK1__850b(ushort param_1,char param_2,byte param_3,byte param_4,byte param_5)
 
 {
@@ -38479,6 +38512,7 @@ undefined1 FUN_CODE_BANK1__898b(undefined1 param_1)
 
 
 
+// >>> HANDMADE: u4lb_8992 @ handmade/src/usb4_lanebond.h:825  (Per-lane SB lane-arm: SB[0x15]=v, SB[0x0C]=(.&0x80)|3, d5da(1))
 void FUN_CODE_BANK1__8992(byte param_1)
 
 {
@@ -38927,6 +38961,7 @@ void FUN_CODE_BANK1__8e27(undefined1 param_1,byte param_2)
 
 
 
+// >>> HANDMADE: usb4_phy_rx_descriptor_8e31 @ handmade/src/usb4_irq.h:44  (full PHY-RX descriptor config: dual PHY lanes (LaneA C2xx / LaneB C3xx)
 byte FUN_CODE_BANK1__8e31(void)
 
 {
@@ -40094,6 +40129,7 @@ void FUN_CODE_BANK1__96f7(byte param_1,undefined1 param_2)
 
 
 
+// >>> HANDMADE: u4lb_96fe @ handmade/src/usb4_lanebond.h:218  (Per-lane OS/CDR command-issue descriptor: SB[0x15]=op, SB[0x0C]=(.&0x8)
 void FUN_CODE_BANK1__96fe(byte param_1)
 
 {
@@ -40844,6 +40880,7 @@ byte FUN_CODE_BANK1__98e4(undefined1 param_1,ushort param_2)
 
 
 
+// >>> HANDMADE: u4lb_98ec @ handmade/src/usb4_lanebond.h:362  (Lane-width snapshot producer: arm 0x0758=0x10, run ee57, latch CCE4:CC)
 void FUN_CODE_BANK1__98ec(undefined1 param_1,undefined1 param_2)
 
 {
@@ -42249,6 +42286,7 @@ LAB_CODE_BANK1__a5cd:
 
 
 
+// >>> HANDMADE: u4lb_cm_conn_routing_setup @ handmade/src/usb4_lanebond.h:105  (State-3 [ConnRout] connection-routing FSM: 0x0758 sub-FSM, host connec)
 void FUN_CODE_BANK1__a5d8(char param_1)
 
 {
@@ -43741,6 +43779,7 @@ LAB_CODE_BANK1__af34:
 
 
 
+// >>> HANDMADE: sb_af38_descriptor_response @ handmade/src/sb_router.h:67  (Read host connect descriptor from RX plane, build device->host TX resp)
 void FUN_CODE_BANK1__af38(byte param_1)
 
 {
@@ -43872,6 +43911,7 @@ LAB_CODE_BANK1__b096:
 
 
 
+// >>> HANDMADE: u4lb_state4_b0b4 @ handmade/src/usb4_lanebond.h:615  (State-4 PCIe-tunnel power-on / lane-bond engine body ([PcieTunnel-PwrO)
 char FUN_CODE_BANK1__b0b4(byte param_1)
 
 {
@@ -44021,6 +44061,7 @@ char FUN_CODE_BANK1__b0b4(byte param_1)
 
 
 
+// >>> HANDMADE: u4lb_b226 @ handmade/src/usb4_lanebond.h:353  (CC10 settle wrapper (phy_cc10_cmd_wait(2,0,0xC8)))
 void FUN_CODE_BANK1__b226(void)
 
 {
@@ -44910,6 +44951,7 @@ void sb_lane_descriptor_loader(byte param_1)
 
 
 
+// >>> HANDMADE: u4lb_b8db @ handmade/src/usb4_lanebond.h:582  (CDR/PLL validate loop ([CDRV ok]): per-lane margin window + bounded po)
 byte bank1_b8db(void)
 
 {
@@ -46541,6 +46583,7 @@ void FUN_CODE_BANK1__c2d2(ushort param_1)
 
 
 
+// >>> HANDMADE: C2D9 @ handmade/src/usb4_irq.h:40  (PHY-config RMW helper: reg &0x0F|0x60 and reg+1 &0xF0|0x07 (byte-exact)
 void FUN_CODE_BANK1__c2d9(ushort param_1)
 
 {
@@ -46630,6 +46673,7 @@ void FUN_CODE_BANK1__c307(undefined1 param_1,ushort param_2)
 
 
 
+// >>> HANDMADE: C30E @ handmade/src/usb4_irq.h:39  (PHY-config RMW helper: clears reg bits via &0xFE,&0xFD,&0xFB,&0xF7 (by)
 void FUN_CODE_BANK1__c30e(ushort param_1)
 
 {
@@ -46662,6 +46706,7 @@ byte FUN_CODE_BANK1__c32d(undefined1 param_1,ushort param_2)
 
 
 
+// >>> HANDMADE: C335 @ handmade/src/usb4_irq.h:38  (PHY-config RMW helper: reg &0x0F|0xE0 and reg+1 &0x0F|0x70 (byte-exact)
 void FUN_CODE_BANK1__c335(ushort param_1)
 
 {
@@ -46782,6 +46827,7 @@ void FUN_CODE_BANK1__c390(ushort param_1)
 
 
 
+// >>> HANDMADE: C397 @ handmade/src/usb4_irq.h:41  (PHY-config RMW helper: reg &0xF1|0x0E and reg+1 = 0 (byte-exact match))
 void FUN_CODE_BANK1__c397(ushort param_1)
 
 {
@@ -47657,6 +47703,7 @@ bank1_ca52(ushort param_1,byte param_2,byte param_3,byte param_4,byte param_5,un
 
 
 
+// >>> HANDMADE: sb_cb10_lane_advance @ handmade/src/sb_router.h:665  (Per-super-loop SB lane-bond advance: read SB[0xA0]/[0xA1] low nibble, )
 void bank1_cb10(byte param_1)
 
 {
@@ -47868,6 +47915,7 @@ LAB_CODE_BANK1__cd3b:
 
 
 
+// >>> HANDMADE: sb_cd3f_dispatch @ handmade/src/sb_router.h:172  (Read host descriptor and run the connect dispatch: edd9 ack then branc)
 void FUN_CODE_BANK1__cd3f(byte param_1)
 
 {
@@ -47920,6 +47968,7 @@ void FUN_CODE_BANK1__cd3f(byte param_1)
 
 
 
+// >>> HANDMADE: sb_cdf5_routerop_response @ handmade/src/sb_router.h:508  (Deferred device->host router-op CONFIG-READ response (cdf5..cea9): bui)
 void FUN_CODE_BANK1__cdf5(byte param_1)
 
 {
@@ -48518,6 +48567,7 @@ void FUN_CODE_BANK1__d18e(undefined1 param_1)
 
 
 
+// >>> HANDMADE: u4lb_d195 @ handmade/src/usb4_lanebond.h:374  (P1[0x7104] = (.&0xBF)|0x40 plane-2 PHY strobe)
 void FUN_CODE_BANK1__d195(void)
 
 {
@@ -48620,6 +48670,7 @@ void FUN_CODE_BANK1__d1c9(byte param_1,byte param_2)
 
 
 
+// >>> HANDMADE: u4lb_d1d3 @ handmade/src/usb4_lanebond.h:379  (Returns (P1[hi:0x8D] & 0xF3)|8 plane-2 lane-block accessor helper)
 byte FUN_CODE_BANK1__d1d3(byte param_1)
 
 {
@@ -48877,6 +48928,7 @@ void FUN_CODE_BANK1__d31e(byte param_1)
 
 
 
+// >>> HANDMADE: u4lb_d3b0 @ handmade/src/usb4_lanebond.h:325  (Chg2 rate setup (rate=3=20G): SB[0x65] rate bits, commit via CC10)
 void FUN_CODE_BANK1__d3b0(byte param_1,undefined1 param_2)
 
 {
@@ -49087,6 +49139,7 @@ void FUN_CODE_BANK1__d54c(undefined1 param_1,short param_2,byte param_3)
 
 
 
+// >>> HANDMADE: u4c_d556 @ handmade/src/sb.h:364  (per-route descriptor latch: route-mode-gated PR(0x0250/0x0251)=0x02/0x)
 void bank1_d556(byte param_1)
 
 {
@@ -49132,6 +49185,7 @@ void bank1_d556(byte param_1)
 
 
 
+// >>> HANDMADE: u4lb_d5da @ handmade/src/usb4_lanebond.h:225  (Per-lane PHY-RX/CDR commit + settle handshake (the bounded SB-transpor)
 char FUN_CODE_BANK1__d5da(byte param_1,byte param_2)
 
 {
@@ -49732,6 +49786,7 @@ void FUN_CODE_BANK1__da9f(byte param_1)
 
 
 
+// >>> HANDMADE: usb4_irq_db0d @ handmade/src/usb4_irq.h:211  (PHY link/SB sideband setup producing SB[0x1C]=0xC2: C21B|0xC0, LINK_CT)
 void FUN_CODE_BANK1__db0d(void)
 
 {
@@ -49774,6 +49829,7 @@ void FUN_CODE_BANK1__db0d(void)
 
 
 
+// >>> HANDMADE: sb_db7a_route_arm @ handmade/src/sb_router.h:253  (Post-connect tunnel-route arm; branches on 0x07B9 (Connect_U4 vs Enter)
 void FUN_CODE_BANK1__db7a(byte param_1)
 
 {
@@ -50156,6 +50212,7 @@ void FUN_CODE_BANK1__de41(byte param_1)
 
 
 
+// >>> HANDMADE: sb_con_consequence @ handmade/src/sb_router.h:272  (Post-connect consequence: heavy SB/PHY arm once per session (gated 0x0)
 void FUN_CODE_BANK1__dea1(byte param_1,byte param_2)
 
 {
@@ -50237,6 +50294,7 @@ void FUN_CODE_BANK1__df01(byte param_1,byte param_2)
 
 
 
+// >>> HANDMADE: u4lb_df61 @ handmade/src/usb4_lanebond.h:385  (Plane-2 PHY lane-block program (1808/1835/7041/6043/6025/508x/520x/408)
 void FUN_CODE_BANK1__df61(byte param_1)
 
 {
@@ -50359,6 +50417,7 @@ LAB_CODE_BANK1__e079:
 
 
 
+// >>> HANDMADE: u4lb_e07d @ handmade/src/usb4_lanebond.h:247  (Retrain-path per-lane PHY/SB2 lane-block program)
 void FUN_CODE_BANK1__e07d(byte param_1)
 
 {
@@ -50516,6 +50575,7 @@ char FUN_CODE_BANK1__e17b
 
 
 
+// >>> HANDMADE: u4lb_e1cb_e2b9 @ handmade/src/usb4_lanebond.h:763  (SB-transport descriptor builder: e1cb (0x0776!=0 live AMD path) and e2)
 void FUN_CODE_BANK1__e1cb(byte param_1,char param_2,undefined1 param_3)
 
 {
@@ -50653,6 +50713,7 @@ void FUN_CODE_BANK1__e2b9(byte param_1,char param_2,undefined1 param_3)
 
 
 
+// >>> HANDMADE: u4lb_e305 @ handmade/src/usb4_lanebond.h:540  (State-4 PcieTunnel power-on prologue: CA06 mode-next select, ee29, B40)
 void FUN_CODE_BANK1__e305(byte param_1)
 
 {
@@ -50789,6 +50850,7 @@ byte FUN_CODE_BANK1__e41c(void)
 
 
 
+// >>> HANDMADE: u4lb_e461 @ handmade/src/usb4_lanebond.h:787  (SB-transport route push the walker depends on; selects e1cb (0x0718==4)
 void FUN_CODE_BANK1__e461(byte param_1,char param_2)
 
 {
@@ -50934,6 +50996,7 @@ void sb_lane_bond_complete_tunnel_up(byte param_1)
 
 
 
+// >>> HANDMADE: usb4_routerop_init @ handmade/src/usb4_irq.h:253  (USB4 CM router-op RX-enable: EC00 enable, phy_cc10_cmd_wait(0,9,0), EA)
 void bank1_e56f(void)
 
 {
@@ -50959,6 +51022,7 @@ void bank1_e56f(void)
 
 
 
+// >>> HANDMADE: u4c_e5b0 @ handmade/src/sb.h:298  (descriptor-engine pre-config before ccb3/c270 program descriptors (cle)
 void bank1_e5b0(byte param_1)
 
 {
@@ -51064,6 +51128,7 @@ char bank1_e632(byte param_1,byte param_2,byte param_3,char param_4,byte param_5
 
 
 
+// >>> HANDMADE: u4lb_e672 @ handmade/src/usb4_lanebond.h:1239  (Lane-bond FSM dispatcher from cb10 tail (0x06ED): 3->cm_conn_routing_s)
 void FUN_CODE_BANK1__e672
                (char param_1,undefined1 param_2,byte param_3,byte param_4,byte param_5,byte param_6,
                char param_7)
@@ -51476,6 +51541,7 @@ void FUN_CODE_BANK1__e949(byte param_1)
 
 
 
+// >>> HANDMADE: u4lb_e980 @ handmade/src/usb4_lanebond.h:310  (20G rate-descriptor apply (C2A8/C328 + C2C9/C349 rate fields + START b)
 void FUN_CODE_BANK1__e980(ushort param_1,byte param_2)
 
 {
@@ -51609,6 +51675,7 @@ void FUN_CODE_BANK1__ea4b(byte param_1,byte param_2)
 
 
 
+// >>> HANDMADE: u4lb_ea7c @ handmade/src/usb4_lanebond.h:817  (CC-orientation PHY CL bit2 program (C2CB/C34B); sel==0x0F set bit2 els)
 void FUN_CODE_BANK1__ea7c(char param_1,byte param_2)
 
 {
@@ -51636,6 +51703,7 @@ void FUN_CODE_BANK1__ea7c(char param_1,byte param_2)
 
 
 
+// >>> HANDMADE: sb_eaac_populate_0777 @ handmade/src/sb_router.h:37  (Copy host connect descriptor from SB-plane-2 (0x2a00/0x2b00) into the )
 void FUN_CODE_BANK1__eaac(byte param_1)
 
 {
@@ -51755,6 +51823,7 @@ void FUN_CODE_BANK1__eb37(byte param_1)
 
 
 
+// >>> HANDMADE: u4lb_eb62 @ handmade/src/usb4_lanebond.h:12  (Set the lane-bond FSM state (XDATA 0x06ED), print [SB P0<state>])
 void FUN_CODE_BANK1__eb62(undefined1 param_1,undefined1 param_2)
 
 {
@@ -51801,6 +51870,7 @@ void cm_RBER_handler(void)
 
 
 
+// >>> HANDMADE: sb_set_connect_present_ebb5 @ handmade/src/sb_router.h:151  (The 0x0765 connect-present setter: SB[0x57]|=0x08, SB[0x61]|=0x08 when)
 void FUN_CODE_BANK1__ebb5(byte param_1)
 
 {
@@ -51824,6 +51894,7 @@ void FUN_CODE_BANK1__ebb5(byte param_1)
 
 
 
+// >>> HANDMADE: u4lb_ebde @ handmade/src/usb4_lanebond.h:301  (Rate-lock settle: pulse C20F then bounded-spin for C2D0.5 / C350.5 loc)
 void FUN_CODE_BANK1__ebde(undefined1 param_1,byte param_2)
 
 {
@@ -51891,6 +51962,7 @@ void FUN_CODE_BANK1__ec2c(void)
 
 
 
+// >>> HANDMADE: u4lb_ec51 @ handmade/src/usb4_lanebond.h:344  (Trig-arm: arm the lane-train trigger (CCE0-CCE3) state 5 fires as [Tri)
 void FUN_CODE_BANK1__ec51(void)
 
 {
@@ -52036,6 +52108,7 @@ void FUN_CODE_BANK1__ed23(void)
 
 
 
+// >>> HANDMADE: u4lb_ed44 @ handmade/src/usb4_lanebond.h:403  (B401/B402 tunnel-link strobe, then df61)
 void bank1_ed44(byte param_1)
 
 {
@@ -52093,6 +52166,7 @@ void FUN_CODE_BANK1__ed82(byte param_1,byte param_2,byte param_3)
 
 
 
+// >>> HANDMADE: u4lb_eda0 @ handmade/src/usb4_lanebond.h:750  (Route-special selector (0=eval,1=idle,2=route-special); clears 0x0775/)
 void FUN_CODE_BANK1__eda0(void)
 
 {
@@ -52114,6 +52188,7 @@ void FUN_CODE_BANK1__eda0(void)
 
 
 
+// >>> HANDMADE: u4c_edbd @ handmade/src/sb.h:292  (SB[0x1C].0 = !connect (set when no Enter_USB accept, else clear))
 void bank1_edbd(void)
 
 {
@@ -52139,6 +52214,7 @@ void bank1_edbd(void)
 
 
 
+// >>> HANDMADE: sb_edd9_receive_ack @ handmade/src/sb_router.h:160  (cd3f's first action on every transport edge: device->host receive-ACK )
 void FUN_CODE_BANK1__edd9(byte param_1,byte param_2)
 
 {
@@ -52160,6 +52236,7 @@ void FUN_CODE_BANK1__edd9(byte param_1,byte param_2)
 
 
 
+// >>> HANDMADE: u4lb_edf5_route_query @ handmade/src/usb4_lanebond.h:27  (State-3 device->host SB-transport route-query that prompts host to pos)
 void FUN_CODE_BANK1__edf5(void)
 
 {
@@ -52194,6 +52271,7 @@ void FUN_CODE_BANK1__ee11(void)
 
 
 
+// >>> HANDMADE: u4lb_ee29 @ handmade/src/usb4_lanebond.h:422  (C659&=~1; B402&=~1; ed44; e74e; 0x0B42=0; 0x0B43=0)
 void bank1_ee29(ushort param_1,byte param_2)
 
 {
@@ -52231,6 +52309,7 @@ void FUN_CODE_BANK1__ee40(byte param_1)
 
 
 
+// >>> HANDMADE: u4lb_ee57 @ handmade/src/usb4_lanebond.h:357  (Fire ec51 Trig-arm when CCE1.0 clear or CCE1.1 set, before reading the)
 undefined1 FUN_CODE_BANK1__ee57(void)
 
 {
@@ -52248,6 +52327,7 @@ undefined1 FUN_CODE_BANK1__ee57(void)
 
 
 
+// >>> HANDMADE: u4lb_ee6e @ handmade/src/usb4_lanebond.h:747  (Per-lane SB connect-present = SB[lane?0x60:0x56].0)
 byte FUN_CODE_BANK1__ee6e(char param_1)
 
 {
@@ -52334,6 +52414,7 @@ void bank1_eec7(byte param_1)
 
 
 
+// >>> HANDMADE: sb_lane_bonded_consequence @ handmade/src/sb_router.h:308  (Post-[Lane Bonded] consequence: 0x072D=1, SB[0xC9]=0xFF, page1 0x01C8 )
 void FUN_CODE_BANK1__eed6(void)
 
 {
@@ -52421,6 +52502,7 @@ void cm_RDCP_handler(undefined1 param_1,undefined1 param_2,undefined1 param_3,un
 
 
 
+// >>> HANDMADE: usb4_irq_ef1e @ handmade/src/usb4_irq.h:227  (SB-PHY 4-lane RX arm: applies paged RX equalizer/rate RMW table (u4rx_)
 void bank1_ef1e(byte param_1,undefined1 param_2)
 
 {
@@ -52431,6 +52513,7 @@ void bank1_ef1e(byte param_1,undefined1 param_2)
 
 
 
+// >>> HANDMADE: usb4_irq_ef24 @ handmade/src/usb4_irq.h:236  (PHY link setup + RX descriptor config; calls db0d then 8e31 exactly as)
 void bank1_ef24(void)
 
 {
