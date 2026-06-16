@@ -39,7 +39,20 @@ echo -n "[test]  bootloader: "; sudo python3 ftdi_debug.py -bn 2>&1 | tail -1
 echo -n "[test]  flash:      "; sudo PYTHONPATH=/home/batman/openpilot/tinygrad_repo USBDEV=174C:2463 python3 flash.py ~/hm_fw.bin 2>&1 | tail -1
 echo -n "[test]  run:        "; sudo python3 ftdi_debug.py -rn 2>&1 | tail -1
 : > ~/cap.txt
+TBB=/home/batman/.cargo/bin
+# LIVE host-side Lane-adapter poll, concurrent with the UART capture. The host router's downstream
+# Lane adapters reflect lane training in real time: CLd (disconnected) -> "Training/Bonding" (lanes
+# training) -> CL0/CL2 (bonded). A device that never bonds shows the host STUCK at "Training/Bonding"
+# then dropping to CLd -- the host-side read of the SB[0xA0]=0x01 stall (post-capture snapshots only
+# catch CLd because the device has reboot-disconnected by then).
+( endt=\$(( \$(date +%s) + \$SECS )); while [ \$(date +%s) -lt \$endt ]; do
+    s1=\$(sudo \$TBB/tbadapters -d 1 -r 0 2>/dev/null | grep -iE "Lane|PCIe Down" | awk '{printf "%s ", \$NF}')
+    s0=\$(sudo \$TBB/tbadapters -d 0 -r 0 2>/dev/null | grep -iE "Lane|PCIe Down" | awk '{printf "%s ", \$NF}')
+    echo "d1[\$s1] d0[\$s0]"
+  done | uniq -c > ~/tbadp.log ) &
+POLLPID=\$!
 sudo timeout \$SECS python3 ftdi_debug.py >> ~/cap.txt 2>&1
+wait \$POLLPID 2>/dev/null
 echo "[test]  captured \$(wc -l < ~/cap.txt) lines"
 # End-to-end ENUMERATION + HOST-SIDE THUNDERBOLT view via the intel tbtools (they live in
 # ~/.cargo/bin = /home/batman/.cargo/bin, NOT in the non-login ssh PATH). The firmware change only
@@ -55,9 +68,9 @@ echo "1" | sudo tee /sys/bus/pci/rescan >/dev/null 2>&1 || true
 sleep 1
 GPU=\$(lspci -nn 2>/dev/null | grep -iE "1002:7590|Radeon RX 9060" | head -1)
 echo "[test]  GPU(lspci 1002:7590): \${GPU:-<absent>}"
-TBB=/home/batman/.cargo/bin
-echo "[tbhost] tbadapters host routers (Lane = bond state CLd/CL0/CL2; PCIe Down = tunnel):"
-for dom in 1 0; do sudo \$TBB/tbadapters -d \$dom -r 0 2>/dev/null | grep -iE "Lane|PCIe|Host Interface" | sed "s/^/[tbhost]  d\$dom /"; done
+echo "[tbhost] LIVE host Lane-adapter state during connect (count x  d1[La0 La1 La0 La1 PCIeDn PCIeDn] d0[...]):"
+echo "[tbhost]   CLd=disconnected; Training/Bonding=lanes training (STUCK here = no bond); CL0/CL2=bonded"
+sed 's/^/[tbhost]  /' ~/tbadp.log 2>/dev/null | tail -14
 echo "[tbhost] tbtunnels:"; for dom in 0 1; do sudo \$TBB/tbtunnels -d \$dom 2>/dev/null | grep -viE "^No tunnels found" | sed "s/^/[tbhost]  d\$dom /"; done
 echo "[tbhost] tblist devices:"; sudo \$TBB/tblist -S 2>/dev/null | sed 's/^/[tbhost]  /' | tail -6
 RTF=\$(sudo dmesg 2>/dev/null | tail -n +\$((DMESG_PRE+1)) | grep -c "new retimer found")
