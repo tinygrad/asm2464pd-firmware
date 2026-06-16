@@ -641,8 +641,10 @@ void main(void) {
        * (the RXPLL "trained/ready" latch) stays clear and phy_rxpll_train_busy=1. Stock runs the cdc6
        * train in state-4; re-drive it per state-5 walker pass while busy so E762.4 can latch under the
        * host's live lane-training pattern, completing the train so the host advances Training->CL0. */
-      if (XDATA_REG8V(0x06ED) == 5 && phy_rxpll_train_busy != 0) {
-        u4lb_e764_rxpll_train();
+      if (XDATA_REG8V(0x06ED) == 5) {
+        u4lb_e764_rxpll_train();   /* re-drive EVERY state-5 pass (not just while busy) -- keep the
+                                    * train polling E762.4 under the host's live stimulus to push the
+                                    * snap past 28xx toward the 3C3C bond-confirm */
       }
       // cb10 tail: clear the in-flight e461 token once the host has posted its descriptor.
       if (sb_cdf5_substate_arm != 0) (void)u4lb_eda0();
