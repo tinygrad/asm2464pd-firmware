@@ -496,6 +496,43 @@ static void sb_a5d8_pend_int(void) {
   SB_WR(0x06, 0x01);
 }
 
+/* cdf5: the DEFERRED device->host router-op CONFIG-READ RESPONSE (CODE_BANK1::cdf5..cea9, byte-verified).
+ * Stock cb10's super-loop tail runs this whenever the opcode-1/2 router-op (sb_a5d8_pend_int above)
+ * armed 0x072A. It builds the lane-config response header (0x0998-0x099B; only hdr1/hdr3 change --
+ * hdr0/hdr2 are snapshot/round-trip no-ops) + body (0x099C+) and TRANSMITS it via the SB-transport
+ * plane (SB_WR(0x06,0x01) == stock 9934-pack + r3_write_dispatch into bank-2 0x2806, the same strobe
+ * the opcode-0 a719 tail uses). THIS IS THE WIRE EVENT THE TB4 HOST BLOCKS ON: without it the host's
+ * router-op config-read goes unanswered, the lane-config snap plateaus at 2D2D, and SB[0xA0]/[0xA1]
+ * stay 0x07 (bond-ready) instead of advancing to 0x02 (CL0 bonded). `r` = the eda0 selector taken at
+ * the call site (0/2 => respond; 1 => nothing this pass, arm stays set so it retries). */
+static void sb_cdf5_routerop_response(uint8_t r) {
+  uint8_t hdr1_new, hdr3_orig, w3, i, len;
+  if (r == 1) return;                                  /* cdff: RET when eda0 selector == 1 */
+  sb_cdf5_substate_arm = 0;                            /* ce02-ce06: clear the 0x072A one-shot */
+  hdr1_new  = (uint8_t)(u4_host_desc[0x1] & 0x7F);     /* ce27-ce30: a5d = XDATA[0x0778] & 0x7F */
+  hdr3_orig = sb_routerop_hdr3;                        /* a5f initial = 0x099B */
+  if (r == 2) {                                        /* ce31-ce3c: R5==2 */
+    w3 = (uint8_t)(hdr3_orig | 0x02);
+  } else {                                             /* ce3e-ce87 */
+    w3 = (uint8_t)(hdr3_orig & 0xFB);                  /* ce42: clear bit2 */
+    if ((hdr3_orig & 0x01) == 0) {                     /* ce45: bit0 of ORIGINAL hdr3 clear -> body copy */
+      if (hdr1_new == 0) w3 = (uint8_t)(w3 | 0x04);    /* ce57-ce63: if (0x0778&0x7F)==0 -> |4 */
+      len = hdr1_new; if (len > 0x40) len = 0x40;      /* ce64-ce6e: cap body length at 0x40 */
+      for (i = 0; i < len; i++)
+        sb_routerop_body[i] = u4_host_desc[(uint8_t)(0x2 + i)];  /* ce72-ce87: 0x099C+i = 0x0779+i */
+    } else {                                           /* ce48-ce55: bit0 of ORIGINAL hdr3 set */
+      if (u4_host_desc[0x2] != 0) w3 = (uint8_t)(w3 | 0x04);     /* if XDATA[0x0779] != 0 -> |4 */
+    }
+  }
+  w3 = (uint8_t)(w3 & 0x7F);                            /* ce89-ce90: clear bit7 */
+  sb_routerop_hdr1 = hdr1_new;                          /* ce99-cea0: 0x0999 = a5d (hdr0/hdr2 unchanged) */
+  sb_routerop_hdr3 = w3;                                /* cea1+9934: 0x099B = w3 */
+  { static __xdata uint8_t cdf5_dbg = 24;
+    if (cdf5_dbg) { cdf5_dbg--; uart_puts("\r\n[cdf5 r="); uart_puthex(r); uart_puts(" h1="); uart_puthex(hdr1_new);
+      uart_puts(" w3="); uart_puthex(w3); uart_putc(']'); } }
+  SB_WR(0x06, 0x01);                                   /* cea4 9934 + cea7 0be6 r3_write_dispatch: SB-transport TX */
+}
+
 /* Set by the a066 ISR when it observes SB[0x26].1 ([Pend Int]); the body runs in the super-loop. */
 static volatile uint8_t __xdata __at(0x0B55) sb_pend_int_pending;
 

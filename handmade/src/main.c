@@ -646,8 +646,10 @@ void main(void) {
                                     * train polling E762.4 under the host's live stimulus to push the
                                     * snap past 28xx toward the 3C3C bond-confirm */
       }
-      // cb10 tail: clear the in-flight e461 token once the host has posted its descriptor.
-      if (sb_cdf5_substate_arm != 0) (void)u4lb_eda0();
+      // cb10 tail: send the deferred router-op CONFIG-READ RESPONSE (stock cdf5) the host blocks on.
+      // u4lb_eda0() (called here for its 0x0775/0x0719 token-clear side-effect) yields the selector
+      // cdf5 needs (0/2 => build+TX the lane-config response; 1 => nothing this pass, arm stays set).
+      if (sb_cdf5_substate_arm != 0) sb_cdf5_routerop_response(u4lb_eda0());
       IE |= IE_EA;
       // Track FSM stall: count when 0x06ED makes no progress, reset when it advances.
       if (XDATA_REG8V(0x06ED) == fsm_before) { if (fsm_stall < 0xFF) fsm_stall++; }
