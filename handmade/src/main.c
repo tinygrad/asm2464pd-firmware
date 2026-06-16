@@ -613,27 +613,26 @@ void main(void) {
         uart_puts("[LB arm]");
         u4lb_eb62(0, 3);
         u4lb_98ec();   // snapshot CCE4:CCE5 lane-width into 0x768:0x769
-        lb_walk_throttle_snap_hi = REG_LANE_WIDTH_CNT_HI;   // seed cb10's running snapshot (0x076A:0x076B)
-        lb_walk_throttle_snap_lo = REG_LANE_WIDTH_CNT_LO;
       }
-      /* stock cb10 e672 gate (CODE_BANK1::cb87-cbbd, byte-true): when 0x06ED!=0, re-arm the LANE_TRAIN
-       * HW via ee57()->ec51() (CCE0-CCE3 + 0x0774 toggle) so the device keeps emitting fresh training
-       * symbols EVERY pass, and step the walker e672 ONCE only when the PHY lane-width counter
-       * CCE4:CCE5 has moved >=2 since the last pass, re-snapshotting after. This paces the CL walker to
-       * host lane-training progress. The handmade previously free-ran e672 4x with NO re-arm and NO
-       * throttle, so the device stopped emitting training symbols at the 2D2D plateau and the host
-       * withheld the SB[0xA0] 0x01->0x02 confirm (deep-dive 2026-06-16). */
+      /* stock cb10 e672 throttle (bank1_cb10, byte-true via stock_ghidra_export.c:47703-47726):
+       * counter = the FROZEN negotiated-width latch 0x074E:0x074F (lb_laneA/B_cl0_latch, set at
+       * state-5 entry usb4_lanebond.h:732-733; NOT the live CCE4:CCE5); delta = snapshot(0x076A:0x076B)
+       * - counter (16-bit); fire e672 when delta_hi >= (delta_lo<3?1:0) (~delta>=3); re-snapshot
+       * stores the COMPUTED DELTA back (snap -= counter, a countdown). 0x076A:0x076B is NOT seeded
+       * (stock leaves it to the throttle), so the handmade CCE seed is removed. ee57()->ec51() re-arms
+       * the LANE_TRAIN HW each pass so the device keeps emitting fresh training symbols. */
       if (XDATA_REG8V(0x06ED) != 0) {
-        uint16_t cce, snap, delta;
+        uint8_t cnt_hi = lb_laneA_cl0_latch, cnt_lo = lb_laneB_cl0_latch;   /* 0x074E:0x074F */
+        uint8_t snap_hi = lb_walk_throttle_snap_hi, snap_lo = lb_walk_throttle_snap_lo;  /* 0x076A:0x076B */
+        uint8_t d_lo, d_hi;
         u4lb_ee57();
-        cce   = (uint16_t)(((uint16_t)REG_LANE_WIDTH_CNT_HI << 8) | REG_LANE_WIDTH_CNT_LO);
-        snap  = (uint16_t)(((uint16_t)lb_walk_throttle_snap_hi << 8) | lb_walk_throttle_snap_lo);
-        delta = (uint16_t)(snap - cce);
-        if (delta >= 2) {
+        d_lo = (uint8_t)(snap_lo - cnt_lo);
+        d_hi = (uint8_t)(snap_hi - cnt_hi - (uint8_t)((snap_lo < cnt_lo) ? 1 : 0));
+        if (d_hi >= (uint8_t)((d_lo < 3) ? 1 : 0)) {
           u4lb_e672();
           u4lb_ee57();
-          lb_walk_throttle_snap_hi = REG_LANE_WIDTH_CNT_HI;
-          lb_walk_throttle_snap_lo = REG_LANE_WIDTH_CNT_LO;
+          lb_walk_throttle_snap_hi = d_hi;   /* re-snapshot = the computed delta */
+          lb_walk_throttle_snap_lo = d_lo;
         }
       }
       /* deep-dive rank-1 (2026-06-16): the host stays at tbadapters "Training/Bonding" because the
