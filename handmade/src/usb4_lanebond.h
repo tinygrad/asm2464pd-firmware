@@ -743,41 +743,63 @@ static uint8_t u4lb_eda0(void) {
   return 1;
 }
 
-/* e461: the SB-transport route push the walker depends on. Gated by the 0x0719 in-flight token;
- * the live path (0x0718==4) builds the e2b9/e1cb descriptor (SB[0x15] = 0x41 when 0x0776 set, else
- * 0x0718) and triggers the bounded TX. Returns 1 only when a push was issued. */
+/* e1cb/e2b9: the SB-transport descriptor builder (CODE_BANK1::e1cb is the 0x0776!=0 live AMD path,
+ * e2b9 the 0x0776==0 path). Byte-true transcription:
+ *   sb_tx_cmd  (0x0AA8) = byte0   sb_tx_byte0 (0x0AA9) = byte1   sb_tx_byte1 (0x0AAA) = flag3
+ *   d4cd(); 997e -> SBTX[0]=byte1; 9923 -> SBTX[1]=flag3|((0xAAB.0)<<7);
+ *   SB[0x0C] form: (0xAAB!=0) ? (byte1+8)|(SB0C&0x80) : (SB0C&0x80)|0x08;
+ *   e1cb: SB[0x15] = (byte0<<1)|0x41 (via 972a);  e2b9: SB[0x15] = byte0 (via 96f7);
+ *   d5da(0); 0x0719 = 0xFF (inflight token). */
+static void u4lb_e1cb_e2b9(uint8_t is_e1cb) {
+  uint8_t aab = sb_tx_flag;          /* XDATA[0x0AAB] */
+  uint8_t form;
+  sb_d4cd_transport_edges();         /* d4cd */
+  SBTX_WR(0, sb_tx_byte0);           /* 997e: SBTX[0] = XDATA[0x0AA9] (=byte1) */
+  SBTX_WR(1, (uint8_t)(sb_tx_byte1 | ((aab & 1) << 7)));  /* 9923: SBTX[1] = XDATA[0x0AAA] | ((0xAAB.0)<<7) */
+  if (aab != 0)
+    form = (uint8_t)(((sb_tx_byte0 + 8) & 0xFF) | (SB_RD(0x0C) & 0x80));  /* 99ac: (byte1+8)|SB0C.7 */
+  else
+    form = (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08);                        /* 9695: (SB0C.7)|0x08 */
+  SB_WR(0x0C, form);
+  if (is_e1cb)
+    SB_WR(0x15, (uint8_t)((sb_tx_cmd << 1) | 0x41));   /* e1cb 972a: SB[0x15]=(byte0<<1)|0x41 */
+  else
+    SB_WR(0x15, sb_tx_cmd);                            /* e2b9 96f7: SB[0x15]=byte0 */
+  u4lb_d5da(0);                                        /* d5da(0) TX trigger */
+  /* 97ef tail: CCD9 strobe (4,2) then DEC A=1 -> CCD9=1 and 0x0719=1 (inflight token). */
+  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02; REG_XFER2_DMA_STATUS = 0x01;
+  e461_inflight_token = 0x01;                          /* 0x0719 = 1 */
+}
+
+/* e461: the SB-transport route push the walker depends on (CODE_BANK1::e461). Gated by the 0x0719
+ * in-flight token. Live AMD path: 0x0718(route_enable)=4 -> e487; 0x0776=1 -> e1cb with byte0=0,
+ * byte1=0x0D, flag3=4 (9966 seeds R5=0x0D,R3=4,R7=0). Returns 1 only when a push was issued. */
 static uint8_t u4lb_e461(void) {
-  uint16_t g;
-  if (e461_inflight_token != 0) return 0;
+  if (e461_inflight_token != 0) return 0;            /* XDATA[0x0719] in-flight */
   if (u4_route_enable_latch == 0) {
-    SB_WR(0x04, (uint8_t)((SB_RD(0x04) & 0xFE) | 0x01));
-    SB_WR(0x04, (uint8_t)((SB_RD(0x04) & 0xFD) | 0x02));
-    sb_tx_flag = 0;
+    /* 0x0718==0: 9960 seeds byte0=route|1, R5=0x0D, R3=4, 0xAAB=0; then e2b9. (Dead on AMD.) */
+    sb_tx_flag = 0;                                  /* 9966: XDATA[0x0AAB]=0 */
+    sb_tx_cmd  = (uint8_t)(u4_route_enable_latch | 0x01);  /* 9960: byte0 = route|1 = 1 */
+    sb_tx_byte0 = 0x0D;                              /* R5 */
+    sb_tx_byte1 = 0x04;                              /* R3 */
+    u4lb_e1cb_e2b9(0);                               /* e2b9 */
     return 1;
   }
-  {
-    sb_tx_flag = 0;
-    sb_tx_cmd = u4_coldboot_seed_gate ? 0 : u4_route_enable_latch;
-    sb_tx_byte0 = 0x0D;
-    sb_tx_byte1 = 0x04;
-    sb_d4cd_transport_edges();
-    SBTX_WR(0, sb_tx_byte0);
-    SBTX_WR(1, (uint8_t)(sb_tx_byte1 | ((sb_tx_flag & 1) << 7)));
-    SB_WR(0x0C, (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08));
-    SB_WR(0x15, u4_coldboot_seed_gate ? (uint8_t)((sb_tx_cmd << 1) | 0x41) : (uint8_t)sb_tx_cmd);
-    sb_tx_go_param = 0;
-    P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
-    SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));
-    SB_WR(0x10, 0x01);
-    g = 0; while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { }
-    SB_WR(0x2C, 0x04);
-    phy_cc10_cmd(1, 0, 0x0B);
-    SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));
-    REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;
-    (void)SB_RD(0x0C);
-    REG_XFER2_DMA_STATUS = 0x01;
-    e461_inflight_token = 0x01;
+  if (u4_coldboot_seed_gate != 0) {
+    /* 0x0718!=0 && 0x0776!=0 -> e1cb (THE live AMD CL-walk push). */
+    sb_tx_flag = 0;                                  /* 9966: XDATA[0x0AAB]=0 */
+    sb_tx_cmd  = 0x00;                               /* 9966 returns A=0 -> byte0 = 0 */
+    sb_tx_byte0 = 0x0D;                              /* 9966: R5 = 0x0D */
+    sb_tx_byte1 = 0x04;                              /* 9966: R3 = 0x04 */
+    u4lb_e1cb_e2b9(1);                               /* e1cb */
+    return 1;
   }
+  /* 0x0718!=0 && 0x0776==0 -> e499: 9960(0x0718) + e2b9. */
+  sb_tx_flag = 0;
+  sb_tx_cmd  = (uint8_t)(u4_route_enable_latch | 0x01);  /* 9960: byte0 = route|1 */
+  sb_tx_byte0 = 0x0D;
+  sb_tx_byte1 = 0x04;
+  u4lb_e1cb_e2b9(0);                                 /* e2b9 */
   return 1;
 }
 
@@ -797,7 +819,11 @@ static void u4lb_8992(uint8_t v) {
 }
 
 /* lane gate: walk lane L iff 0x0819.L (lane-present). */
-static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(u4_work_buf[0x19] & (uint8_t)(1u << lane)); }
+/* Stock 8000 head (8010-801e): the per-lane present mask is 1<<(lane+1) (a 2-bit stride: lane0
+ * tests 0x0819 bit1, lane1 bit2), gated against XDATA[0x0819]=work[0x19] (ROM[0x21AD]=0x19).
+ * The handmade previously tested (1<<lane) (bit0/bit1) -> with 0x0819=0x03 it walked BOTH lanes,
+ * whereas stock walks lane0 ONLY (0x03 = bit1 set / bit2 clear). HW-confirmed via clb st= dump. */
+static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(u4_work_buf[0x19] & (uint8_t)(1u << (lane + 1))); }
 
 /* [s5 ..] diagnostic — print only when a watched lane-state byte changes, to avoid saturating the
  * UART TX FIFO on a fast-iterating walker. */
@@ -818,6 +844,7 @@ static void u4lb_s5_diag(void) {
   uart_puts(" 775="); uart_puthex(host_desc);
   uart_puts(" E764="); uart_puthex(REG_PHY_TIMER_CTRL_E764); uart_puts(" E762="); uart_puthex(REG_PHY_RXPLL_STATUS);
   uart_puts(" ED="); uart_puthex(u4_fsm_state);
+  uart_puts(" hd="); { uint8_t i; for (i = 2; i < 7; i++) uart_puthex(u4_host_desc[i]); }
   uart_puts(" snap="); uart_puthex(u4_host_desc[0x2]); uart_puthex(u4_host_desc[0x3]);
   uart_puts(" pll="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350);
   uart_puts(" TX="); { uint8_t i; for (i = 0; i < 6; i++) uart_puthex(SBTX_RD(i)); }

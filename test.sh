@@ -40,6 +40,15 @@ echo -n "[test]  run:        "; sudo python3 ftdi_debug.py -rn 2>&1 | tail -1
 : > ~/cap.txt
 sudo timeout \$SECS python3 ftdi_debug.py >> ~/cap.txt 2>&1
 echo "[test]  captured \$(wc -l < ~/cap.txt) lines"
+# End-to-end ENUMERATION check: the firmware change only truly works when the AMD eGPU
+# (1002:7590) is tunneled onto the NUC's PCIe bus. The UART [Lane Bonded] alone is NOT
+# sufficient -- the bond must hold and the PCIe tunnel must enumerate the GPU. Rescan + probe.
+echo "1" | sudo tee /sys/bus/pci/rescan >/dev/null 2>&1 || true
+sleep 1
+GPU=\$(lspci -nn 2>/dev/null | grep -iE "1002:7590|Radeon RX 9060" | head -1)
+TB=\$(ls /sys/bus/thunderbolt/devices/ 2>/dev/null | grep -E "^[0-9]+-[0-9]" | head -3 | tr '\n' ' ')
+echo "[test]  GPU(lspci 1002:7590): \${GPU:-<absent>}"
+echo "[test]  thunderbolt routers: \${TB:-<none>}"
 REMOTE_EOF
 scp -q /tmp/_flash_cap.sh "$NUC:flash_cap.sh"
 echo "[test] flash + run + capture ${SECS}s ..."
@@ -48,4 +57,18 @@ ssh "$NUC" "chmod +x ~/flash_cap.sh && ~/flash_cap.sh $SECS"
 scp -q "$NUC:cap.txt" /tmp/nuc_cap.txt
 echo "[test] capture -> /tmp/nuc_cap.txt  (tail below)"
 echo "----------------------------------------------------------------"
-tail -40 /tmp/nuc_cap.txt
+tail -30 /tmp/nuc_cap.txt
+echo "----------------------------------------------------------------"
+# Local verdict from the captured UART (the remote GPU/thunderbolt lines above are the
+# ground-truth end-to-end check; these are the on-device milestones leading up to it).
+BOND=$(grep -c "Lane Bonded" /tmp/nuc_cap.txt 2>/dev/null); BOND=${BOND:-0}
+CL0=$(grep -cE "L0:CL0 02|L1:CL0 02" /tmp/nuc_cap.txt 2>/dev/null); CL0=${CL0:-0}
+PCIE=$(grep -cE "PCIE Gen|PcieLinkUp|Bus#" /tmp/nuc_cap.txt 2>/dev/null); PCIE=${PCIE:-0}
+echo "[verdict] Lane Bonded=$BOND  Lx:CL0-02=$CL0  PCIe-enum=$PCIE"
+if grep -qE "1002:7590|Radeon RX 9060" /tmp/nuc_cap.txt 2>/dev/null; then
+  echo "[verdict] *** GPU ENUMERATED — FULL SUCCESS ***"
+elif [ "$BOND" -gt 0 ]; then
+  echo "[verdict] Lane Bonded but GPU not yet enumerated (see remote GPU line above for the real check)"
+else
+  echo "[verdict] NOT bonded — see remote 'GPU(lspci ...)' line above for the end-to-end ground truth"
+fi
