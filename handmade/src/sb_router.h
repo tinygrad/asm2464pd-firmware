@@ -375,7 +375,10 @@ static __code const uint8_t lane_port_map_a[19] = {
  * is_e1cb=0 -> WRITE answer (aa4==1). */
 static void sb_a5d8_tx(uint8_t is_e1cb) {
   static __xdata uint16_t g;
-  sb_transport_substate_poll();
+  sb_d4cd_transport_edges();   /* stock e1cb@e1d6 / e2b9@e2c4 both LCALL d4cd FIRST (drain the host's
+                                * just-posted RX descriptor -> eaac/af38 re-sync host_desc before the
+                                * answer). The byte-true sibling u4lb_e1cb_e2b9 (usb4_lanebond.h:773)
+                                * does this; this transcription wrongly called the no-op stub. */
   SBTX_WR(0, sb_tx_byte0);
   SBTX_WR(1, (uint8_t)(sb_tx_byte1 | ((sb_tx_flag & 1) << 7)));
   if (sb_tx_flag == 0)

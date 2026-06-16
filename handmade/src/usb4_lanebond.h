@@ -866,6 +866,7 @@ static void u4lb_s5_diag(void) {
   uart_puts(" 775="); uart_puthex(host_desc);
   uart_puts(" 719="); uart_puthex(e461_inflight_token);
   uart_puts(" E764="); uart_puthex(REG_PHY_TIMER_CTRL_E764); uart_puts(" E762="); uart_puthex(REG_PHY_RXPLL_STATUS);
+  uart_puts(" E302="); uart_puthex(REG_PHY_MODE_E302);   /* USB4 link mode (stock=0x83 at bond) */
   uart_puts(" 6E9="); uart_puthex(phy_rxpll_train_busy);
   uart_puts(" ED="); uart_puthex(u4_fsm_state);
   uart_puts(" hd="); { uint8_t i; for (i = 2; i < 7; i++) uart_puthex(u4_host_desc[i]); }
