@@ -89,6 +89,8 @@ SEP_X = 0x5E70               # "|X="
 SEP_H = 0x5E78               # "|H="
 SEP_D = 0x5E80               # "|D="
 SEP_L = 0x5E88               # "|L="
+SEP_2B = 0x5E90              # "|2b="
+SEP_W = 0x5E98               # "|w="
 CAVE_TX = 0x5F00
 CAVE_EAAC = 0x6200
 
@@ -198,9 +200,15 @@ def build_field_block():
     # "|TX=" SBTX plane 0x2900[0..7]
     code += puts_code(SEP_TX)
     code += dump_block(0x2900, 0x08, SB_DPX)
-    # "|2a=" plane-2 0x2a00[0..7] (host descriptor source)
+    # "|2a=" plane-2 0x2a00[0..7] (host descriptor source, port0)
     code += puts_code(SEP_2A)
     code += dump_block(0x2A00, 0x08, SB_DPX)
+    # "|2b=" plane-2 0x2b00[0..7] (host descriptor source, port1)
+    code += puts_code(SEP_2B)
+    code += dump_block(0x2B00, 0x08, SB_DPX)
+    # "|w=" work shadow 0x081C..0x081F (af38 echoes work[0x081C+lane] -> TX[2..])
+    code += puts_code(SEP_W)
+    code += dump_block(0x081C, 0x04, 0x00)
     # "|X=" FSM/gating XDATA (DPX=0)
     code += puts_code(SEP_X)
     for a in (0x0719, 0x0758, 0x06ED, 0x06EE, 0x0775, 0x0776, 0x0777):
@@ -296,6 +304,8 @@ def apply_patch(body):
     write_cave(body, SEP_H, b"|H=\x00", "H")
     write_cave(body, SEP_D, b"|D=\x00", "D")
     write_cave(body, SEP_L, b"|L=\x00", "L")
+    write_cave(body, SEP_2B, b"|2b=\x00", "2b")
+    write_cave(body, SEP_W, b"|w=\x00", "w")
 
     hooks = [
         ("p15", H_TX_OFF, H_TX_OLD, CAVE_TX, STR_P15),
