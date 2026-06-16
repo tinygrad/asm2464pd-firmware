@@ -41,35 +41,29 @@ echo -n "[test]  run:        "; sudo python3 ftdi_debug.py -rn 2>&1 | tail -1
 : > ~/cap.txt
 sudo timeout \$SECS python3 ftdi_debug.py >> ~/cap.txt 2>&1
 echo "[test]  captured \$(wc -l < ~/cap.txt) lines"
-# End-to-end ENUMERATION + HOST-SIDE THUNDERBOLT view. The firmware change only truly works when
-# the AMD eGPU (1002:7590) is tunneled onto the NUC's PCIe bus -- the UART [Lane Bonded] alone is
-# NOT sufficient. This kernel has no boltctl/tbtools/debugfs, so the HOST's view of the bond is:
-#  (a) dmesg thunderbolt events during this run -- the device connecting as 1-N, and the per-lane
-#      "new retimer found"/"retimer disconnected" churn = lane-training stability (stock stabilizes;
-#      a partial bond churns: found==disconnected, device repeatedly connects/disconnects);
-#  (b) the connected device's sysfs rx_lanes/tx_lanes/*_speed = the negotiated/bonded lane count+gen.
+# End-to-end ENUMERATION + HOST-SIDE THUNDERBOLT view via the intel tbtools (they live in
+# ~/.cargo/bin = /home/batman/.cargo/bin, NOT in the non-login ssh PATH). The firmware change only
+# truly works when the AMD eGPU (1002:7590) tunnels onto the NUC PCIe bus -- [Lane Bonded] on UART
+# alone is NOT sufficient. The HOST's view of the bond:
+#  * tbadapters (host router, route 0): the Lane 0/1 adapter state IS the host's lane-bond view --
+#    CLd (CL-disabled) -> CL0 -> CL2 (bonded x2); and PCIe Down Disabled -> Enabled when the tunnel
+#    comes up. This is the host-side read of the SB[0xA0] 0x01->0x02 confirm we are chasing.
+#  * tbtunnels: the active PCIe/USB3/DP tunnels (the PCIe tunnel is the GPU path; "No tunnels" = none).
+#  * tblist: whether the device's own USB4 router (1-N) enumerated at all.
+#  * dmesg retimer found/disconnected churn = lane-training stability (stock stabilizes; partial churns).
 echo "1" | sudo tee /sys/bus/pci/rescan >/dev/null 2>&1 || true
 sleep 1
 GPU=\$(lspci -nn 2>/dev/null | grep -iE "1002:7590|Radeon RX 9060" | head -1)
 echo "[test]  GPU(lspci 1002:7590): \${GPU:-<absent>}"
-# (a) host kernel-log TB events that occurred during this flash+capture window
-echo "[tbhost] dmesg thunderbolt events this run:"
-sudo dmesg 2>/dev/null | tail -n +\$((DMESG_PRE+1)) | grep -i thunderbolt | sed 's/^/[tbhost]   /' | tail -25
+TBB=/home/batman/.cargo/bin
+echo "[tbhost] tbadapters host routers (Lane = bond state CLd/CL0/CL2; PCIe Down = tunnel):"
+for dom in 1 0; do sudo \$TBB/tbadapters -d \$dom -r 0 2>/dev/null | grep -iE "Lane|PCIe|Host Interface" | sed "s/^/[tbhost]  d\$dom /"; done
+echo "[tbhost] tbtunnels:"; for dom in 0 1; do sudo \$TBB/tbtunnels -d \$dom 2>/dev/null | grep -viE "^No tunnels found" | sed "s/^/[tbhost]  d\$dom /"; done
+echo "[tbhost] tblist devices:"; sudo \$TBB/tblist -S 2>/dev/null | sed 's/^/[tbhost]  /' | tail -6
 RTF=\$(sudo dmesg 2>/dev/null | tail -n +\$((DMESG_PRE+1)) | grep -c "new retimer found")
 RTD=\$(sudo dmesg 2>/dev/null | tail -n +\$((DMESG_PRE+1)) | grep -c "retimer disconnected")
-DEVF=\$(sudo dmesg 2>/dev/null | tail -n +\$((DMESG_PRE+1)) | grep -c "device found\|device connected")
 DEVD=\$(sudo dmesg 2>/dev/null | tail -n +\$((DMESG_PRE+1)) | grep -c "device disconnected")
-echo "[tbhost] churn: retimer found=\$RTF disc=\$RTD  device found=\$DEVF disc=\$DEVD  (stable bond = found>>disc; churn = lanes never latch)"
-# (b) connected-device routers (skip host routers x-0 and retimers x-y:z) -> bonded lane count/speed
-for d in /sys/bus/thunderbolt/devices/[0-9]-[0-9]*; do
-  bn=\$(basename "\$d"); case "\$bn" in *:*) continue;; *-0) continue;; esac
-  [ -d "\$d" ] || continue
-  line="[tbhost] dev \$bn:"
-  for a in device_name rx_lanes tx_lanes rx_speed tx_speed generation authorized; do
-    [ -e "\$d/\$a" ] && line="\$line \$a=\$(cat "\$d/\$a" 2>/dev/null)"
-  done
-  echo "\$line"
-done
+echo "[tbhost] dmesg churn this run: retimer found=\$RTF disc=\$RTD  device-disc=\$DEVD  (stable bond = found>>disc & disc==0)"
 TB=\$(ls /sys/bus/thunderbolt/devices/ 2>/dev/null | grep -E "^[0-9]+-[0-9]" | tr '\n' ' ')
 echo "[test]  thunderbolt routers: \${TB:-<none>}"
 REMOTE_EOF
