@@ -1020,6 +1020,7 @@ static void u4lb_s5_diag(void) {
   uart_puts(" 718="); uart_puthex(u4_route_enable_latch);   /* ==4 -> live 8000 walker; else buggy symmetric 850b */
   uart_puts(" cap="); uart_puthex(phy_lane_cap[0x0]); uart_puthex(phy_lane_cap[0x1]);
   uart_puts(" 77ab="); uart_puthex(u4_host_desc[0x4]); uart_puthex(u4_host_desc[0x5]);  /* 077B/077C = LP1 finalize snap */
+  uart_puts(" cc=");  uart_puthex(REG_PHY_ORIENT_C2C3); uart_puthex(REG_VENDOR_CTRL_C343);  /* force-park gate inputs (set only by cm_RXCM) */
   uart_putc(']');
 }
 

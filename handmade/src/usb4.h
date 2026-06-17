@@ -62,6 +62,9 @@ static volatile uint8_t __xdata __at(0x0B4A) c80a_acc;
 /* Config-space router-op dispatcher: replies to host-posted EA90 router-ops and acks them. */
 static void cm_routerop_mailbox(void) {
   if (REG_SYS_CTRL_EA90 != 0x5A) return;
+  { static __xdata uint8_t rop_bdg = 30;
+    if (rop_bdg) { rop_bdg--; uart_puts("[rop ea80="); uart_puthex(REG_ROUTEROP_OPCODE_EA80);
+      uart_puts(" st="); uart_puthex((uint8_t)u4_routerop_mbox_state); uart_putc(']'); } }
   {
     rmbox_state_t state = u4_routerop_mbox_state;
     if (state == RMBOX_IDLE) {
