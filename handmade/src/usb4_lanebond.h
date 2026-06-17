@@ -125,12 +125,10 @@ static void u4lb_cm_conn_routing_setup(void) {
   /* Latch the 0x077a lane-width bits into 0x0819/0x0751/0x0750. */
   { uint8_t host_width = u4_host_desc[0x3];
     if ((host_width & 1) && (u4_work_buf[0x1A] & 1)) { u4_work_buf[0x19] = (u4_work_buf[0x19] & 0xFE) | 1; }
-    /* DIAG EXPERIMENT (lane0-first): suppress premature lane1 enable to test whether handmade's
-     * 0x0819=0x03 (both lanes advertised at once) is what makes the host reject the route. Stock
-     * walker shows 0x0819=0x01 (w1C=7B00) at lane-bond start. Revert/replace with the byte-true
-     * progressive promotion once confirmed. */
-    /* if ((host_width & 0x02) && (u4_work_buf[0x1A] & 2)) { u4_work_buf[0x19] = (u4_work_buf[0x19] & 0xFD) | 2; } */
-    u4_work_buf[0x19] &= 0xFD;
+    /* Lane1 enable gated on host advertising the 2nd lane (077A.1) AND lane1 cap (081A.1). With the
+     * byte-true cap20g_gate1=0 (main.c, stock blob[0x59].7=0 on this board), 081A=0xE1 (bit1 clear)
+     * so this branch stays off -> 0x0819=0x01 (lane0-first) naturally, matching stock. */
+    if ((host_width & 0x02) && (u4_work_buf[0x1A] & 2)) { u4_work_buf[0x19] = (u4_work_buf[0x19] & 0xFD) | 2; }
     if ((host_width & 0x10) && (u4_work_buf[0x1A] & 0x10) && (u4_work_buf[0x19] & 1) && (u4_work_buf[0x19] & 2)) lb_lane_width_latch1 = 1;
     else lb_lane_width_latch1 = 0;
     if ((host_width & 0x20) && (u4_work_buf[0x1A] & 0x20)) lb_lane_width_latch0 = 2;
