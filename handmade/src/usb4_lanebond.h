@@ -73,18 +73,25 @@ static void u4lb_a310(uint8_t cur) {
   P12_WR(cur, (uint8_t)((P12_RD(cur) & 0x3F) | 0x80));
 }
 
-/* e711 cleanup tail: reg 0x35=(commit&0xC0), readback, reg 0x3C/0x3D=0. */
+/* e711 cleanup tail (CODE:e711): reg0x35=(LIVE reg35 & 0xC0); reg0x3C/0x3D/0x3E/0x3F = 0. */
 static void u4lb_e711_tail(uint8_t commit_hi2) {
-  P12_WR(0x35, (uint8_t)(commit_hi2 & 0xC0));
-  (void)P12_RD(0x35);
-  P12_WR(0x3C, 0x00);
-  P12_WR(0x3D, 0x00);
+  (void)commit_hi2;   /* stock uses LIVE reg35, not the commit value */
+  P12_WR(0x35, (uint8_t)(P12_RD(0x35) & 0xC0));
+  P12_WR(0x3C, 0x00); P12_WR(0x3D, 0x00); P12_WR(0x3E, 0x00); P12_WR(0x3F, 0x00);
 }
 /* e83d: commit GO + bounded busy-poll on reg 0x38.0. */
 static void u4lb_engine_go(void) {
   uint16_t g;
   P12_WR(0x38, 0x01);
   for (g = 0; (P12_RD(0x38) & 0x01) && g < 0x2000; g++) { }
+}
+/* e7fb byte-true commit (CODE:e7fb->e83d->e711): GO + e711 (zero 0x3C-0x3F). Local copy so the
+ * SHARED u4c_sb_desc_commit (used by u4c_ccb3) is untouched. */
+static void u4lb_sb_desc_commit(void) {
+  uint8_t commit = (uint8_t)((P12_RD(0x37) & 0x7F) | 0x80);
+  P12_WR(0x37, commit);
+  u4lb_engine_go();
+  u4lb_e711_tail(commit);
 }
 /* e890: select sub-block (reg 0x37 &= 0x7F) + GO + e711 tail. */
 static void u4lb_e890(uint8_t ctrl_low6) {
@@ -94,48 +101,50 @@ static void u4lb_e890(uint8_t ctrl_low6) {
   u4lb_e711_tail(commit);
   (void)ctrl_low6;
 }
-/* e7f8: write val to reg 0x3F, then commit (reg 0x37 = (.&0x7F)|0x80) + GO + tail. */
+/* e7f8 (cursor-relative; in ce23 R1=0x35): write val to reg 0x35, commit reg0x37 + GO + tail. */
 static void u4lb_e7f8(uint8_t val) {
   uint8_t commit;
-  P12_WR(0x3F, val);
+  P12_WR(0x35, val);
   commit = (uint8_t)((P12_RD(0x37) & 0x7F) | 0x80);
   P12_WR(0x37, commit);
   u4lb_engine_go();
   u4lb_e711_tail(commit);
 }
-/* e00c: fold 0x0B34..0x0B37 nonzero flags into a 4-bit mask, write reg 0x3F low nibble. */
+/* e00c (CODE:e00c): fold 0x0B34..0x0B37 nonzero into 4-bit m; a2ff prelude (reg0x34/0x35 RMW) then
+ * write reg0x36 = (a2ff_A & 0xF0) | m. (R1=0x36 after a2ff.) */
 static void u4lb_e00c(void) {
   uint8_t m = (uint8_t)((u4lb_b34_lanemask != 0) ? 1 : 0);
+  uint8_t a;
   if (u4lb_b35 != 0) m |= 2;
   if (u4lb_b36 != 0) m |= 4;
   if (u4lb_b37 != 0) m |= 8;
-  (void)P12_RD(0x34);
-  P12_WR(0x3F, (uint8_t)((P12_RD(0x3F) & 0xF0) | m));
+  P12_WR(0x34, (uint8_t)((P12_RD(0x34) & 0xF0) | 0x0F));      /* a2ff reg0x34 */
+  a = (uint8_t)((P12_RD(0x35) & 0x3F) | 0x80); P12_WR(0x35, a); /* a2ff reg0x35, A=a */
+  P12_WR(0x36, (uint8_t)((a & 0xF0) | m));                    /* e00c reg0x36 */
 }
-/* ce23 (link_apply_lane_mask_reg3f): assemble per-lane enable mask into engine reg 0x3F.
- * set_lanes!=0 -> SET (mask|reg41); ==0 -> CLEAR (~mask & reg41); folds through reg 0x3C/0x3D/0x3E. */
+/* ce23 (link_apply_lane_mask_reg3f): assemble per-lane enable mask into engine reg 0x3F via the
+ * fold 0x3C..0x3E (status regs 0x40/0x41/0x42/0x43, one per stage), commit value -> reg0x35. */
 static void u4lb_ce23(uint8_t ctrl_bits, uint8_t set_lanes) {
   uint8_t ctrl_low6 = (uint8_t)(ctrl_bits & 0x3F);
-  uint8_t reg41, acc, lane_mask, b34;
-  (void)P12_RD(0x35);
+  uint8_t r6, lane_mask, r7;
+  r6 = (uint8_t)(P12_RD(0x35) & 0x3F);   /* a334 at entry: R6 = LIVE reg35 & 0x3F (ctrl_bits destroyed) */
   u4lb_e890(ctrl_low6);
-  reg41 = P12_RD(0x40);
-  b34   = u4lb_b34_lanemask;
   if (set_lanes != 0) {
-    P12_WR(0x3C, (uint8_t)(b34 | reg41)); (void)P12_RD(0x41); acc = u4lb_b35;
-    P12_WR(0x3D, (uint8_t)(acc | reg41)); (void)P12_RD(0x41); acc = u4lb_b36;
-    P12_WR(0x3E, (uint8_t)(acc | reg41)); (void)P12_RD(0x41); lane_mask = u4lb_b37;
-    lane_mask = (uint8_t)(lane_mask | reg41);
+    r7 = P12_RD(0x40);
+    P12_WR(0x3C, (uint8_t)(u4lb_b34_lanemask | r7)); r7 = P12_RD(0x41);
+    P12_WR(0x3D, (uint8_t)(u4lb_b35          | r7)); r7 = P12_RD(0x42);
+    P12_WR(0x3E, (uint8_t)(u4lb_b36          | r7)); r7 = P12_RD(0x43);
+    lane_mask   = (uint8_t)(u4lb_b37          | r7);
   } else {
-    P12_WR(0x3C, (uint8_t)((uint8_t)~b34 & reg41)); (void)P12_RD(0x41); acc = u4lb_b35;
-    P12_WR(0x3D, (uint8_t)((uint8_t)~acc & reg41)); (void)P12_RD(0x41); acc = u4lb_b36;
-    P12_WR(0x3E, (uint8_t)((uint8_t)~acc & reg41)); (void)P12_RD(0x41); lane_mask = u4lb_b37;
-    lane_mask = (uint8_t)((uint8_t)~lane_mask & reg41);
+    r7 = P12_RD(0x40);
+    P12_WR(0x3C, (uint8_t)((uint8_t)~u4lb_b34_lanemask & r7)); r7 = P12_RD(0x41);
+    P12_WR(0x3D, (uint8_t)((uint8_t)~u4lb_b35          & r7)); r7 = P12_RD(0x42);
+    P12_WR(0x3E, (uint8_t)((uint8_t)~u4lb_b36          & r7)); r7 = P12_RD(0x43);
+    lane_mask   = (uint8_t)((uint8_t)~u4lb_b37          & r7);
   }
   P12_WR(0x3F, lane_mask);
   u4lb_e00c();
-  (void)P12_RD(0x35);
-  u4lb_e7f8((uint8_t)((lane_mask & 0xC0) | ctrl_low6));
+  u4lb_e7f8((uint8_t)((P12_RD(0x35) & 0xC0) | r6));   /* ce6d: (LIVE reg35 & 0xC0)|r6 -> reg0x35 */
   u4lb_b34_lanemask = 0; u4lb_b35 = 0; u4lb_b36 = 0; u4lb_b37 = 0;
 }
 /* a37b: 0x0B35 = n; ce23(n, set_lanes). */
@@ -158,7 +167,7 @@ static void u4lb_c3ce(void) {
     u4lb_b35          = u4_routerop_desc2; P12_WR(0x3D, u4_routerop_desc2);
     u4lb_b36          = u4_routerop_desc3; P12_WR(0x3E, u4_routerop_desc3);
     u4lb_b37          = pd_msg_type;       P12_WR(0x3F, pd_msg_type);
-    if ((uint8_t)(u4lb_b38_setlanes ^ 2) == 0) u4c_sb_desc_commit();
+    if ((uint8_t)(u4lb_b38_setlanes ^ 2) == 0) u4lb_sb_desc_commit();   /* byte-true e711 (local) */
     else                                       u4lb_ce23((uint8_t)(u4lb_b38_setlanes ^ 2), u4lb_b38_setlanes);
   }
 }
