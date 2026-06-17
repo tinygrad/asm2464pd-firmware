@@ -1017,6 +1017,9 @@ static void u4lb_s5_diag(void) {
   uart_puts(" 776="); uart_puthex(u4_coldboot_seed_gate);
   uart_puts(" af38["); uart_puthex(af38_t50); uart_putc('/'); uart_puthex(af38_t53); uart_putc('/'); uart_puthex(af38_t51); uart_putc('/'); uart_puthex(af38_t4f); uart_putc('/'); uart_puthex(af38_t6f0); uart_putc(']');
   uart_puts(" 6A="); uart_puthex(SB_RD(0x6A)); uart_puthex(SB_RD(0x6B)); uart_puthex(SB_RD(0x6C)); uart_puthex(SB_RD(0x6D));
+  uart_puts(" 718="); uart_puthex(u4_route_enable_latch);   /* ==4 -> live 8000 walker; else buggy symmetric 850b */
+  uart_puts(" cap="); uart_puthex(phy_lane_cap[0x0]); uart_puthex(phy_lane_cap[0x1]);
+  uart_puts(" 77ab="); uart_puthex(u4_host_desc[0x4]); uart_puthex(u4_host_desc[0x5]);  /* 077B/077C = LP1 finalize snap */
   uart_putc(']');
 }
 
