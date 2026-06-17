@@ -7,6 +7,9 @@
 
 static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
 static void phy_cc10_cmd(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
+static void u4lb_eb62(uint8_t state_lo, u4_fsm_state_t state);
+static void u4lb_98ec(uint8_t hi, uint8_t lo);
+static void u4lb_d5da(uint8_t param);
 
 /* Print budget for the [===SB Con===] edge so the connect re-assert can't saturate the UART. */
 static volatile uint8_t __xdata __at(0x0B4C) sb_con_print_budget;
@@ -137,14 +140,7 @@ static void sb_af38_descriptor_response(void) {
     uart_puts(" 50="); uart_puthex(desc_type); uart_puts(" 51="); uart_puthex(desc_len);
     uart_puts(" 4f="); uart_puthex(status5); uart_putc(']');
   }
-  sb_tx_go_param = 0;
-  P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
-  SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));
-  SB_WR(0x10, 0x01);
-  { uint16_t spin = 0; while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++spin < 0x4000) { } }
-  SB_WR(0x2C, 0x04);
-  phy_cc10_cmd(1, 0, 0x0B);
-  SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));
+  u4lb_d5da(0);
 }
 
 /* ebb5: the 0x0765 connect-present setter. */
@@ -163,6 +159,8 @@ static void sb_edd9_receive_ack(void) {
     SB_WR(0xD8, 0x02);
     REG_LINK_STATUS_E716 &= 0xFC;
     REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
+    u4lb_eb62(0, U4FSM_CONN_ROUT);
+    u4lb_98ec(0, 3);
     uart_puts("\r\n[edd9]");
   }
 }
@@ -177,9 +175,10 @@ static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
   desc4e = SB_RD(desc4e_off);
   sb_connect_descriptor = SB_RD(desc752_off);
   desc752 = sb_connect_descriptor;
-  { static __xdata uint8_t dispatch_budget = 16;
-    if (dispatch_budget) { dispatch_budget--; uart_puts("[cd p="); uart_puthex(port); uart_puts(" 752="); uart_puthex(desc752);
-      uart_puts(" 4e="); uart_puthex(desc4e); uart_puts(" 765="); uart_puthex(sb_connect_present); uart_putc(']'); } }
+#if 0
+  uart_puts("[cd p="); uart_puthex(port); uart_puts(" 752="); uart_puthex(desc752);
+  uart_puts(" 4e="); uart_puthex(desc4e); uart_puts(" 765="); uart_puthex(sb_connect_present); uart_putc(']');
+#endif
   if (sb_connect_present != 0 && (desc752 & 0x60) == 0x60) return;
   if (!(desc4e & 0x10)) return;
   if ((desc752 & 0xC0) != 0x40) {
@@ -200,15 +199,6 @@ static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
     }
   }
 }
-/* Super-loop connect-present producer: reproduce ebb5's effect at the connect point. */
-static void sb_connect_present_poll(void) {
-  if (sb_connect_present) return;
-  if (u4_conn_consequence_done) {
-    sb_connect_descriptor = SB_RD(0x18);
-    sb_set_connect_present_ebb5();
-  }
-}
-
 /* d4cd: per-edge transport/link dispatch. Sets 0x06F0 to the port atomically before each cd3f
  * call so eaac/af38 read the matching plane; W1C-acks the edge and toggles the ping-pong latch. */
 static void sb_d4cd_transport_edges(void) {
@@ -265,6 +255,8 @@ static void sb_db7a_route_arm(void) {
     REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0x8F) | 0x60;
     REG_PHY_CTRL_C20F = 0x00;
   }
+  u4lb_eb62(0, U4FSM_CONN_ROUT);
+  u4lb_98ec(0, 3);
 }
 
 /* dea1: post-connect consequence. Runs the heavy SB/PHY arm once per connect session (gated on
@@ -290,8 +282,6 @@ static void sb_con_consequence(void) {
   P1_WR(0x0100, (P1_RD(0x0100) & 0x7F) | 0x80);
   u4_conn_consequence_done = 1;
   sb_db7a_route_arm();
-  u4_fsm_state = 3;
-  cm_conn_routing_substate = 0x10;
   if (!(REG_LANE_TRAIN_ARM & 0x01) || (REG_LANE_TRAIN_ARM & 0x02)) {
     REG_LANE_TRAIN_ARM = 0x04; REG_LANE_TRAIN_ARM = 0x02;
     REG_LANE_TRAIN_CTRL = (REG_LANE_TRAIN_CTRL & 0xF8) | 0x04;
@@ -299,8 +289,6 @@ static void sb_con_consequence(void) {
     REG_LANE_TRAIN_ARM = 0x01;
     u4_lane_train_trigger ^= 0x01;
   }
-  lb_lane_width_cnt_hi = REG_LANE_WIDTH_CNT_HI;
-  lb_lane_width_cnt_lo = REG_LANE_WIDTH_CNT_LO;
   if (!sb_8a89_done) sb_run_8a89_pending = 1;
 }
 
@@ -345,8 +333,14 @@ static void sb_channel_connect_service(void) {
     return;
   }
   if (n == 3) {
-    if (sb_link_reinit_gate != 0) SB_WR(0x50, 0x40);
+    if (sb_link_reinit_gate != 0) {
+      SB_WR(0x50, 0x40);
+      SB_WR(0x5A, 0x40);
+      P1_WR(0x0109, (uint8_t)(P1_RD(0x0109) | 0x01));
+    }
     SB_WR(0x15, 0x83);
+    SB_WR(0x0C, (uint8_t)((SB_RD(0x0C) & 0x80) | 0x03));
+    u4lb_d5da(1);
     return;
   }
   if (n == 0) {
@@ -371,10 +365,18 @@ static __code const uint8_t lane_port_map_a[19] = {
   0x00,0x04,0xFF,0x08,0x0C,0xFF,0xFF,0xFF,0x10,0x14,0x18,0xFF,0x19,0x1C,0xFF,0x20,0xFF,0xFF,0x24
 };
 
+static void sb_clear_cl0_width_latches(void) {
+  lb_laneA_cl0_latch = 0;
+  lb_laneB_cl0_latch = 0;
+}
+
+static void sb_set_d4_peer_cl0(void) {
+  SB_WR(0xD4, (uint8_t)((SB_RD(0xD4) & 0xDF) | 0x20));
+}
+
 /* e1cb/e2b9: the SB-transport TX answer push. is_e1cb=1 -> READ/route answer (aa4==2);
  * is_e1cb=0 -> WRITE answer (aa4==1). */
 static void sb_a5d8_tx(uint8_t is_e1cb) {
-  static __xdata uint16_t g;
   sb_d4cd_transport_edges();   /* stock e1cb@e1d6 / e2b9@e2c4 both LCALL d4cd FIRST (drain the host's
                                 * just-posted RX descriptor -> eaac/af38 re-sync host_desc before the
                                 * answer). The byte-true sibling u4lb_e1cb_e2b9 (usb4_lanebond.h:773)
@@ -386,20 +388,12 @@ static void sb_a5d8_tx(uint8_t is_e1cb) {
   else
     SB_WR(0x0C, (uint8_t)(((sb_tx_byte0 + 8) & 0xFF) | (SB_RD(0x0C) & 0x80)));
   SB_WR(0x15, is_e1cb ? (uint8_t)((sb_tx_cmd << 1) | 0x41) : (uint8_t)sb_tx_cmd);
-  sb_tx_go_param = 0;
-  P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
-  SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));
-  SB_WR(0x10, 0x01);
-  g = 0; while (((SB_RD(0x2C) & 0x04) == 0) && ++g < 0x4000) { }
-  SB_WR(0x2C, 0x04);
-  phy_cc10_cmd(1, 0, 0x0B);
-  SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));
-  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;
-  REG_XFER2_DMA_STATUS = 0x01;
+  u4lb_d5da(0);
+  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02; REG_XFER2_DMA_STATUS = 0x01;
   e461_inflight_token = 0x01;
 }
 
-/* a5d8: the [Pend Int] device->host router-op responder. Super-loop only (stack cliff). */
+/* a5d8: the [Pend Int] device->host router-op responder. */
 static void sb_a5d8_pend_int(void) {
   static __xdata uint8_t opcode_byte, opcode, i, op_idx, len;
 
@@ -454,16 +448,16 @@ static void sb_a5d8_pend_int(void) {
   if (u4_routerop_flag != 0) {
     op_idx = u4_routerop_op_lo;
     if (op_idx < 0x12 &&
-        (len = sb_cfg06[(uint8_t)(op_idx - 0x0E)]) != 0 &&
-        sb_width_lut[0xE + (uint8_t)(op_idx + 5)] != 0 &&
-        u4_routerop_op_len < len) {
+        (len = sb_width_lut[(uint16_t)op_idx]) != 0 &&
+        sb_branchA_gate[(uint16_t)op_idx] != 0 &&
+        u4_routerop_op_len <= len) {
       pd_msg_type = 0;
       while (pd_msg_type < u4_routerop_op_len) {
         i = pd_msg_type;
         u4_work_buf[(uint8_t)(u4_routerop_port + i)] = sb_routerop_body[i];
         pd_msg_type = (uint8_t)(i + 1);
       }
-      u4_routerop_desc1 = sb_cfg06[(uint8_t)(op_idx - 0x0E)];
+      u4_routerop_desc1 = len;
       if (op_idx == 8) {
         uart_puts("[a5d8:cm8]");
       }
@@ -475,15 +469,15 @@ static void sb_a5d8_pend_int(void) {
   } else {
     op_idx = u4_routerop_op_lo;
     if (op_idx < 0x12 &&
-        (len = sb_cfg06[(uint8_t)(op_idx - 0x0E)]) != 0) {
-      if (u4_routerop_op_len >= len) u4_routerop_op_len = len;
+        (len = sb_width_lut[(uint16_t)op_idx]) != 0) {
+      if (u4_routerop_op_len > len) u4_routerop_op_len = len;
       pd_msg_type = 0;
       while (pd_msg_type < u4_routerop_op_len) {
         i = pd_msg_type;
         sb_routerop_body[i] = u4_work_buf[(uint8_t)(u4_routerop_port + i)];
         pd_msg_type = (uint8_t)(i + 1);
       }
-      u4_routerop_desc1 = sb_cfg06[(uint8_t)(op_idx - 0x0E)];
+      u4_routerop_desc1 = len;
     } else {
       uart_puts("\r\n[WrCmdErr]");
       u4_routerop_desc1 = 0;
@@ -530,19 +524,19 @@ static void sb_cdf5_routerop_response(uint8_t r) {
   w3 = (uint8_t)(w3 & 0x7F);                            /* ce89-ce90: clear bit7 */
   sb_routerop_hdr1 = hdr1_new;                          /* ce99-cea0: 0x0999 = a5d (hdr0/hdr2 unchanged) */
   sb_routerop_hdr3 = w3;                                /* cea1+9934: 0x099B = w3 */
-  { static __xdata uint8_t cdf5_dbg = 24;
+  { static __xdata uint8_t cdf5_dbg = 0;
     if (cdf5_dbg) { cdf5_dbg--; uart_puts("\r\n[cdf5 r="); uart_puthex(r); uart_puts(" h1="); uart_puthex(hdr1_new);
       uart_puts(" w3="); uart_puthex(w3); uart_putc(']'); } }
   SB_WR(0x06, 0x01);                                   /* cea4 9934 + cea7 0be6 r3_write_dispatch: SB-transport TX */
 }
 
-/* Set by the a066 ISR when it observes SB[0x26].1 ([Pend Int]); the body runs in the super-loop. */
+/* Fallback set when SB[0x26].1 ([Pend Int]) is observed outside the stock a066 position. */
 static volatile uint8_t __xdata __at(0x0B55) sb_pend_int_pending;
 
 /* a066: INT1 source C80A.5 service body. PART 1 = per-channel connect poll; PART 2 =
  * connect/disconnect edge + lane CL0/event servicing (all W1C). */
-static volatile uint8_t a066_dbg_budget = 30;
-static volatile uint8_t a066_dbg_ret_budget = 30;
+static volatile uint8_t a066_dbg_budget = 0;
+static volatile uint8_t a066_dbg_ret_budget = 0;
 static void sb_router_event_handler(void) {
   uint8_t idx, bm, cs;
 
@@ -600,20 +594,34 @@ static void sb_router_event_handler(void) {
     SB_WR(0x66, 0x01);
     uart_puts("\r\nLane Bonded\r\n");
     sb_lane_bonded_consequence();
-    lb_laneA_cl0_latch = 0; lb_laneB_cl0_latch = 0;
+    sb_clear_cl0_width_latches();
+  }
+
+  if (SB_RD(0x26) & 0x02) {
+    sb_a5d8_pend_int();
+    SB_WR(0x26, 0x02);
   }
 
   if (SB_RD(0x9E) & 0x01) {
     SB_WR(0x9E, 0x01);
     uart_puts("\r\nL0:CL0 ");
-    if ((SB_RD(0xA0) & 0x0F) != 2) { lb_laneA_cl0_latch = 0; lb_laneB_cl0_latch = 0; }
-    if (P1_RD(0x0819) & 0x01) { if ((SB_RD(0xA1) & 0x0F) != 2) { lb_laneA_cl0_latch = 0; lb_laneB_cl0_latch = 0; } }
+    uart_puthex(SB_RD(0xA0) & 0x0F);
+    SB_WR(0x64, (uint8_t)((SB_RD(0x64) & 0xFE) | 0x01));
+    if (!(u4_work_buf[0x19] & 0x02) || ((SB_RD(0xA1) & 0x0F) == 2)) {
+      sb_clear_cl0_width_latches();
+      sb_set_d4_peer_cl0();
+    }
   }
 
   if (SB_RD(0x9E) & 0x02) {
     SB_WR(0x9E, 0x02);
     uart_puts("\r\nL1:CL0 ");
-    if ((SB_RD(0xA1) & 0x0F) != 2) { lb_laneA_cl0_latch = 0; lb_laneB_cl0_latch = 0; }
+    uart_puthex(SB_RD(0xA1) & 0x0F);
+    SB_WR(0x64, (uint8_t)((SB_RD(0x64) & 0xFD) | 0x02));
+    if (!(u4_work_buf[0x19] & 0x01) || ((SB_RD(0xA0) & 0x0F) == 2)) {
+      sb_clear_cl0_width_latches();
+      sb_set_d4_peer_cl0();
+    }
   }
 
   if (SB_RD(0x66) & 0x04) {
@@ -652,10 +660,6 @@ static void sb_router_event_handler(void) {
   if (SB_RD(0x9E) & 0x20) {
     SB_WR(0x9E, 0x20);
     uart_puts("\r\nL1:Training");
-  }
-
-  if (SB_RD(0x26) & 0x02) {
-    sb_pend_int_pending = 1;
   }
 
   (void)SB_RD(0xF6);

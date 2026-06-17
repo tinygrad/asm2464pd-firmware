@@ -115,9 +115,15 @@ static uint8_t usb4_mode_entry_commit(void) {
 
 /* EnterMode responder: enter TBT alt-mode for SVID 0x8087, else generic ACK. */
 static void vdm_handle_enter_mode(uint8_t objpos, uint8_t svid_lo, uint8_t svid_hi) {
+  uint16_t vdo0 = (uint16_t)(pd_rx_ptr_get() + 2);
+  uint8_t enter_mode_flags = PR(vdo0 + 6);
+
   sb_tx_cmd = svid_lo;
   sb_tx_byte0 = svid_hi;
   sb_tx_byte1 = objpos;
+  u4_confirm_input_cd = (uint8_t)(enter_mode_flags >> 7);
+  u4_confirm_input_ce = (uint8_t)((enter_mode_flags & 0x40) >> 6);
+  u4_confirm_input_cf = (uint8_t)(enter_mode_flags & 0x07);
 
   if (svid_lo == 0x87 && svid_hi == 0x80 && (u4_mode_flag & 0x80) && pd_role_state == 0) {
     pd_tx_set_sop_header(1, 0x0F);
@@ -140,10 +146,19 @@ static void vdm_handle_enter_mode(uint8_t objpos, uint8_t svid_lo, uint8_t svid_
 static void pd_handle_enter_usb(void) {
   uint16_t base = pd_rx_ptr();
   uint16_t vdo0 = (uint16_t)(base + 2);
-  uint8_t cable_cur = (uint8_t)((PR(vdo0 + 1) & 0x20) >> 5);
-  uint8_t mode = (uint8_t)((PR(vdo0 + 3) & 0x70) >> 4);
+  uint8_t eudo1 = PR(vdo0 + 1);
+  uint8_t eudo2 = PR(vdo0 + 2);
+  uint8_t eudo3 = PR(vdo0 + 3);
+  uint8_t cable_cur = (uint8_t)((eudo1 & 0x20) >> 5);
+  uint8_t mode = (uint8_t)((eudo3 & 0x70) >> 4);
   uint8_t mode_flags;
 
+  u4_routerop_flag = (uint8_t)((eudo1 & 0x40) >> 6);
+  u4_routerop_opcode = (uint8_t)(eudo1 >> 7);
+  pd_usb3_fallback_flag = (uint8_t)(u4_routerop_opcode & 1);
+  u4_routerop_op_len = (uint8_t)((eudo2 & 0x06) >> 1);
+  pd_state_07cb = (uint8_t)((eudo2 & 0x18) >> 3);
+  u4_route_confirm_07cc = (uint8_t)(eudo2 >> 5);
   u4_routerop_port = mode;
   pd_tx_buf_clear();
 

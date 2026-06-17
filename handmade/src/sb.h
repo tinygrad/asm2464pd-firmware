@@ -146,11 +146,17 @@ static void sb_rom_descriptor_load(void) {
     sb_width_lut[(uint16_t)(0x0 + i)] = width_lut[i];
     sb_branchA_gate[(uint16_t)(0x0 + i)] = branchA_gate[i];
   }
-  if (u4_cap20g_gate0) u4_work_buf[0x1A] = (uint8_t)((u4_work_buf[0x1A] & 0xDF) | 0x20);
+  if (u4_cap20g_gate0) {
+    u4_work_buf[0x1A] = (uint8_t)((u4_work_buf[0x1A] & 0xDF) | 0x20);
+    if ((u4_enter_usb_accepted != 0 && u4_route_confirm_07cc < 3) ||
+        (u4_connect_route_latch != 0 && (u4_confirm_input_cf == 1 || u4_confirm_input_cf == 2))) {
+      u4_work_buf[0x1A] &= 0xDF;
+    }
+  }
   if (u4_cap20g_gate1 == 0) u4_work_buf[0x1A] &= 0xED;
 
   lb_lane_width_latch0 = 1; u4_route_query_response = 0; sb_connect_present = 0; sb_route_up_trigger = 0; lb_walk_oneshot_flag = 0;
-  u4_fsm_state = 0; cm_conn_routing_substate = 0; lb_lane_desc_idx[0x0] = 0x0F; lb_lane_desc_idx[0x1] = 0x0F; u4_coldboot_seed_gate = 1;
+  u4_fsm_state = U4FSM_IDLE; cm_conn_routing_substate = CONNRT_PRINT_STATUS; lb_lane_desc_idx[0x0] = 0x0F; lb_lane_desc_idx[0x1] = 0x0F; u4_coldboot_seed_gate = 1;
   sb_cdf5_substate_arm = 0; lb_lane_bonded_flag = 0;
   SB_WR(0x2C, 0x04);
   SB_WR(0x28, 0x08);

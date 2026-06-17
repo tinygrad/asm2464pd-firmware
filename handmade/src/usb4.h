@@ -63,23 +63,23 @@ static volatile uint8_t __xdata __at(0x0B4A) c80a_acc;
 static void cm_routerop_mailbox(void) {
   if (REG_SYS_CTRL_EA90 != 0x5A) return;
   {
-    uint8_t state = u4_routerop_mbox_state;
-    if (state == 0) {
+    rmbox_state_t state = u4_routerop_mbox_state;
+    if (state == RMBOX_IDLE) {
       u4_routerop_mbox_opcode = REG_ROUTEROP_OPCODE_EA80;
-    } else if (state == 1) {
+    } else if (state == RMBOX_MULTIPKT_1) {
       if (u4_routerop_mbox_opcode == 0xE2) {
-        u4_routerop_mbox_state = 0;
+        u4_routerop_mbox_state = RMBOX_IDLE;
         REG_SYS_CTRL_EA90 = 0xA5;
         return;
       }
-      u4_routerop_mbox_state = 0;
-    } else if (state == 2) {
+      u4_routerop_mbox_state = RMBOX_IDLE;
+    } else if (state == RMBOX_MULTIPKT_2) {
       if (u4_routerop_mbox_opcode == 0xE3) {
-        u4_routerop_mbox_state = 0;
+        u4_routerop_mbox_state = RMBOX_IDLE;
         REG_SYS_CTRL_EA90 = 0xA5;
         return;
       }
-      u4_routerop_mbox_state = 0;
+      u4_routerop_mbox_state = RMBOX_IDLE;
     }
   }
 }

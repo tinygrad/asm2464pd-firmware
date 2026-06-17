@@ -4,6 +4,67 @@
 #ifndef USB4_STATE_H
 #define USB4_STATE_H
 
+/* ===================== USB4 bring-up FSM state enums ===================== */
+/* All five enums are 1-byte. Members are EXACT register values.            */
+
+/* (A) MAIN FSM — XDATA 0x06ED (u4_fsm_state). Dispatched by e672.          */
+/* Dispatched values = {3,4,5} only; 0 dormant; 1,2 verified-nonexistent.   */
+typedef enum {
+    U4FSM_IDLE       = 0x00, /* dormant/reset; e672 & cb81 skip dispatch while 0 */
+    U4FSM_CONN_ROUT  = 0x03, /* [ConnRout] conn-routing setup (-> a7de) */
+    U4FSM_LANE_TRAIN = 0x04, /* PCIe-tunnel power-on / lane-training (-> b0b4) */
+    U4FSM_LANE_BOND  = 0x05, /* CL-state lane-bond walker (-> 8000/850b) */
+} u4_fsm_state_t;            /* NOTE: values 0x01,0x02 do not exist (no writer/no dispatch) */
+_Static_assert(sizeof(u4_fsm_state_t) == 1, "u4_fsm_state_t must be 1 byte");
+
+/* (B) STATE-3 SUB-FSM — XDATA 0x0758 (cm_conn_routing_substate). a7de.     */
+/* Complete legal value set = {0x00,0x10,0x11}; any other = no-op RET.       */
+typedef enum {
+    CONNRT_PRINT_STATUS    = 0x00, /* terminal/print: LJMP eb62(0,4) -> parent->state4; cold-reset default */
+    CONNRT_ARM_ROUTE_QUERY = 0x10, /* arm: edf5 route-query push; wait accept */
+    CONNRT_AWAIT_RESULT    = 0x11, /* await/confirm body: gate 0x0777==0x0C, [ConnRout], 0x0718=4 */
+} connrt_substate_t;
+_Static_assert(sizeof(connrt_substate_t) == 1, "connrt_substate_t must be 1 byte");
+
+/* (C) STATE-5 LOOP1 — XDATA 0x0759 (lane0) / 0x075A (lane1) lb_loop1_state. */
+/* walk_8000 LOOP1; full set {00,10,20,30,40,50,60,70,80,90,A0,A1}.          */
+typedef enum {
+    LP1_PARKED            = 0x00, /* parked/idle; default vector 8355 loop-tail, no state work */
+    LP1_WIDTH_INIT        = 0x10, /* seed; clear work[0x1C+lane] bits4/5/7 -> 0x20 */
+    LP1_ARM_WAIT_PUSH     = 0x20, /* e461 push-wait #1 (84f3); push==1 -> 0x30 */
+    LP1_LANE_PRESENT_SEL  = 0x30, /* host-ack sel + host_desc[0x4+lane].7 arm gate -> 0x40 */
+    LP1_SETTLE_CLEAR      = 0x40, /* clear width-settle counter -> 0x50 */
+    LP1_WIDTH_SETTLE_WALK = 0x50, /* TX[2:3] CL-walk/width-settle step; finalize ->0x60, overflow/re-entry ->0x00 */
+    LP1_BOND_WAIT_PUSH    = 0x60, /* e461 push-wait #2 (84f3); push==1 -> 0x70 */
+    LP1_WIDTH_LATCH_SEL   = 0x70, /* width-latch sel: snap&0xC0==0xC0 + nibble-match -> 0x80 */
+    LP1_FINALIZE_A        = 0x80, /* finalize pass A (ee6e gate work-bit set) -> 0x90 */
+    LP1_FINALIZE_B        = 0x90, /* finalize pass B (uncond clear bit7) -> 0xA0 */
+    LP1_BOND_WAIT_ACK     = 0xA0, /* e461 push-wait #3 (84fa); push==1 -> 0xA1 */
+    LP1_BONDED_MONITOR    = 0xA1, /* bonded monitor; snap&0xC0==0x80 host-retrain -> 0x50, else -> 0xA0 */
+} lp1_state_t;
+_Static_assert(sizeof(lp1_state_t) == 1, "lp1_state_t must be 1 byte");
+
+/* (D) STATE-5 LOOP2 (LIVE walk_8000 path) — XDATA 0x075B/0x075C lb_loop2_state. */
+/* walk_8000 LOOP2 value set {00,10,20,30,50,60}. (850b is a SEPARATE encoding   */
+/* on the SAME cell — see CRITICAL CALLOUT C1; do NOT enum-mix.)                  */
+typedef enum {
+    LP2_CL_IDLE      = 0x00, /* terminal/parked; no ladder case (reached from 0x30 snap.bit4) */
+    LP2_CL_INIT      = 0x10, /* seed: work[0x1E+lane]|=0x80,&=0xBF -> 0x20 */
+    LP2_CL_PUSH_WAIT = 0x20, /* e461 push-wait (84fa); push==1 -> 0x30 */
+    LP2_CL_EVAL      = 0x30, /* PRIME bond-decision: snap=host_desc[0x2+lane]; .4->0x00, !.7->0x20, .7->CL-cfg->0x50 */
+    LP2_CL_BOND_WAIT = 0x50, /* e461 push-wait #2 (84a3); push==1 -> 0x60 */
+    LP2_CL_BOND_MON  = 0x60, /* bonded monitor; snap.7 retrain -> 0x50, else -> 0x20 */
+} lp2_state_t;
+_Static_assert(sizeof(lp2_state_t) == 1, "lp2_state_t must be 1 byte");
+
+/* (E) CM ROUTER-OP MAILBOX — XDATA 0x0B02 (u4_routerop_mbox_state). c0a5.   */
+typedef enum {
+    RMBOX_IDLE       = 0x00, /* idle/single-packet; latch EA80, run 0def dispatch */
+    RMBOX_MULTIPKT_1 = 0x01, /* CONFIG-read (E2) continuation */
+    RMBOX_MULTIPKT_2 = 0x02, /* E3 write/path-config continuation */
+} rmbox_state_t;
+_Static_assert(sizeof(rmbox_state_t) == 1, "rmbox_state_t must be 1 byte");
+
 /* ---- computed-access regions: named arrays at fixed base (members accessed as name[off]) ---- */
 volatile __xdata __at(0x0600) uint8_t sb_cfg06[0x10];   /* a5d8 router-op config slot bytes */
 volatile __xdata __at(0x06F2) uint8_t sb_width_lut[0x13];   /* af38 per-descriptor width LUT (ROM 0x514c) */
@@ -11,8 +72,8 @@ volatile __xdata __at(0x0705) uint8_t sb_branchA_gate[0x13];   /* af38 BRANCH-A 
 volatile __xdata __at(0x071A) uint8_t sb_lane_desc[0x10];   /* lane-descriptor work buffer (ROM 0x21d4) */
 volatile __xdata __at(0x072E) uint8_t lb_cap_field[0x10];   /* per-CL cap source bytes */
 volatile __xdata __at(0x073E) uint8_t sb_lane_flip[0x10];   /* lane-flip table (ROM 0x21b4) */
-volatile __xdata __at(0x0759) uint8_t lb_loop1_state[0x2];   /* state-5 LOOP1 state cell per lane */
-volatile __xdata __at(0x075B) uint8_t lb_loop2_state[0x2];   /* state-5 LOOP2 CL-walk state per lane */
+volatile __xdata __at(0x0759) lp1_state_t lb_loop1_state[0x2];   /* state-5 LOOP1 state cell per lane */
+volatile __xdata __at(0x075B) lp2_state_t lb_loop2_state[0x2];   /* state-5 LOOP2 CL-walk state per lane */
 volatile __xdata __at(0x075D) uint8_t lb_lane_desc_idx[0x2];   /* per-lane 4-bit desc-walk index */
 volatile __xdata __at(0x075F) uint8_t lb_settle_counter[0x2];   /* per-lane width-settle counter */
 volatile __xdata __at(0x0761) uint8_t lb_cl_value[0x2];   /* per-lane CL value */
@@ -76,7 +137,7 @@ volatile __xdata __at(0x0B2C) uint8_t lb_cl0_width[0x2];   /* per-lane CL0 width
 /* ---- standalone firmware state: named __at globals at their stock addresses ----------- */
 volatile __xdata __at(0x06E9) uint8_t phy_rxpll_train_busy;   /* PHY CDR/RXPLL train flag (1=start/busy, 0=ready) */
 volatile __xdata __at(0x06EC) uint8_t u4_conn_consequence_done;   /* SB-router connect consequence ran; arms cb10 super-loop poll */
-volatile __xdata __at(0x06ED) uint8_t u4_fsm_state;   /* USB4 connect/lane-bond FSM state (3=ConnRout,4,5) */
+volatile __xdata __at(0x06ED) u4_fsm_state_t u4_fsm_state;   /* USB4 connect/lane-bond FSM state (3=ConnRout,4,5) */
 volatile __xdata __at(0x06EE) uint8_t sb_transport_edge_toggle;   /* d4cd transport-edge ping-pong toggle, ports 0/1 (SB28/2A) */
 volatile __xdata __at(0x06EF) uint8_t sb_link_edge_toggle;   /* d4cd LINK-edge ping-pong toggle, ports 2/3 (SB81/83) */
 volatile __xdata __at(0x06F0) uint8_t sb_active_plane_port;   /* cd3f port index selecting SB-RX descriptor plane (ROM 212d) */
@@ -94,7 +155,7 @@ volatile __xdata __at(0x0751) uint8_t lb_lane_width_latch1;   /* lane-width latc
 volatile __xdata __at(0x0752) uint8_t sb_connect_descriptor;   /* host SB connect descriptor (from SB[0x18]); af38/cd3f gate */
 volatile __xdata __at(0x0753) uint8_t sb_tx_command_desc;   /* SB[0x15] TX command = 0x0752 & 0xDE (bits 0,5 cleared) */
 volatile __xdata __at(0x0754) uint8_t sb_af38_copy_len;   /* af38 response copy length / work-buffer byte count */
-volatile __xdata __at(0x0758) uint8_t cm_conn_routing_substate;   /* cm_conn_routing_setup sub-FSM state (0x10/0x11/0x00) */
+volatile __xdata __at(0x0758) connrt_substate_t cm_conn_routing_substate;   /* cm_conn_routing_setup sub-FSM state (0x10/0x11/0x00) */
 volatile __xdata __at(0x0763) uint8_t u4_phy_gate_a;   /* deep-PHY gate input A (0763|0764 e08d/9a06); ConnRout clears */
 volatile __xdata __at(0x0764) uint8_t u4_phy_gate_b;   /* deep-PHY gate input B (0763|0764 gate); ConnRout clears */
 volatile __xdata __at(0x0765) uint8_t sb_connect_present;   /* connect-present latch (ebb5/ebd7 set=1); b0b4 gate input */
@@ -185,7 +246,7 @@ volatile __xdata __at(0x0AA9) uint8_t sb_tx_byte0;   /* SB-transport TX SBTX[0] 
 volatile __xdata __at(0x0AAA) uint8_t sb_tx_byte1;   /* SB-transport TX SBTX[1] payload byte */
 volatile __xdata __at(0x0AAB) uint8_t sb_tx_flag;   /* SB-transport TX flag (SBTX[1].7, SB[0x0C] form) */
 volatile __xdata __at(0x0AAC) uint8_t sb_tx_go_param;   /* d5da TX-go param selector (0=plain TX trigger) */
-volatile __xdata __at(0x0AAD) uint8_t sb_fsm_state;   /* eb62 new SB connect-FSM state (mirrors 0x06ED) */
+volatile __xdata __at(0x0AAD) u4_fsm_state_t sb_fsm_state;   /* eb62 new SB connect-FSM state (mirrors 0x06ED) */
 volatile __xdata __at(0x0AB3) uint8_t phy_lane_gate;   /* e34b PHY-lane gate; 0=emit OS1/retrain tail */
 volatile __xdata __at(0x0AB6) uint8_t phy_cdr_arm_mask;   /* e34b CDR-done arm mask (C2D1/C351) */
 volatile __xdata __at(0x0ACD) uint8_t u4_mode_entry_class;   /* mode-entry class (3=USB4 path,1=non-USB4) */
@@ -195,7 +256,7 @@ volatile __xdata __at(0x0AE3) uint8_t u4_link_busy;   /* USB4 tunnel link-busy f
 volatile __xdata __at(0x0AEC) uint8_t u4_link_gen;   /* USB4 link gen (a840 R7; seeded 3) */
 volatile __xdata __at(0x0AED) uint8_t u4_link_lane;   /* USB4 link lane (a840 R6; seeded 3) */
 volatile __xdata __at(0x0AF1) uint8_t u4_connect_gate;   /* USB4 connect-time gate/mode flags (.0 gate,.4 PHY-lock) */
-volatile __xdata __at(0x0B02) uint8_t u4_routerop_mbox_state;   /* router-op mailbox state (0=idle,1=read,2=write) */
+volatile __xdata __at(0x0B02) rmbox_state_t u4_routerop_mbox_state;   /* router-op mailbox state (0=idle,1=read,2=write) */
 volatile __xdata __at(0x0B03) uint8_t u4_routerop_mbox_opcode;   /* router-op mailbox opcode from EA80 (E2/E3) */
 volatile __xdata __at(0x0B13) uint8_t sb_eng_data3c_b;   /* SB descriptor-engine ENGINE[0x3C] data (variant b) */
 volatile __xdata __at(0x0B14) uint8_t sb_eng_data3d_b;   /* SB descriptor-engine ENGINE[0x3D] data (variant b) */

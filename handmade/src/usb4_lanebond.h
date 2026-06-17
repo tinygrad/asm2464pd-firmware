@@ -8,8 +8,10 @@
 
 #define U4LB_STATE   u4_fsm_state
 
+static void u4lb_e1cb_e2b9(uint8_t is_e1cb);
+
 /* eb62(p1,p2): set the new FSM state, print "[SB P0<state>]", and store it into 0x06ED. */
-static void u4lb_eb62(uint8_t state_lo, uint8_t state) {
+static void u4lb_eb62(uint8_t state_lo, u4_fsm_state_t state) {
   sb_tx_go_param = state_lo;
   sb_fsm_state = state;
   uart_puts("\r\n[SB P0");
@@ -25,67 +27,17 @@ static volatile uint8_t __xdata __at(0x0B58) u4lb_edf5_print_budget;
  * connection-routing descriptor. Gated by the 0x0719 in-flight token; d5da's poll is bounded so the
  * super-loop can't hang. Returns 1 only when a query was actually sent. */
 static uint8_t u4lb_edf5_route_query(void) {
-  uint8_t staged;
   if (e461_inflight_token != 0) return 0;
 
   sb_tx_flag = 0;
   sb_tx_cmd = 5;
   sb_tx_byte0 = 0x0C;
   sb_tx_byte1 = 3;
-  sb_d4cd_transport_edges();
-
-  SBTX_WR(0, sb_tx_byte0);
-  SBTX_WR(1, (uint8_t)(sb_tx_byte1 | ((sb_tx_flag & 1) << 7)));
-  staged = (uint8_t)((SB_RD(0x0C) & 0x80) | 0x08);
-  SB_WR(0x0C, staged);
-
-  SB_WR(0x15, sb_tx_cmd);
-
-  /* d5da(0): the bounded SB-transport TX trigger. */
-  { uint8_t tx_done; uint16_t g = 0;
-    sb_tx_go_param = 0;
-    P1_WR(0x0100, (uint8_t)(P1_RD(0x0100) & 0xFE));
-    SB_WR(0x04, (uint8_t)(SB_RD(0x04) & 0xFD));
-    if (u4lb_edf5_print_budget) {
-      uart_puts("\r\n[TX p15="); uart_puthex(SB_RD(0x15));
-      uart_putc(' '); uart_puthex(SB_RD(0x10));
-      uart_putc(' '); uart_puthex(SB_RD(0x2C));
-      uart_putc(' '); uart_puthex(SB_RD(0x0C));
-      uart_putc(' '); uart_puthex(SB_RD(0x0D));
-      uart_putc(' '); uart_puthex(SB_RD(0x0E));
-      uart_putc(' '); uart_puthex(SB_RD(0x18));
-      uart_putc(' '); uart_puthex(SB_RD(0x28));
-      uart_putc('|'); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(SBTX_RD(i)); }
-      uart_putc('|'); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(P1_REG8_rd((uint16_t)(0x2a00u + i))); }
-      uart_putc('|'); uart_puthex(e461_inflight_token); uart_putc(' '); uart_puthex(cm_conn_routing_substate);
-      uart_putc(' '); uart_puthex(u4_fsm_state); uart_putc(' '); uart_puthex(sb_transport_edge_toggle);
-      uart_putc(' '); uart_puthex(u4_route_query_response); uart_putc(' '); uart_puthex(u4_coldboot_seed_gate);
-      uart_putc(' '); uart_puthex(u4_host_desc[0x0]);
-      uart_putc('|'); uart_puthex(REG_XFER2_DMA_STATUS); uart_putc(' '); uart_puthex(REG_INT_PCIE_NVME);
-      uart_putc(' '); uart_puthex(REG_CPU_CTRL_CC37); uart_putc(' '); uart_puthex(REG_CPU_CTRL_CA60);
-      uart_putc('|'); uart_puthex(P1_RD(0x0109)); uart_putc(' '); uart_puthex(SB_RD(0xD8));
-      uart_putc(' '); uart_puthex(SB_RD(0x3A)); uart_puthex(SB_RD(0x3B));
-      uart_puthex(SB_RD(0x3C)); uart_puthex(SB_RD(0x3D));
-      uart_putc(']');
-    }
-    SB_WR(0x10, 0x01);
-    while (((SB_RD(0x2C) >> 2) & 1) == 0 && ++g < 0x4000) { }
-    tx_done = (uint8_t)((SB_RD(0x2C) >> 2) & 1);
-    if (u4lb_edf5_print_budget) {
-      u4lb_edf5_print_budget--;
-      uart_puts("[TXdone done="); uart_puthex(tx_done);
-      uart_puts(" sb2c="); uart_puthex(SB_RD(0x2C));
-      uart_puts(" g="); uart_puthex((uint8_t)(g >> 8)); uart_puthex((uint8_t)g);
-      uart_puts("]\r\n");
-    }
-    SB_WR(0x2C, 0x04);
-    phy_cc10_cmd(1, 0, 0x0B);
-    SB_WR(0x0F, (uint8_t)(SB_RD(0x0F) & 0xFE));
-    (void)tx_done;
+  if (u4lb_edf5_print_budget) {
+    u4lb_edf5_print_budget--;
+    uart_puts("\r\n[edf5]");
   }
-
-  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02; REG_XFER2_DMA_STATUS = 0x01;
-  e461_inflight_token = 0x01;
+  u4lb_e1cb_e2b9(0);
   return 1;
 }
 
@@ -103,15 +55,15 @@ static __code const uint8_t u4lb_branchA_gate_515f[0x13] = {
 };
 
 static void u4lb_cm_conn_routing_setup(void) {
-  uint8_t state = cm_conn_routing_substate;
-  if (state == 0x10) {
+  connrt_substate_t state = cm_conn_routing_substate;
+  if (state == CONNRT_ARM_ROUTE_QUERY) {
     if (u4lb_edf5_route_query() != 1) return;
-    cm_conn_routing_substate = 0x11;
+    cm_conn_routing_substate = CONNRT_AWAIT_RESULT;
     return;
   }
-  if (state != 0x11) {
-    if (state != 0x00) return;
-    u4lb_eb62(0, 4);
+  if (state != CONNRT_AWAIT_RESULT) {
+    if (state != CONNRT_PRINT_STATUS) return;
+    u4lb_eb62(0, U4FSM_LANE_TRAIN);
     return;
   }
 
@@ -121,18 +73,19 @@ static void u4lb_cm_conn_routing_setup(void) {
     if (u4_route_query_response != 0)      { u4_route_query_response = 0; e461_inflight_token = 0; selector = 0; }
     else if (e461_inflight_token == 0x02) { e461_inflight_token = 0; selector = 2; }
     else                       { selector = 1; }
-    if (selector == 2) { cm_conn_routing_substate = 0x10; return; }
+    if (selector == 2) { cm_conn_routing_substate = CONNRT_ARM_ROUTE_QUERY; return; }
     if (selector != 0) { return; }
   }
 
   /* mode==0 path: gate on the host connect descriptor 0x0777==0x0C. */
-  if (u4_host_desc[0x0] != 0x0C) { cm_conn_routing_substate = 0x10; return; }
+  if (u4_host_desc[0x0] != 0x0C) { cm_conn_routing_substate = CONNRT_ARM_ROUTE_QUERY; return; }
 
   { static __xdata uint8_t conn_routing_diag_budget = 6;
     if (conn_routing_diag_budget) { conn_routing_diag_budget--;
       uart_puts("\r\n[cr B9="); uart_puthex(u4_connect_route_latch); uart_puts(" 778="); uart_puthex(u4_host_desc[0x1]);
       uart_puts(" 81B="); uart_puthex(u4_work_buf[0x1B]); uart_puts(" CE="); uart_puthex(u4_confirm_input_ce);
-      uart_puts(" CD="); uart_puthex(u4_confirm_input_cd); uart_puts(" 776="); uart_puthex(u4_coldboot_seed_gate); uart_putc(']'); } }
+      uart_puts(" CD="); uart_puthex(u4_confirm_input_cd); uart_puts(" CC="); uart_puthex(u4_route_confirm_07cc);
+      uart_puts(" CF="); uart_puthex(u4_confirm_input_cf); uart_puts(" 776="); uart_puthex(u4_coldboot_seed_gate); uart_putc(']'); } }
 
   /* 0x0776 connect-confirm computation. */
   if (u4_connect_route_latch != 0) {
@@ -172,7 +125,12 @@ static void u4lb_cm_conn_routing_setup(void) {
   /* Latch the 0x077a lane-width bits into 0x0819/0x0751/0x0750. */
   { uint8_t host_width = u4_host_desc[0x3];
     if ((host_width & 1) && (u4_work_buf[0x1A] & 1)) { u4_work_buf[0x19] = (u4_work_buf[0x19] & 0xFE) | 1; }
-    if ((host_width & 0x02) && (u4_work_buf[0x1A] & 2)) { u4_work_buf[0x19] = (u4_work_buf[0x19] & 0xFD) | 2; }
+    /* DIAG EXPERIMENT (lane0-first): suppress premature lane1 enable to test whether handmade's
+     * 0x0819=0x03 (both lanes advertised at once) is what makes the host reject the route. Stock
+     * walker shows 0x0819=0x01 (w1C=7B00) at lane-bond start. Revert/replace with the byte-true
+     * progressive promotion once confirmed. */
+    /* if ((host_width & 0x02) && (u4_work_buf[0x1A] & 2)) { u4_work_buf[0x19] = (u4_work_buf[0x19] & 0xFD) | 2; } */
+    u4_work_buf[0x19] &= 0xFD;
     if ((host_width & 0x10) && (u4_work_buf[0x1A] & 0x10) && (u4_work_buf[0x19] & 1) && (u4_work_buf[0x19] & 2)) lb_lane_width_latch1 = 1;
     else lb_lane_width_latch1 = 0;
     if ((host_width & 0x20) && (u4_work_buf[0x1A] & 0x20)) lb_lane_width_latch0 = 2;
@@ -209,7 +167,7 @@ static void u4lb_cm_conn_routing_setup(void) {
     }
   }
 
-  cm_conn_routing_substate = 0;
+  cm_conn_routing_substate = CONNRT_PRINT_STATUS;
 }
 
 /* State 4 (0x06ED==4) — b0b4: [PcieTunnel-PwrOn] -> Chg2 20G -> [RstRxpll] -> [CDRV ok] ->
@@ -237,8 +195,7 @@ static void u4lb_d5da(uint8_t param) {
   P1_WR(0x0100, P1_RD(0x0100) & 0xFE);
   SB_WR(0x04, SB_RD(0x04) & 0xFD);
   SB_WR(0x10, 0x01);
-  { uint16_t g = 0;
-    while (((SB_RD(0x2C) & 0x04) == 0) && ++g < 0x2000); }
+  while ((SB_RD(0x2C) & 0x04) == 0) { }
   SB_WR(0x2C, 0x04);
   phy_cc10_cmd_wait(1, 0, 0x0B);
   SB_WR(0x0F, SB_RD(0x0F) & 0xFE);
@@ -275,7 +232,7 @@ static void u4lb_e9e7(void) {
   phy_cc10_cmd_wait(1, 0, 0x14);
   REG_PHY_RXPLL_RESET = 0x00;
   phy_cc10_cmd_wait(2, 0, 0x28);
-  REG_CPU_CTRL_CC37 &= 0xFB;
+  REG_CPU_CTRL_CC37 &= 0xFB;               /* ea0c: stock calls 984d, which returns CC37 & ~0x04, then writes it back. */
   uart_puts("[Done]");
 }
 
@@ -359,18 +316,20 @@ static void u4lb_ec51(void) {
 /* b226: CC10 settle. */
 static void u4lb_b226(void) { phy_cc10_cmd_wait(2, 0, 0xC8); }
 
-/* ee57: fire ec51 Trig-arm when CCE1.0 is clear or CCE1.1 is set; the caller then reads the
- * read-only CCE4:CCE5 lane-width counter. */
-static void u4lb_ee57(void) {
+/* ee57: fire ec51 Trig-arm when CCE1.0 is clear or CCE1.1 is set, then read CCE4:CCE5.
+ * Stock returns those live counter bytes in R6:R7; cb10 uses them for the state-5 throttle. */
+static uint16_t u4lb_ee57(void) {
   if (!(REG_LANE_TRAIN_ARM & 0x01) || (REG_LANE_TRAIN_ARM & 0x02)) u4lb_ec51();
+  return ((uint16_t)REG_LANE_WIDTH_CNT_HI << 8) | REG_LANE_WIDTH_CNT_LO;
 }
 
-/* 98ec: lane-width snapshot producer — arm 0x0758=0x10, run ee57, latch CCE4:CCE5 into 0x768:0x769. */
-static void u4lb_98ec(void) {
-  cm_conn_routing_substate = 0x10;
+/* 98ec: arm connection-routing substate, run ee57, then store caller-provided R6:R7 into
+ * 0x0768:0x0769. Stock db7a/edd9 both call this as 98ec(0,3). */
+static void u4lb_98ec(uint8_t hi, uint8_t lo) {
+  cm_conn_routing_substate = CONNRT_ARM_ROUTE_QUERY;
   u4lb_ee57();
-  lb_lane_width_cnt_hi = REG_LANE_WIDTH_CNT_HI;
-  lb_lane_width_cnt_lo = REG_LANE_WIDTH_CNT_LO;
+  lb_lane_width_cnt_hi = hi;
+  lb_lane_width_cnt_lo = lo;
 }
 
 /* State-4 PCIe-tunnel power / PHY bring-up (e305 -> ee29 -> ed44 -> df61 / a840 / c593 / b8db).
@@ -425,14 +384,27 @@ static void u4lb_e74e(void) {
   REG_CPU_EXT_STATUS = 0x02;
 }
 
-/* ee29: C659&=~1; B402&=~1; ed44; e74e; 0x0B42=0; 0x0B43=0. */
+/* ee29: stock e305 enters with DPTR=0xCA06, then ee29 runs bank0_e8a9(0x0f), writes
+ * d185() == (B402 & ~1) back through DPTR, then ed44/e74e and clears 0x0B42/0x0B43. */
 static void u4lb_ee29(void) {
   REG_PCIE_LANE_CTRL_C659 &= 0xFE;
-  REG_PCIE_CTRL_B402 &= 0xFE;
+  REG_CPU_MODE_NEXT = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);
   u4lb_ed44();
   u4lb_e74e();
   PR(0x0B42) = 0;
   PR(0x0B43) = 0;
+}
+
+/* e26a(1,1): stock calls cdc6(1), then sets C656.5 inside the e305 power-on envelope. */
+static void u4lb_e26a_pwr(uint8_t mode, uint8_t arg) {
+  if ((u4_route_mode & 0x81) != 0) {
+    if (mode == 1) {
+      if (arg & 1) u4lb_e764_rxpll_train();
+      else phy_cc10_cmd_wait(1, 7, 0xCF);
+    }
+    REG_HDDPC_CTRL = (uint8_t)((REG_HDDPC_CTRL & 0xDF) | (uint8_t)((mode & 1) << 5));
+  }
+  uart_puts(mode == 1 ? "[PwrOn]" : "[Pwroff]");
 }
 
 /* d702: CC10-mailbox lane-mask bit-distributor (plane-2 0x78AF..0x7BAF slot bit7 = mask.slot). */
@@ -543,7 +515,7 @@ static void u4lb_a840(uint8_t param) {
 }
 
 /* e305: state-4 PcieTunnel power-on prologue (gated (0x09FA & 0x81)): conditional CA06 mode-next
- * select, ee29, B402 &= ~2, a840. The E764 train and HDDPC strobe follow inline in b0b4. */
+ * select, ee29, B402 &= ~2, a840, e26a(1,1). */
 static void u4lb_e305(uint8_t param) {
   if ((u4_route_mode & 0x81) == 0) return;
   if ((u4_link_gen == 3) ||
@@ -555,6 +527,7 @@ static void u4lb_e305(uint8_t param) {
   u4lb_ee29();
   REG_PCIE_CTRL_B402 &= 0xFD;
   u4lb_a840(param);
+  u4lb_e26a_pwr(1, 1);
 }
 
 /* c593: bank0 tunnel/PHY commit. e916 returns the plane-2 0x2805 read that seeds the 0x1335 RMWs. */
@@ -668,14 +641,9 @@ static void u4lb_state4_b0b4(void) {
     REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;
   }
 
-  /* e305: [PcieTunnel-PwrOn] + the cdc6 E764 0x14->0x19 PHY train (E764=0x19 is the precondition for
-   * the host to move SB[0xA0]/[0xA1] 07->01->02), then the e26a HDDPC strobe. */
+  /* e305 includes stock e26a(1,1): cdc6(1) RXPLL train and the HDDPC C656.5 power-on strobe. */
   uart_puts("[PcieTunnel-PwrOn]");
   u4lb_e305(1);
-  if (u4_route_mode & 0x81) {
-    u4lb_e764_rxpll_train();   /* cdc6 E764 RX-PLL train (now re-driven per state-5 pass while busy) */
-    REG_HDDPC_CTRL = (uint8_t)((REG_HDDPC_CTRL & 0xDF) | 0x20);
-  }
 
   /* L0 OS-arm, gated 0x0819.0 */
   if (u4_work_buf[0x19] & 0x01) {
@@ -691,13 +659,14 @@ static void u4lb_state4_b0b4(void) {
   }
 
   uart_puts("[b4:D c2="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350); uart_putc(']');
-  /* CC37.2 set -> d3b0(3) Chg2 20G -> e980 rate apply -> e9e7 RstRxpll -> CC37.2 clr */
+  /* CC37.2 SET (b18f/b192) -> d3b0(3) Chg2 20G -> e980 rate apply -> e9e7 RstRxpll;
+   * stock e9e7 and the b1a0 984d call both clear CC37.2 before b8db CDR/PLL validate. */
   REG_CPU_CTRL_CC37 = (REG_CPU_CTRL_CC37 & 0xFB) | 0x04;
   u4lb_d3b0(3);
   u4lb_e980();
   u4lb_e9e7();
   uart_puts("[c2@rstpll="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350); uart_putc(']');
-  REG_CPU_CTRL_CC37 &= 0xFB;
+  REG_CPU_CTRL_CC37 &= 0xFB;   /* b1a0: 984d returns CC37 & ~0x04, then b1a3 writes it before b8db. */
 
   /* b8db: [CDRV ok] CDR/PLL validate loop */
   uart_puts("[CDRV ok]");
@@ -715,18 +684,18 @@ static void u4lb_state4_b0b4(void) {
     uart_puts("[L0 OS1]");
     SB_WR(0x50, 0x02);
     P1_WR(0x010B, P1_RD(0x010B) | 0x01);
-    lb_loop2_state[0x0] = 0x10; lb_loop1_state[0x0] = 0x10;
+    lb_loop2_state[0x0] = LP2_CL_INIT; lb_loop1_state[0x0] = LP1_WIDTH_INIT;
   } else {
-    lb_loop2_state[0x0] = 0x00; lb_loop1_state[0x0] = 0x00;
+    lb_loop2_state[0x0] = LP2_CL_IDLE; lb_loop1_state[0x0] = LP1_PARKED;
   }
   /* L1 OS1 trigger, gated 0x0819.1 */
   if (u4_work_buf[0x19] & 0x02) {
     uart_puts("[L1 OS1]");
     SB_WR(0x5A, 0x02);
     P1_WR(0x010B, (P1_RD(0x010B) & 0xFD) | 0x02);
-    lb_loop2_state[0x1] = 0x10; lb_loop1_state[0x1] = 0x10;
+    lb_loop2_state[0x1] = LP2_CL_INIT; lb_loop1_state[0x1] = LP1_WIDTH_INIT;
   } else {
-    lb_loop2_state[0x1] = 0x00; lb_loop1_state[0x1] = 0x00;
+    lb_loop2_state[0x1] = LP2_CL_IDLE; lb_loop1_state[0x1] = LP1_PARKED;
   }
 
   /* ec51 Trig-arm */
@@ -740,7 +709,7 @@ static void u4lb_state4_b0b4(void) {
   lb_laneB_cl0_latch = REG_LANE_WIDTH_CNT_LO;
 
   /* eb62(0,5) -> [SB P05] -> state 5 */
-  u4lb_eb62(0, 5);
+  u4lb_eb62(0, U4FSM_LANE_BOND);
 }
 
 /* State 5 (0x06ED==5) — the CL-state lane-bond walker (8000 when 0x0718==4, else 850b): the
@@ -766,11 +735,12 @@ static uint8_t u4lb_eda0(void) {
  *   d4cd(); 997e -> SBTX[0]=byte1; 9923 -> SBTX[1]=flag3|((0xAAB.0)<<7);
  *   SB[0x0C] form: (0xAAB!=0) ? (byte1+8)|(SB0C&0x80) : (SB0C&0x80)|0x08;
  *   e1cb: SB[0x15] = (byte0<<1)|0x41 (via 972a);  e2b9: SB[0x15] = byte0 (via 96f7);
- *   d5da(0); 0x0719 = 0xFF (inflight token). */
+ *   d5da(0); 0x0719 = 1 (inflight token). */
 static void u4lb_e1cb_e2b9(uint8_t is_e1cb) {
-  uint8_t aab = sb_tx_flag;          /* XDATA[0x0AAB] */
+  uint8_t aab;                       /* XDATA[0x0AAB] */
   uint8_t form;
   sb_d4cd_transport_edges();         /* d4cd */
+  aab = sb_tx_flag;                  /* stock reads 0x0AAB after d4cd */
   SBTX_WR(0, sb_tx_byte0);           /* 997e: SBTX[0] = XDATA[0x0AA9] (=byte1) */
   SBTX_WR(1, (uint8_t)(sb_tx_byte1 | ((aab & 1) << 7)));  /* 9923: SBTX[1] = XDATA[0x0AAA] | ((0xAAB.0)<<7) */
   if (aab != 0)
@@ -783,7 +753,7 @@ static void u4lb_e1cb_e2b9(uint8_t is_e1cb) {
   else
     SB_WR(0x15, sb_tx_cmd);                            /* e2b9 96f7: SB[0x15]=byte0 */
   u4lb_d5da(0);                                        /* d5da(0) TX trigger */
-  /* 97ef tail: CCD9 strobe (4,2) then DEC A=1 -> CCD9=1 and 0x0719=1 (inflight token). */
+  /* 97ef tail: CCD9 strobe (4,2); stock then DEC A and writes CCD9=1 and 0x0719=1. */
   REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02; REG_XFER2_DMA_STATUS = 0x01;
   e461_inflight_token = 0x01;                          /* 0x0719 = 1 */
 }
@@ -880,35 +850,40 @@ static void u4lb_s5_diag(void) {
   uart_putc(']');
 }
 
-/* 8501: a banked SB-transport drain/poll; non-load-bearing for progression (the ISR's d4cd handles
- * the edges), so it is a no-op here. */
-static void u4lb_8501(void) { }
+/* 8501: a synchronous PHY CC10-mailbox command+wait/ack (NOT a no-op). Stock 8501 -> e50d/e8ef/e80a:
+ * e8ef CC11=4 then 2 (reset); e50d CC10=(CC10&0xF8)|0x02 (opcode 2), CC12=0x00, CC13=0x65, CC11=1
+ * (trigger); e80a busy-waits JNB CC11.1 then CC11=2 (ack). = phy_cc10_cmd_wait(2,0,0x65).
+ * CC13=0x65 = R5: stock 8501 does `MOV R5,#0x65`; e50d's `MOV R7,0x05` is a DIRECT-ADDRESS operand
+ * (SFR 0x05 == R5 of bank0), so R7:=R5=0x65 -> CC13. (Prior transcription misread it as immediate #5.)
+ * Fired by stock after each LOOP1/LOOP2 selector==0 step to commit the staged cl_cfg to the PHY. */
+static void u4lb_8501(void) { phy_cc10_cmd_wait(2, 0, 0x65); }
 
 /* 81d4 finalize: width-settle -> advance state cell 0x0759+lane to 0x60; on counter overflow
- * (>=0x0F) reset to 0x00. Composes the device TX[2:3] CL-walk value: the low nibble walks the
+ * (>=0x10) reset to 0x00. Composes the device TX[2:3] CL-walk value: the low nibble walks the
  * lane-descriptor ROM (sb_lane_desc) while the high nibble of work[0x081C+lane] is PRESERVED, then
  * bit7 is latched (81f8 969e read, 81fb ANL #0xf0, 8208 ORL, 8211 write; 8215 96a7 |0x80 write). */
 static void u4lb_lp1_finalize(uint8_t lane) {
   __xdata uint8_t walk_idx;
-  if (lb_settle_counter[lane] >= 0x0F) { lb_loop1_state[lane] = 0x00; return; }
+  if (lb_settle_counter[lane] >= 0x10) { lb_loop1_state[lane] = LP1_PARKED; return; }
   lb_settle_counter[lane]++;
   walk_idx = (uint8_t)((lb_lane_desc_idx[lane] + 1) & 0x0F);
   lb_lane_desc_idx[lane] = walk_idx;
   u4_work_buf[0x1C + lane] = (uint8_t)((u4_work_buf[0x1C + lane] & 0xF0) | sb_lane_desc[(uint16_t)(0x0 + walk_idx)]);
   u4_work_buf[0x1C + lane] |= 0x80;
-  lb_loop1_state[lane] = 0x60;
+  lb_loop1_state[lane] = LP1_BOND_WAIT_PUSH;
 }
 
 /* 8174 width-settle poll: advance to 0x60 (via finalize) when the negotiated width pair has settled
  * vs the read-only CCE4:CCE5 counter; else leave state 0x40 to retry. */
 static void u4lb_lp1_width_settle(uint8_t lane) {
-  __xdata uint16_t widthA, widthB, neg; __xdata uint8_t train_tgl;
+  __xdata uint16_t widthA, neg;
   widthA = (uint16_t)(((uint16_t)lb_width_pairA[2*lane] << 8) | lb_width_pairA[0x1 + 2*lane]);
   if (widthA == 0) { u4lb_lp1_finalize(lane); return; }
-  widthB   = (uint16_t)(((uint16_t)lb_width_pairB[2*lane] << 8) | lb_width_pairB[0x1 + 2*lane]);
-  train_tgl = u4_lane_train_trigger;
-  if ((uint8_t)widthB == train_tgl && (uint8_t)(widthB >> 8) == 0) { u4lb_lp1_finalize(lane); return; }
   neg = (uint16_t)(((uint16_t)REG_LANE_WIDTH_CNT_HI << 8) | REG_LANE_WIDTH_CNT_LO);
+  if (lb_width_pairB[2*lane] == 0 && lb_width_pairB[0x1 + 2*lane] == u4_lane_train_trigger) {
+    if ((uint16_t)(widthA - neg) >= 0x00C8) { u4lb_lp1_finalize(lane); return; }
+    return;
+  }
   if ((uint16_t)((widthA - 1) - neg) >= 0x00C8) { u4lb_lp1_finalize(lane); return; }
 }
 
@@ -933,43 +908,43 @@ static void u4lb_walk_8000(void) {
     if (!u4lb_lane_gate(lane)) continue;
     state = lb_loop1_state[lane];
 
-    if (state == 0x10) {
+    if (state == LP1_WIDTH_INIT) {
       /* 804f: width-settle init (3x mask on work[0x081C+lane]) -> 0x20 (unconditional, no e461). */
       u4_work_buf[0x1C + lane] &= 0xEF;
       u4_work_buf[0x1C + lane] &= 0x7F;
       u4_work_buf[0x1C + lane] &= 0xDF;
-      lb_loop1_state[lane] = 0x20;
+      lb_loop1_state[lane] = LP1_ARM_WAIT_PUSH;
     }
-    else if (state == 0x20) {
+    else if (state == LP1_ARM_WAIT_PUSH) {
       /* 8069 LCALL 84f3: advance on the e461 push result (R7=1 push / 0 in-flight). */
-      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x30;
+      if (u4lb_e461() == 1) lb_loop1_state[lane] = LP1_LANE_PRESENT_SEL;
     }
-    else if (state == 0x30) {
+    else if (state == LP1_LANE_PRESENT_SEL) {
       /* 807a: route-special selector; on snap.7 set, arm the lane (SB[0x40]) + work[0x1C]|=0x20
        * -> 0x40, else stay 0x20. */
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
         __xdata uint8_t snap = u4_host_desc[0x4 + lane];
         if ((snap & 0x80) == 0) {
-          lb_loop1_state[lane] = 0x20;
+          lb_loop1_state[lane] = LP1_ARM_WAIT_PUSH;
         } else {
           SB_WR(0x40, (uint8_t)(lane ? 2 : 1));
           lb_width_pairA[2*lane] = 0x00;
           lb_width_pairA[0x1 + 2*lane] = 0x00;
           u4_work_buf[0x1C + lane] |= 0x20;
-          lb_loop1_state[lane] = 0x40;
+          lb_loop1_state[lane] = LP1_SETTLE_CLEAR;
         }
         u4lb_8501();
       } else if (selector == 2) {
-        lb_loop1_state[lane] = 0x20;
+        lb_loop1_state[lane] = LP1_ARM_WAIT_PUSH;
       }
     }
-    else if (state == 0x40) {
+    else if (state == LP1_SETTLE_CLEAR) {
       /* 80ca: clear width-settle counter -> 0x50. */
       lb_settle_counter[lane] = 0x00;
-      lb_loop1_state[lane] = 0x50;
+      lb_loop1_state[lane] = LP1_WIDTH_SETTLE_WALK;
     }
-    else if (state == 0x50) {
+    else if (state == LP1_WIDTH_SETTLE_WALK) {
       /* 80d7: first entry (counter==0) -> width-settle/finalize = the TX[2:3] CL-walk step;
        * re-entry (ee6e && counter) -> work[0x1C]|=0x10|=0x40, reset state cell to 0x00. */
       if (u4lb_ee6e(lane) != 0 && lb_settle_counter[lane] != 0) {
@@ -978,25 +953,25 @@ static void u4lb_walk_8000(void) {
         }
         u4_work_buf[0x1C + lane] |= 0x10;
         u4_work_buf[0x1C + lane] |= 0x40;
-        lb_loop1_state[lane] = 0x00;
+        lb_loop1_state[lane] = LP1_PARKED;
         if ((REG_PHY_ORIENT_C2C3 & 0x01) || (REG_VENDOR_CTRL_C343 & 0x01)) {
           if ((u4_work_buf[0x19] & 0x03) != 0) {
             /* 813c-816b: work_buf[0x1C] and [0x1D] are LANE-INDEPENDENT here (9997=0x1C, 9916=0x1D,
-             * no lane add), each |=0x10 |=0x40 &=0x7F. The handmade's `+lane`, the dropped |0x10/|0x40,
-             * and the bogus data `+1` (a stock index-arith artifact) were all transcription bugs. */
+             * no lane add), each |=0x10 |=0x40 &=0x7F, and both LOOP1 state cells are cleared. */
             u4_work_buf[0x1C] |= 0x10; u4_work_buf[0x1C] |= 0x40; u4_work_buf[0x1C] &= 0x7F;
             u4_work_buf[0x1D] |= 0x10; u4_work_buf[0x1D] |= 0x40; u4_work_buf[0x1D] &= 0x7F;
+            lb_loop1_state[0x0] = LP1_PARKED; lb_loop1_state[0x1] = LP1_PARKED;
           }
         }
       } else {
         u4lb_lp1_width_settle(lane);
       }
     }
-    else if (state == 0x60) {
+    else if (state == LP1_BOND_WAIT_PUSH) {
       /* 8251 LCALL 84f3: advance on the e461 push result. */
-      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0x70;
+      if (u4lb_e461() == 1) lb_loop1_state[lane] = LP1_WIDTH_LATCH_SEL;
     }
-    else if (state == 0x70) {
+    else if (state == LP1_WIDTH_LATCH_SEL) {
       /* 8262: snap&0xC0==0xC0 + low-nibble match -> arm width pairs -> 0x80, else stay 0x60. */
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
@@ -1008,48 +983,48 @@ static void u4lb_walk_8000(void) {
           u4lb_ee57();
           lb_width_pairA[2*lane] = REG_LANE_WIDTH_CNT_HI;
           lb_width_pairA[0x1 + 2*lane] = REG_LANE_WIDTH_CNT_LO;
-          lb_width_pairB[2*lane] = 0x00;
-          lb_width_pairB[0x1 + 2*lane] = u4_lane_train_trigger;
-          lb_loop1_state[lane] = 0x80;
+          lb_width_pairB[2*lane] = 0x00;                         /* 82ae/82af pairB[2*lane]=0 */
+          lb_width_pairB[0x1 + 2*lane] = u4_lane_train_trigger;  /* 82b1/82b2 96d6 writes pairB[1] */
+          lb_loop1_state[lane] = LP1_FINALIZE_A;
         } else {
-          lb_loop1_state[lane] = 0x60;
+          lb_loop1_state[lane] = LP1_BOND_WAIT_PUSH;
         }
         u4lb_8501();
       } else if (selector == 2) {
-        lb_loop1_state[lane] = 0x60;
+        lb_loop1_state[lane] = LP1_BOND_WAIT_PUSH;
       }
     }
-    else if (state == 0x80) {
+    else if (state == LP1_FINALIZE_A) {
       /* 82d5: ee6e -> work[0x1C] |=0x10 |=0x40 &=0x7F (all gated) -> 0x90. */
       if (u4lb_ee6e(lane)) {
         u4_work_buf[0x1C + lane] |= 0x10;
         u4_work_buf[0x1C + lane] |= 0x40;
         u4_work_buf[0x1C + lane] &= 0x7F;
       }
-      lb_loop1_state[lane] = 0x90;
+      lb_loop1_state[lane] = LP1_FINALIZE_B;
     }
-    else if (state == 0x90) {
+    else if (state == LP1_FINALIZE_B) {
       /* 82fa: ee6e -> work[0x1C] |=0x10 |=0x40; then work[0x1C] &=0x7F (unconditional) -> 0xA0. */
       if (u4lb_ee6e(lane)) {
         u4_work_buf[0x1C + lane] |= 0x10;
         u4_work_buf[0x1C + lane] |= 0x40;
       }
       u4_work_buf[0x1C + lane] &= 0x7F;
-      lb_loop1_state[lane] = 0xA0;
+      lb_loop1_state[lane] = LP1_BOND_WAIT_ACK;
     }
-    else if (state == 0xA0) {
+    else if (state == LP1_BOND_WAIT_ACK) {
       /* 831a LCALL 84fa: advance to 0xA1 (lane bonded) on the e461 push result. */
-      if (u4lb_e461() == 1) lb_loop1_state[lane] = 0xA1;
+      if (u4lb_e461() == 1) lb_loop1_state[lane] = LP1_BONDED_MONITOR;
     }
-    else if (state == 0xA1) {
+    else if (state == LP1_BONDED_MONITOR) {
       /* 8327: bonded monitor; host re-train request (snap&0xC0==0x80) re-enters 0x50, else 0xA0. */
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
-        if ((u4_host_desc[0x4 + lane] & 0xC0) == 0x80) lb_loop1_state[lane] = 0x50;
-        else                                    lb_loop1_state[lane] = 0xA0;
+        if ((u4_host_desc[0x4 + lane] & 0xC0) == 0x80) lb_loop1_state[lane] = LP1_WIDTH_SETTLE_WALK;
+        else                                    lb_loop1_state[lane] = LP1_BOND_WAIT_ACK;
         u4lb_8501();
       } else if (selector == 2) {
-        lb_loop1_state[lane] = 0xA0;
+        lb_loop1_state[lane] = LP1_BOND_WAIT_ACK;
       }
     }
     /* default (state 0x00 / unmatched): stock 8355 tail is a no-op (lane parked). */
@@ -1058,22 +1033,24 @@ static void u4lb_walk_8000(void) {
   for (lane = 0; lane < 2; lane++) {
     if (!u4lb_lane_gate(lane)) continue;
     state = lb_loop2_state[lane];
-    if (state == 0x10) {
+    if (state == LP2_CL_INIT) {
       u4_work_buf[0x1E + lane] |= 0x80;
       u4_work_buf[0x1E + lane] &= 0xBF;
-      lb_loop2_state[lane] = 0x20;
-    } else if (state == 0x20) {
+      lb_loop2_state[lane] = LP2_CL_PUSH_WAIT;
+    } else if (state == LP2_CL_PUSH_WAIT) {
       /* 83bd LCALL 84fa: advance on the e461 push result (waits here while 0x0719 in-flight, which
        * is the intended one-push-at-a-time serialization -- the cycle is unblocked by the host ack
        * clearing 0x0719 via eda0, not by forcing the advance). */
-      if (u4lb_e461() == 1) lb_loop2_state[lane] = 0x30;
-    } else if (state == 0x30) {
+      if (u4lb_e461() == 1) lb_loop2_state[lane] = LP2_CL_EVAL;
+    } else if (state == LP2_CL_EVAL) {
       __xdata uint8_t selector = u4lb_eda0();
-      if (selector == 0) {
-        __xdata uint8_t snap = u4_host_desc[0x2 + lane];
-        if ((snap >> 4) & 1) lb_loop2_state[lane] = 0x00;
-        else if (((snap >> 7) & 1) == 0) lb_loop2_state[lane] = 0x20;
-        else {
+	    if (selector == 0) {
+	      __xdata uint8_t snap = u4_host_desc[0x2 + lane];
+	      if ((snap >> 4) & 1) {
+	        lb_loop2_state[lane] = LP2_CL_IDLE;
+	      }
+	      else if (((snap >> 7) & 1) == 0) lb_loop2_state[lane] = LP2_CL_PUSH_WAIT;
+	      else {
           __xdata uint8_t cl_idx = (uint8_t)(snap & 0x0F), cap, cl_cfg_hi = 0, cl_cfg_lo = 0;
           lb_cl_value[lane] = cl_idx;
           u4_work_buf[0x1E + lane] &= 0xF0;
@@ -1082,23 +1059,23 @@ static void u4lb_walk_8000(void) {
           cap = phy_lane_cap[lane];
           if ((cap >> 1) & 1) cl_cfg_lo = lb_cap_field[cl_idx];
           if (cap & 1) { __xdata uint16_t m = (uint16_t)(sb_lane_flip[cl_idx] * 0x20); cl_cfg_lo |= (uint8_t)m; cl_cfg_hi |= (uint8_t)(m >> 8); }
-          uart_puts(lane ? "\r\nL1:CL0 " : "\r\nL0:CL0 ");
-          uart_puthex(cl_cfg_hi); uart_puthex(cl_cfg_lo);
           SB_WR(0x6A + 2 * lane, cl_cfg_hi);
           SB_WR(0x6B + 2 * lane, cl_cfg_lo);
           u4lb_ea7c(cl_idx, lane);
-          lb_loop2_state[lane] = 0x50;
+          lb_loop2_state[lane] = LP2_CL_BOND_WAIT;
         }
-      } else if (selector == 2) lb_loop2_state[lane] = 0x20;
-    } else if (state == 0x50) {
+        u4lb_8501();   /* 83e2/83ef/8493 -> 84d6 LCALL 8501: PHY commit after each 0x30 selector==0 step */
+      } else if (selector == 2) lb_loop2_state[lane] = LP2_CL_PUSH_WAIT;
+    } else if (state == LP2_CL_BOND_WAIT) {
       /* 84a3 LCALL e461; MOV A,R7; XRL #1; JNZ stay: advance on the e461 push result. */
-      if (u4lb_e461() == 1) lb_loop2_state[lane] = 0x60;
-    } else if (state == 0x60) {
+      if (u4lb_e461() == 1) lb_loop2_state[lane] = LP2_CL_BOND_MON;
+    } else if (state == LP2_CL_BOND_MON) {
       __xdata uint8_t selector = u4lb_eda0();
       if (selector == 0) {
-        if ((u4_host_desc[0x2 + lane] >> 7) & 1) lb_loop2_state[lane] = 0x50;
-        else { u4_work_buf[0x1E + lane] &= 0xBF; lb_loop2_state[lane] = 0x20; }
-      } else if (selector == 2) lb_loop2_state[lane] = 0x50;
+        if ((u4_host_desc[0x2 + lane] >> 7) & 1) lb_loop2_state[lane] = LP2_CL_BOND_WAIT;
+        else { u4_work_buf[0x1E + lane] &= 0xBF; lb_loop2_state[lane] = LP2_CL_PUSH_WAIT; }
+        u4lb_8501();   /* 84c4/84d0 -> 84d6 LCALL 8501: PHY commit after each 0x60 selector==0 step */
+      } else if (selector == 2) lb_loop2_state[lane] = LP2_CL_BOND_WAIT;
     }
   }
 }
@@ -1243,20 +1220,20 @@ static void u4lb_state5(void) {
 /* e672 — the lane-bond FSM dispatcher, called from cb10's tail (gated 0x06ED!=0).
  *   3 -> cm_conn_routing_setup; 4 -> b0b4; 5 -> finalise when all sub-lane states clear, else the walker. */
 static void u4lb_e672(void) {
-  uint8_t state = u4_fsm_state;
-  if (state == 0x04) {
+  u4_fsm_state_t state = u4_fsm_state;
+  if (state == U4FSM_LANE_TRAIN) {
     u4lb_state4_b0b4();
     return;
   }
-  if (state == 0x05) {
+  if (state == U4FSM_LANE_BOND) {
     if (lb_loop2_state[0x0] == 0 && lb_loop1_state[0x0] == 0 && lb_loop2_state[0x1] == 0 && lb_loop1_state[0x1] == 0) {
-      u4lb_eb62(0, 0);
+      u4lb_eb62(0, U4FSM_IDLE);
       return;
     }
     u4lb_state5();
     return;
   }
-  if (state == 0x03) {
+  if (state == U4FSM_CONN_ROUT) {
     u4lb_cm_conn_routing_setup();
     return;
   }

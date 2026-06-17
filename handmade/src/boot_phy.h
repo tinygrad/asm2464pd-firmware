@@ -23,7 +23,7 @@ static void phy_cc10_cmd(uint8_t subcmd, uint8_t cc12, uint8_t cc13) {
 /* Issue a PHY command then poll for completion and ack it. */
 static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13) {
   phy_cc10_cmd(subcmd, cc12, cc13);
-  { uint16_t spin = 0; while (!((REG_TIMER0_CSR >> 1) & 1) && ++spin < 0xFFFF); }
+  while (!((REG_TIMER0_CSR >> 1) & 1)) { }
   REG_TIMER0_CSR = 0x02;
 }
 

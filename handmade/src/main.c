@@ -587,6 +587,7 @@ void main(void) {
   u4lb_s5_print_budget = 60;
   isr_dbg_budget = 20; isr_dbg_budget2 = 20; isr_dbg_budget3 = 20;
   u4lb_s5_seen = 0; u4lb_s5_last759 = 0; u4lb_s5_last75b = 0;
+  u4lb_s5_lasta0 = 0; u4lb_s5_last775 = 0; u4lb_s5_lastaf38 = 0; u4lb_s5_lasttx = 0;
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
@@ -606,33 +607,24 @@ void main(void) {
       if (isr_dbg_budget && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget--; uart_putc('c'); }
       sb_cb10_lane_advance();
       if (isr_dbg_budget2 && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget2--; uart_putc('n'); }
-      // Set 0x0765 from the host connect descriptor (kept off the ISR stack path).
-      sb_connect_present_poll();
       if (isr_dbg_budget3 && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget3--; uart_putc('k'); }
-      if (XDATA_REG8V(0x06ED) == 0) {             // first-arm the FSM
-        uart_puts("[LB arm]");
-        u4lb_eb62(0, 3);
-        u4lb_98ec();   // snapshot CCE4:CCE5 lane-width into 0x768:0x769
-      }
-      /* stock cb10 e672 throttle (bank1_cb10, byte-true via stock_ghidra_export.c:47703-47726):
-       * counter = the FROZEN negotiated-width latch 0x074E:0x074F (lb_laneA/B_cl0_latch, set at
-       * state-5 entry usb4_lanebond.h:732-733; NOT the live CCE4:CCE5); delta = snapshot(0x076A:0x076B)
-       * - counter (16-bit); fire e672 when delta_hi >= (delta_lo<3?1:0) (~delta>=3); re-snapshot
-       * stores the COMPUTED DELTA back (snap -= counter, a countdown). 0x076A:0x076B is NOT seeded
-       * (stock leaves it to the throttle), so the handmade CCE seed is removed. ee57()->ec51() re-arms
-       * the LANE_TRAIN HW each pass so the device keeps emitting fresh training symbols. */
+      /* Stock cb10 dispatches e672 only while 0x06ED is nonzero. When state 5 finishes it sets
+       * 0x06ED=0 and leaves the host to raise the lane-bond/CL0 events; re-arming state 3 here
+       * restarts the CL walk before SB[A0]/SB[A1] can become 0x02. */
+      /* Stock cb10 throttle (raw cb8d-cbb3): ee57 returns live CCE4:CCE5 in R6:R7. The walker
+       * advances when saved 0x076A:0x076B minus the live counter is >= 3; after e672, stock
+       * samples ee57 again and stores the fresh live value. */
       if (XDATA_REG8V(0x06ED) != 0) {
-        uint8_t cnt_hi = lb_laneA_cl0_latch, cnt_lo = lb_laneB_cl0_latch;   /* 0x074E:0x074F */
+        uint16_t cur = u4lb_ee57();
+        uint8_t cur_hi = (uint8_t)(cur >> 8), cur_lo = (uint8_t)cur;
         uint8_t snap_hi = lb_walk_throttle_snap_hi, snap_lo = lb_walk_throttle_snap_lo;  /* 0x076A:0x076B */
-        uint8_t d_lo, d_hi;
-        u4lb_ee57();
-        d_lo = (uint8_t)(snap_lo - cnt_lo);
-        d_hi = (uint8_t)(snap_hi - cnt_hi - (uint8_t)((snap_lo < cnt_lo) ? 1 : 0));
+        uint8_t d_lo = (uint8_t)(snap_lo - cur_lo);
+        uint8_t d_hi = (uint8_t)(snap_hi - cur_hi - (uint8_t)((snap_lo < cur_lo) ? 1 : 0));
         if (d_hi >= (uint8_t)((d_lo < 3) ? 1 : 0)) {
           u4lb_e672();
-          u4lb_ee57();
-          lb_walk_throttle_snap_hi = d_hi;   /* re-snapshot = the computed delta */
-          lb_walk_throttle_snap_lo = d_lo;
+          cur = u4lb_ee57();
+          lb_walk_throttle_snap_hi = (uint8_t)(cur >> 8);
+          lb_walk_throttle_snap_lo = (uint8_t)cur;
         }
       }
       // cb10 tail: send the deferred router-op CONFIG-READ RESPONSE (stock cdf5) the host blocks on.
@@ -649,8 +641,8 @@ void main(void) {
     if (sb_pend_int_pending || (SB_RD(0x26) & 0x02)) {
       sb_pend_int_pending = 0;
       IE &= (uint8_t)~IE_EA;
-      if (SB_RD(0x26) & 0x02) SB_WR(0x26, 0x02);   // W1C SB[0x26].1
       sb_a5d8_pend_int();
+      if (SB_RD(0x26) & 0x02) SB_WR(0x26, 0x02);   // W1C SB[0x26].1 after response, like a066
       IE |= IE_EA;
     }
 

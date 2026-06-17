@@ -1871,8 +1871,8 @@
 #define REG_XFER_DMA_DATA_HI    XDATA_REG8(0xCC9B)  /* Transfer DMA data high */
 // Secondary transfer DMA controller
 #define REG_XFER2_DMA_CTRL      XDATA_REG8V(0xCCD8)  /* Transfer 2 DMA control */
-#define REG_XFER2_DMA_STATUS    XDATA_REG8V(0xCCD9)  /* Transfer 2 DMA status */
-#define   XFER2_DMA_STATUS_ACK   0x02  // Bit 1: Acknowledge status
+#define REG_XFER2_DMA_STATUS    XDATA_REG8V(0xCCD9)  /* Transfer 2 DMA status/doorbell */
+#define   XFER2_DMA_STATUS_ACK   0x02  // Bit 1: stock 97ef writes 0x04 then 0x02; ISR acks bit 1
 #define REG_TIMER5_CSR          XDATA_REG8(0xCCB9)  /* Timer 5 control/status (alternate) */
 #define REG_XFER2_DMA_ADDR_LO   XDATA_REG8V(0xCCDA)  /* Transfer 2 DMA address low */
 #define REG_XFER2_DMA_ADDR_HI   XDATA_REG8V(0xCCDB)  /* Transfer 2 DMA address high */

@@ -260,7 +260,7 @@ static void usb4_routerop_init(void) {
   REG_ROUTEROP_CFG_EC05 &= 0xFE;
   REG_INT_DMA_CTRL &= 0xBF;
   REG_INT_DMA_CTRL = (REG_INT_DMA_CTRL & 0x7F) | 0x80;
-  u4_routerop_mbox_state = 0;
+  u4_routerop_mbox_state = RMBOX_IDLE;
 }
 
 #endif /* USB4_IRQ_H */
