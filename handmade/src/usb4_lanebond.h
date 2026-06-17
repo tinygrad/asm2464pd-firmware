@@ -1153,16 +1153,17 @@ static void u4lb_walk_8000(void) {
             (snap & 0x0F) == (uint8_t)(u4_work_buf[0x1C + lane] & 0x0F)) {
           if (phy_lane_gate) u4lb_e9e7();
           SB_WR(0x40, (uint8_t)(lane ? 2 : 1));
-          u4lb_ee57();
-          lb_width_pairA[2*lane] = REG_LANE_WIDTH_CNT_HI;
-          lb_width_pairA[0x1 + 2*lane] = REG_LANE_WIDTH_CNT_LO;
-          lb_width_pairB[2*lane] = 0x00;     /* 82ae/82af pairB[2*lane]=0 */
-          /* 82b1-82b7 disasm: MOV A,R7(trigger); LCALL 96d6 (sets pairB[1] DPTR); MOV A,#0x80; MOVX.
-           * The actual stored value is the #0x80 OVERWRITE — NOT the trigger. Writing the toggling
-           * u4_lane_train_trigger made the width-settle gate (pairB[1]==trigger) flip per connect parity
-           * -> 077B bit6 finalize fired only randomly (3/48). Constant 0x80 -> gate always false ->
-           * deterministic (widthA-1)-neg settle path. */
-          lb_width_pairB[0x1 + 2*lane] = 0x80;
+          /* 829b-82a5: pairA = the CCE4:CCE5 value RETURNED by ee57 (captured at ee57's internal read,
+           * ee68-ee6b), NOT a fresh re-read — the live HW counter ticks between, skewing the settle. */
+          { __xdata uint16_t w = u4lb_ee57();
+            lb_width_pairA[2*lane] = (uint8_t)(w >> 8);
+            lb_width_pairA[0x1 + 2*lane] = (uint8_t)w; }
+          lb_width_pairB[2*lane] = 0x00;                         /* 82ae/82af pairB[2*lane]=0 */
+          lb_width_pairB[0x1 + 2*lane] = u4_lane_train_trigger;  /* 82b1-82b2: 96d6 (MOVX @DPTR,A) writes
+            * the trigger to pairB[1]; 96d7 then reloads DPTR=0x0759+lane (state cell), and 82b5-82b7
+            * (#0x80) writes the STATE TRANSITION to LP1_FINALIZE_A (next line), NOT pairB. So pairB[1] =
+            * trigger is byte-true. (A prior session + my own first read both misattributed the #0x80 to
+            * pairB; disasm of 96d6/96d7 corrected it.) */
           lb_loop1_state[lane] = LP1_FINALIZE_A;
         } else {
           lb_loop1_state[lane] = LP1_BOND_WAIT_PUSH;
