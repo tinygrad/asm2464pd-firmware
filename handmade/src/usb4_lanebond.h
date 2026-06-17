@@ -1156,8 +1156,13 @@ static void u4lb_walk_8000(void) {
           u4lb_ee57();
           lb_width_pairA[2*lane] = REG_LANE_WIDTH_CNT_HI;
           lb_width_pairA[0x1 + 2*lane] = REG_LANE_WIDTH_CNT_LO;
-          lb_width_pairB[2*lane] = 0x00;                         /* 82ae/82af pairB[2*lane]=0 */
-          lb_width_pairB[0x1 + 2*lane] = u4_lane_train_trigger;  /* 82b1/82b2 96d6 writes pairB[1] */
+          lb_width_pairB[2*lane] = 0x00;     /* 82ae/82af pairB[2*lane]=0 */
+          /* 82b1-82b7 disasm: MOV A,R7(trigger); LCALL 96d6 (sets pairB[1] DPTR); MOV A,#0x80; MOVX.
+           * The actual stored value is the #0x80 OVERWRITE — NOT the trigger. Writing the toggling
+           * u4_lane_train_trigger made the width-settle gate (pairB[1]==trigger) flip per connect parity
+           * -> 077B bit6 finalize fired only randomly (3/48). Constant 0x80 -> gate always false ->
+           * deterministic (widthA-1)-neg settle path. */
+          lb_width_pairB[0x1 + 2*lane] = 0x80;
           lb_loop1_state[lane] = LP1_FINALIZE_A;
         } else {
           lb_loop1_state[lane] = LP1_BOND_WAIT_PUSH;
