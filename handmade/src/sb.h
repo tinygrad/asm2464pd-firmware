@@ -196,7 +196,10 @@ static void sb_block_init(void) {
   SB_CLR(0x2D, 0x01); SB_WR(0x2D, (SB_RD(0x2D) & 0xFD) | 0x02);
   SB_CLR(0x29, 0x08);
   SB_CLR(0x2B, 0x08);
-  SB_CLR(0xC8, 0x90);
+  SB_CLR(0xC8, 0xF0);   /* stock bb80: 96b2 clears SB[0xC8] bits 4,5,6 + anl 0x7f clears bit7 = clear 0xF0.
+                         * Was 0x90 (bits 4,7 only) — left bits 5,6 set, mis-arming 2 of 4 SB-transport
+                         * channels so SB[0x2C].4/.5 never latched (0xC1 vs stock 0xF1) -> host never
+                         * advanced SB[0x18] 05->63 (route-commit) -> no 2-lane bond. */
   SB_CLR(0x27, 0x02);
   SB_CLR(0x67, 0x81);
   SB_WR(0x81, 0x08);
