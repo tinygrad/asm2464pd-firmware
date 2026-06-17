@@ -984,17 +984,24 @@ static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(u4_work_buf[0x19]
  * UART TX FIFO on a fast-iterating walker. */
 static volatile uint8_t __xdata u4lb_s5_last759, u4lb_s5_last75b, u4lb_s5_seen, u4lb_s5_lasta0;
 static volatile uint8_t __xdata u4lb_s5_last775, u4lb_s5_lastaf38, u4lb_s5_lasttx;
+static volatile uint8_t __xdata u4lb_s5_last75a, u4lb_s5_last75c;   /* lane1 LOOP1/LOOP2 trackers */
 static void u4lb_s5_diag(void) {
-  __xdata uint8_t state0, state1, sba0, host_desc, af, tx;
+  __xdata uint8_t state0, state1, state0b, state1b, sba0, host_desc, af, tx;
   state0 = lb_loop1_state[0x0]; state1 = lb_loop2_state[0x0]; sba0 = SB_RD(0xA0); host_desc = u4_route_query_response;
+  state0b = lb_loop1_state[0x1]; state1b = lb_loop2_state[0x1];   /* lane1 walker states (the failing lane) */
   af = af38_t50; tx = SBTX_RD(4);
   if (u4lb_s5_seen && state0 == u4lb_s5_last759 && state1 == u4lb_s5_last75b && sba0 == u4lb_s5_lasta0
+      && state0b == u4lb_s5_last75a && state1b == u4lb_s5_last75c
       && host_desc == u4lb_s5_last775 && af == u4lb_s5_lastaf38 && tx == u4lb_s5_lasttx) return;
   u4lb_s5_lastaf38 = af; u4lb_s5_lasttx = tx;
   if (!u4lb_s5_print_budget) return;
   u4lb_s5_print_budget--;
   u4lb_s5_seen = 1; u4lb_s5_last759 = state0; u4lb_s5_last75b = state1; u4lb_s5_lasta0 = sba0; u4lb_s5_last775 = host_desc;
+  u4lb_s5_last75a = state0b; u4lb_s5_last75c = state1b;
   uart_puts("\r\n[s5 9="); uart_puthex(state0); uart_putc('/'); uart_puthex(state1);
+  uart_puts(" L1="); uart_puthex(state0b); uart_putc('/'); uart_puthex(state1b);
+  uart_puts(" clv="); uart_puthex(lb_cl_value[0x0]); uart_puthex(lb_cl_value[0x1]);
+  uart_puts(" w19="); uart_puthex(u4_work_buf[0x19]);
   uart_puts(" A="); uart_puthex(sba0); uart_puthex(SB_RD(0xA1));
   uart_puts(" 775="); uart_puthex(host_desc);
   uart_puts(" 719="); uart_puthex(e461_inflight_token);
