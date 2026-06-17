@@ -647,6 +647,7 @@ void main(void) {
     }
 
     // Deferred bank0_8a89 drive: run once, only after the FSM has clearly stalled.
+    // (batch-5 HW test: disabling this NON-STOCK fallback was NEUTRAL — not the bond perturbation.)
     if (sb_run_8a89_pending && !sb_8a89_done &&
         fsm_stall >= 6 &&
         !((SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02)) {
