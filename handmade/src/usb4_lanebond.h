@@ -318,7 +318,10 @@ static void u4lb_cm_conn_routing_setup(void) {
         REG_PHY_LANEB_C313 = (uint8_t)((REG_PHY_LANEB_C313 & 0xFC) | 0x02);
       }
     }
-    if (lb_lane_width_latch0 == 1) {
+    /* c586 byte-true: stock RETs after c2c6() on the enter_usb!=0 path (C8FF==4), so the C2C5/C345
+     * EQ-trim runs ONLY when enter_usb==0. Handmade was doing it unconditionally -> extra per-lane EQ
+     * writes on the LIVE Enter_USB bond path that flatten the lanes. Gate on enter_usb==0. */
+    if (u4_enter_usb_accepted == 0 && lb_lane_width_latch0 == 1) {
       REG_PHY_LANEA_C2C5 = (uint8_t)((REG_PHY_LANEA_C2C5 & 0xF0) | 0x0F);
       REG_PHY_LANEB_C345 = (uint8_t)((REG_PHY_LANEB_C345 & 0xF0) | 0x0F);
     }
@@ -547,11 +550,13 @@ static void u4lb_e74e(void) {
   REG_CPU_EXT_STATUS = 0x02;
 }
 
-/* ee29: stock e305 enters with DPTR=0xCA06, then ee29 runs bank0_e8a9(0x0f), writes
- * d185() == (B402 & ~1) back through DPTR, then ed44/e74e and clears 0x0B42/0x0B43. */
+/* ee29: stock runs bank0_e8a9(0x0f), then d185 which RELOADS DPTR=0xB402, reads B402, ANDs 0xFE,
+ * RETs (DPTR still 0xB402); the following MOVX @DPTR,A (ee31) writes the result BACK TO B402
+ * (B402 &= 0xFE, clears B402.0) — it does NOT write CA06. The prior transcription wrongly wrote
+ * CA06, leaving B402.0 set AND clobbering the e305-computed CA06 mode-next (which feeds a840). */
 static void u4lb_ee29(void) {
   REG_PCIE_LANE_CTRL_C659 &= 0xFE;
-  REG_CPU_MODE_NEXT = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);
+  REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);   /* d185+ee31: B402 &= 0xFE (clear B402.0) */
   u4lb_ed44();
   u4lb_e74e();
   PR(0x0B42) = 0;
@@ -986,45 +991,21 @@ static volatile uint8_t __xdata u4lb_s5_last759, u4lb_s5_last75b, u4lb_s5_seen, 
 static volatile uint8_t __xdata u4lb_s5_last775, u4lb_s5_lastaf38, u4lb_s5_lasttx;
 static volatile uint8_t __xdata u4lb_s5_last75a, u4lb_s5_last75c;   /* lane1 LOOP1/LOOP2 trackers */
 static void u4lb_s5_diag(void) {
-  __xdata uint8_t state0, state1, state0b, state1b, sba0, host_desc, af, tx;
-  state0 = lb_loop1_state[0x0]; state1 = lb_loop2_state[0x0]; sba0 = SB_RD(0xA0); host_desc = u4_route_query_response;
-  state0b = lb_loop1_state[0x1]; state1b = lb_loop2_state[0x1];   /* lane1 walker states (the failing lane) */
-  af = af38_t50; tx = SBTX_RD(4);
-  if (u4lb_s5_seen && state0 == u4lb_s5_last759 && state1 == u4lb_s5_last75b && sba0 == u4lb_s5_lasta0
-      && state0b == u4lb_s5_last75a && state1b == u4lb_s5_last75c
-      && host_desc == u4lb_s5_last775 && af == u4lb_s5_lastaf38 && tx == u4lb_s5_lasttx) return;
-  u4lb_s5_lastaf38 = af; u4lb_s5_lasttx = tx;
-  if (!u4lb_s5_print_budget) return;
-  u4lb_s5_print_budget--;
-  u4lb_s5_seen = 1; u4lb_s5_last759 = state0; u4lb_s5_last75b = state1; u4lb_s5_lasta0 = sba0; u4lb_s5_last775 = host_desc;
-  u4lb_s5_last75a = state0b; u4lb_s5_last75c = state1b;
-  uart_puts("\r\n[s5 9="); uart_puthex(state0); uart_putc('/'); uart_puthex(state1);
-  uart_puts(" L1="); uart_puthex(state0b); uart_putc('/'); uart_puthex(state1b);
-  uart_puts(" clv="); uart_puthex(lb_cl_value[0x0]); uart_puthex(lb_cl_value[0x1]);
-  uart_puts(" w19="); uart_puthex(u4_work_buf[0x19]);
-  uart_puts(" A="); uart_puthex(sba0); uart_puthex(SB_RD(0xA1));
-  uart_puts(" 775="); uart_puthex(host_desc);
-  uart_puts(" 719="); uart_puthex(e461_inflight_token);
-  uart_puts(" E764="); uart_puthex(REG_PHY_TIMER_CTRL_E764); uart_puts(" E762="); uart_puthex(REG_PHY_RXPLL_STATUS);
-  uart_puts(" E302="); uart_puthex(REG_PHY_MODE_E302);   /* USB4 link mode (stock=0x83 at bond) */
-  uart_puts(" 6E9="); uart_puthex(phy_rxpll_train_busy);
-  uart_puts(" ED="); uart_puthex(u4_fsm_state);
-  uart_puts(" hd="); { uint8_t i; for (i = 2; i < 7; i++) uart_puthex(u4_host_desc[i]); }
-  uart_puts(" snap="); uart_puthex(u4_host_desc[0x2]); uart_puthex(u4_host_desc[0x3]);
-  uart_puts(" pll="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350);
-  uart_puts(" TX="); { uint8_t i; for (i = 0; i < 6; i++) uart_puthex(SBTX_RD(i)); }
-  uart_puts(" w81C="); { uint8_t i; for (i = 0; i < 8; i++) uart_puthex(u4_work_buf[(uint16_t)(0x1C + i)]); }
-  uart_puts(" 776="); uart_puthex(u4_coldboot_seed_gate);
-  uart_puts(" af38["); uart_puthex(af38_t50); uart_putc('/'); uart_puthex(af38_t53); uart_putc('/'); uart_puthex(af38_t51); uart_putc('/'); uart_puthex(af38_t4f); uart_putc('/'); uart_puthex(af38_t6f0); uart_putc(']');
+  /* LEAN bond window: phywide proved the bond is timing-sensitive to super-loop UART
+   * overhead (a heavy super-loop hook broke STOCK's bond at a0=07). The old [s5] line
+   * was ~150 chars and the af/tx change-signature fired it nearly every af38 -> ~60
+   * busy-wait UART stalls right when the host is waiting for the bond grant. Strip it to
+   * an ~8-char on-change [A=] so the bond window runs as lean as stock. */
+  uint8_t sba0 = SB_RD(0xA0), sba1 = SB_RD(0xA1);
+  uint8_t sig = (uint8_t)(sba0 ^ (uint8_t)(sba1 << 4));
+  if (u4lb_s5_seen && sig == u4lb_s5_lasta0) return;   /* fire ONLY on a lane-state change (rare) */
+  u4lb_s5_seen = 1; u4lb_s5_lasta0 = sig;
+  uart_puts("\r\n[A="); uart_puthex(sba0); uart_puthex(sba1);
+  uart_puts(" 777="); { uint8_t i; for (i = 0; i < 6; i++) uart_puthex(u4_host_desc[i]); }
   uart_puts(" 6A="); uart_puthex(SB_RD(0x6A)); uart_puthex(SB_RD(0x6B)); uart_puthex(SB_RD(0x6C)); uart_puthex(SB_RD(0x6D));
-  uart_puts(" 718="); uart_puthex(u4_route_enable_latch);   /* ==4 -> live 8000 walker; else buggy symmetric 850b */
-  uart_puts(" cap="); uart_puthex(phy_lane_cap[0x0]); uart_puthex(phy_lane_cap[0x1]);
-  uart_puts(" 77ab="); uart_puthex(u4_host_desc[0x4]); uart_puthex(u4_host_desc[0x5]);  /* 077B/077C = LP1 finalize snap */
-  uart_puts(" cc=");  uart_puthex(REG_PHY_ORIENT_C2C3); uart_puthex(REG_VENDOR_CTRL_C343);  /* force-park gate inputs */
-  uart_puts(" 6db="); uart_puthex(REG_PHY_VENDOR_CTRL_C6DB);                                /* CC orientation (ea7c lane->slot flip) */
-  uart_puts(" cb4b="); uart_puthex(PR(0xC2CB)); uart_puthex(PR(0xC34B));                     /* ea7c per-lane CC slot (laneA/laneB) */
-  uart_puts(" r="); uart_puthex(REG_PHY_LANEA_C294); uart_puthex(REG_PHY_LANEB_C314);        /* per-lane PHY rate (laneA/laneB) */
-  uart_putc(']');
+  uart_puts(" 6db="); uart_puthex(REG_PHY_VENDOR_CTRL_C6DB);
+  uart_puts(" cb4b="); uart_puthex(PR(0xC2CB)); uart_puthex(PR(0xC34B));
+  uart_puts(" r="); uart_puthex(REG_PHY_LANEA_C294); uart_puthex(REG_PHY_LANEB_C314); uart_putc(']');
 }
 
 /* 8501: a synchronous PHY CC10-mailbox command+wait/ack (NOT a no-op). Stock 8501 -> e50d/e8ef/e80a:

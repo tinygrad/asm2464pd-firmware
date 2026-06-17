@@ -105,7 +105,12 @@ static void boot_phy_d630_lane_power(uint8_t enable) {
   XDATA_REG8(0xB432) = (XDATA_REG8V(0xB432) & 0xF8) | 0x07;
   XDATA_REG8(0xB404) = (XDATA_REG8V(0xB404) & 0xF0) | (enable & 0x0F);
   if (enable == 0x01) {
-    REG_SYS_CTRL_E77C = (REG_SYS_CTRL_E77C & 0xEF) | ((enable & 0x01) ? 0x10 : 0x00);
+    /* d630 byte-true (cc69 returns R7==1 -> ACC.1/.2/.3 of 1 are all 0 -> every bit written is 0):
+     * stock CLEARS E76C.4, E774.4, AND E77C.4. Handmade had omitted the first two and wrongly SET
+     * E77C.4 (these are PCIe-tunnel PLL-latch bits; a mis-latched PLL never reaches a clean lock). */
+    XDATA_REG8(0xE76C) = (uint8_t)(XDATA_REG8V(0xE76C) & 0xEF);   /* E76C.4 = 0 */
+    XDATA_REG8(0xE774) = (uint8_t)(XDATA_REG8V(0xE774) & 0xEF);   /* E774.4 = 0 */
+    REG_SYS_CTRL_E77C  = (uint8_t)(REG_SYS_CTRL_E77C & 0xEF);     /* E77C.4 = 0 (was wrongly set to 1) */
   }
 }
 /* Program the PCIe-tunnel lane width. */
