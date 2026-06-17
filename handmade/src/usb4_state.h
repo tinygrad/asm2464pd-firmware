@@ -235,6 +235,13 @@ volatile __xdata __at(0x0A9E) uint8_t u4_routerop_desc1;   /* a5d8 router-op des
 volatile __xdata __at(0x0A9F) uint8_t u4_routerop_desc2;   /* a5d8 router-op descriptor byte2 / link-width latch */
 volatile __xdata __at(0x0AA0) uint8_t u4_routerop_desc3;   /* a5d8 router-op descriptor byte3, bit7=valid */
 volatile __xdata __at(0x0AA1) uint8_t pd_msg_type;   /* PD MessageType; also router-op copy-loop index */
+/* Conn-routing width-advert tail (e175/e282/c17f/ce23 P12-engine staging). */
+volatile __xdata __at(0x09DD) uint8_t u4lb_lane_active_flags;  /* e175 sets .0, e282 sets .1; ce23/e00c read */
+volatile __xdata __at(0x0B34) uint8_t u4lb_b34_lanemask;       /* ce23 lane-mask staging / e00c source[0] */
+volatile __xdata __at(0x0B35) uint8_t u4lb_b35;                /* engine sub-block staging / a37b dest */
+volatile __xdata __at(0x0B36) uint8_t u4lb_b36;                /* desc byte staging */
+volatile __xdata __at(0x0B37) uint8_t u4lb_b37;                /* desc byte staging (=0x0B12=0) */
+volatile __xdata __at(0x0B38) uint8_t u4lb_b38_setlanes;       /* c3ce set_lanes selector (=0x02) */
 volatile __xdata __at(0x0AA2) uint8_t u4_routerop_op_lo;   /* router-op slot/MessageID; port-map index */
 volatile __xdata __at(0x0AA3) uint8_t u4_routerop_op_len;   /* router-op length; PD ctrl-msg code latch */
 volatile __xdata __at(0x0AA4) uint8_t u4_routerop_opcode;   /* router-op opcode = desc2 & 7 */

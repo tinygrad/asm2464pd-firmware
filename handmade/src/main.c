@@ -505,7 +505,7 @@ void main(void) {
   // Establish USB4 intent (0x87 = tunnel route + VDM-ACK) before the gates below.
   XDATA_REG8V(0x09F9) = 0x87;
   // DROM cap bits read by sb_rom_descriptor_load; 0x09F4 deliberately left at default.
-  XDATA_REG8V(0x09F5) = 1; XDATA_REG8V(0x09F6) = 0;   /* cap20g_gate1=0 (stock blob[0x59].7=0 on this board): 081A &=0xED -> 0xE1, bit1 clear -> 0x0819=0x01 lane0-first */
+  XDATA_REG8V(0x09F5) = 1; XDATA_REG8V(0x09F6) = 1;   /* cap20g_gate1=1 (stock bank0_8d77 default): 081A keeps bit1 -> conn-routing sets 0x0819=0x03 (2-lane bond, stock latches SB[0xA0]=SB[0xA1]=0x02) */
   XDATA_REG8V(0x09F7) = 3; XDATA_REG8V(0x09F8) = 1; XDATA_REG8V(0x09FB) = 3;
   // 0x0A57/0x0A58 = device PID-low / bcdDevice-hi. Stock relies on the boot env (SPI-flash shadow)
   // pre-loading these; there is no firmware writer. Without them they stay uninit 0x55, so the SB

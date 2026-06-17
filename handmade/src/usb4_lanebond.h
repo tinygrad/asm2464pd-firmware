@@ -54,6 +54,156 @@ static __code const uint8_t u4lb_branchA_gate_515f[0x13] = {
   0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00, 0x01,0x01,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x01
 };
 
+/* ===== OMITTED conn-routing tail: router-op lane-width descriptors (e175/e282/c17f) =====
+ * Byte-true port of the stock P12 descriptor-engine chain that advertises lane1's width so the host
+ * grants a 2-lane CL0 bond (stock cm_conn_routing_setup a9ca/a9d2/a9d5). r3_write_dispatch(v,0x12xx,2)
+ * == P12_WR(xx,v) (DPX=1, 0x12xx); REUSES the existing sb.h P12 engine. HW deep-PHY engine writes
+ * (reg 0x3C-0x3F lane-enable mask + commit GO/busy-poll on 0x37/0x38) reproduced IN FULL. */
+
+/* a2c2: engine reg 0x35/0x36/0x37 preamble RMW. */
+static void u4lb_a2c2(void) {
+  P12_WR(0x35, (uint8_t)((P12_RD(0x35) & 0xC0) | 0x01));
+  P12_WR(0x35, (uint8_t)((P12_RD(0x35) & 0x3F) | 0x40));
+  P12_WR(0x36, 0xD2);
+  P12_WR(0x37, (uint8_t)(P12_RD(0x37) & 0xE0));
+}
+
+/* a310 (r3_reg_set_bit7_mask3f): reg[cur] = (reg[cur] & 0x3F) | 0x80. */
+static void u4lb_a310(uint8_t cur) {
+  P12_WR(cur, (uint8_t)((P12_RD(cur) & 0x3F) | 0x80));
+}
+
+/* e711 cleanup tail: reg 0x35=(commit&0xC0), readback, reg 0x3C/0x3D=0. */
+static void u4lb_e711_tail(uint8_t commit_hi2) {
+  P12_WR(0x35, (uint8_t)(commit_hi2 & 0xC0));
+  (void)P12_RD(0x35);
+  P12_WR(0x3C, 0x00);
+  P12_WR(0x3D, 0x00);
+}
+/* e83d: commit GO + bounded busy-poll on reg 0x38.0. */
+static void u4lb_engine_go(void) {
+  uint16_t g;
+  P12_WR(0x38, 0x01);
+  for (g = 0; (P12_RD(0x38) & 0x01) && g < 0x2000; g++) { }
+}
+/* e890: select sub-block (reg 0x37 &= 0x7F) + GO + e711 tail. */
+static void u4lb_e890(uint8_t ctrl_low6) {
+  uint8_t commit = (uint8_t)(P12_RD(0x37) & 0x7F);
+  P12_WR(0x37, commit);
+  u4lb_engine_go();
+  u4lb_e711_tail(commit);
+  (void)ctrl_low6;
+}
+/* e7f8: write val to reg 0x3F, then commit (reg 0x37 = (.&0x7F)|0x80) + GO + tail. */
+static void u4lb_e7f8(uint8_t val) {
+  uint8_t commit;
+  P12_WR(0x3F, val);
+  commit = (uint8_t)((P12_RD(0x37) & 0x7F) | 0x80);
+  P12_WR(0x37, commit);
+  u4lb_engine_go();
+  u4lb_e711_tail(commit);
+}
+/* e00c: fold 0x0B34..0x0B37 nonzero flags into a 4-bit mask, write reg 0x3F low nibble. */
+static void u4lb_e00c(void) {
+  uint8_t m = (uint8_t)((u4lb_b34_lanemask != 0) ? 1 : 0);
+  if (u4lb_b35 != 0) m |= 2;
+  if (u4lb_b36 != 0) m |= 4;
+  if (u4lb_b37 != 0) m |= 8;
+  (void)P12_RD(0x34);
+  P12_WR(0x3F, (uint8_t)((P12_RD(0x3F) & 0xF0) | m));
+}
+/* ce23 (link_apply_lane_mask_reg3f): assemble per-lane enable mask into engine reg 0x3F.
+ * set_lanes!=0 -> SET (mask|reg41); ==0 -> CLEAR (~mask & reg41); folds through reg 0x3C/0x3D/0x3E. */
+static void u4lb_ce23(uint8_t ctrl_bits, uint8_t set_lanes) {
+  uint8_t ctrl_low6 = (uint8_t)(ctrl_bits & 0x3F);
+  uint8_t reg41, acc, lane_mask, b34;
+  (void)P12_RD(0x35);
+  u4lb_e890(ctrl_low6);
+  reg41 = P12_RD(0x40);
+  b34   = u4lb_b34_lanemask;
+  if (set_lanes != 0) {
+    P12_WR(0x3C, (uint8_t)(b34 | reg41)); (void)P12_RD(0x41); acc = u4lb_b35;
+    P12_WR(0x3D, (uint8_t)(acc | reg41)); (void)P12_RD(0x41); acc = u4lb_b36;
+    P12_WR(0x3E, (uint8_t)(acc | reg41)); (void)P12_RD(0x41); lane_mask = u4lb_b37;
+    lane_mask = (uint8_t)(lane_mask | reg41);
+  } else {
+    P12_WR(0x3C, (uint8_t)((uint8_t)~b34 & reg41)); (void)P12_RD(0x41); acc = u4lb_b35;
+    P12_WR(0x3D, (uint8_t)((uint8_t)~acc & reg41)); (void)P12_RD(0x41); acc = u4lb_b36;
+    P12_WR(0x3E, (uint8_t)((uint8_t)~acc & reg41)); (void)P12_RD(0x41); lane_mask = u4lb_b37;
+    lane_mask = (uint8_t)((uint8_t)~lane_mask & reg41);
+  }
+  P12_WR(0x3F, lane_mask);
+  u4lb_e00c();
+  (void)P12_RD(0x35);
+  u4lb_e7f8((uint8_t)((lane_mask & 0xC0) | ctrl_low6));
+  u4lb_b34_lanemask = 0; u4lb_b35 = 0; u4lb_b36 = 0; u4lb_b37 = 0;
+}
+/* a37b: 0x0B35 = n; ce23(n, set_lanes). */
+static void u4lb_a37b(uint8_t n, uint8_t set_lanes) {
+  u4lb_b35 = n;
+  u4lb_ce23(n, set_lanes);
+}
+/* c3ce: 2-pass router-op width-descriptor push (engine regs 0x3C-0x3F). set_lanes(0x0B38)==2 here so
+ * every pass commits via u4c_sb_desc_commit (the ce23 arm is dead on this path). */
+static void u4lb_c3ce(void) {
+  uint8_t pass;
+  u4_routerop_desc1 = u4lb_b34_lanemask;
+  u4_routerop_desc2 = u4lb_b35;
+  u4_routerop_desc3 = u4lb_b36;
+  pd_msg_type       = u4lb_b37;
+  for (pass = 1; pass <= 2; pass++) {
+    (void)P12_RD(0x35);
+    eng_a327(0x35, (uint8_t)((P12_RD(0x35) & 0xC0) | pass));
+    u4lb_b34_lanemask = u4_routerop_desc1; P12_WR(0x3C, u4_routerop_desc1);
+    u4lb_b35          = u4_routerop_desc2; P12_WR(0x3D, u4_routerop_desc2);
+    u4lb_b36          = u4_routerop_desc3; P12_WR(0x3E, u4_routerop_desc3);
+    u4lb_b37          = pd_msg_type;       P12_WR(0x3F, pd_msg_type);
+    if ((uint8_t)(u4lb_b38_setlanes ^ 2) == 0) u4c_sb_desc_commit();
+    else                                       u4lb_ce23((uint8_t)(u4lb_b38_setlanes ^ 2), u4lb_b38_setlanes);
+  }
+}
+/* e175: router-op lane-width descriptor (set_lanes = lb_lane_width_latch1). */
+static void u4lb_e175(uint8_t set_lanes) {
+  if (set_lanes != 0) u4lb_lane_active_flags |= 0x01;
+  u4lb_a2c2();
+  u4lb_a37b(1, set_lanes);
+  u4lb_a310(0x35);
+  eng_a348(0x36, 0x8D);
+  P12_WR(0x37, (uint8_t)((P12_RD(0x37) & 0xE0) | 0x01));
+  u4lb_b35 = 0x10;
+  u4lb_ce23(0x10, set_lanes);
+}
+/* e282: router-op connect-route descriptor (set_lanes = u4_connect_route_latch). */
+static void u4lb_e282(uint8_t set_lanes) {
+  if (set_lanes != 0) u4lb_lane_active_flags |= 0x02;
+  u4lb_a2c2();
+  u4lb_a37b(2, set_lanes);
+  u4lb_a310(0x35);
+  eng_a2df(0x36, 0x97);
+  u4lb_b35 = 0x02;
+  u4lb_ce23(0x02, set_lanes);
+}
+/* c17f: push two router-op width descriptors via c3ce (desc #1 fixed, desc #2 = lane1 WIDTH). */
+static void u4lb_c17f(void) {
+  uint8_t desc0;
+  (void)P12_RD(0x34);
+  P12_WR(0x34, 0x0C);
+  eng_a2df(0x35, 0x04);
+  u4lb_b36 = 0x20; u4lb_b37 = 0x04; u4lb_b38_setlanes = 0x02;
+  u4lb_c3ce();
+  (void)P12_RD(0x34);
+  P12_WR(0x34, 0x0C);
+  eng_a2df(0x35, 0x80);
+  desc0 = 0x18;
+  if (u4_work_buf[0x1A] & 0x20) desc0 |= 0x04;
+  if (u4_cap20g_gate1)          desc0 |= 0x20;
+  u4lb_b36 = desc0;
+  u4lb_b37 = 0x00;   /* = XDATA[0x0B12], 0 on handmade */
+  u4lb_b38_setlanes = 0x02;
+  u4lb_c3ce();
+  /* stock 0x0B12-gated deep-PHY tail is DEAD (0x0B12==0); omitted byte-true. */
+}
+
 static void u4lb_cm_conn_routing_setup(void) {
   connrt_substate_t state = cm_conn_routing_substate;
   if (state == CONNRT_ARM_ROUTE_QUERY) {
@@ -164,6 +314,12 @@ static void u4lb_cm_conn_routing_setup(void) {
       REG_PHY_LANEB_C345 = (uint8_t)((REG_PHY_LANEB_C345 & 0xF0) | 0x0F);
     }
   }
+
+  /* a9ca/a9d2/a9d5: the OMITTED router-op lane-width descriptors — advertise lane1 width so the host
+   * grants the 2-lane CL0 bond (without these, per-lane status 0x077A stays 0x00 / lane1 never bonds). */
+  u4lb_e175(lb_lane_width_latch1);     /* a9ca: R7 = XDATA[0x0751] */
+  u4lb_e282(u4_connect_route_latch);   /* a9d2: R7 = XDATA[0x07B9] */
+  u4lb_c17f();                         /* a9d5 */
 
   cm_conn_routing_substate = CONNRT_PRINT_STATUS;
 }
