@@ -773,6 +773,9 @@ void main(void) {
     uart_puts(" sb18=");         uart_puthex(SB_RD(0x18));
     uart_puts(" sb28=");         uart_puthex(SB_RD(0x28));
     uart_puts(" cce4=");         uart_puthex(REG_LANE_WIDTH_CNT_HI);
+    uart_puts(" OTP7E=");        uart_puthex(XDATA_REG8V(0x707E));   /* ==0x5A -> board fused, stock applies OTP lane cfg */
+    uart_puts("/7A");           uart_puthex(XDATA_REG8V(0x707A)); uart_puthex(XDATA_REG8V(0x707B)); uart_puthex(XDATA_REG8V(0x707D));
+    uart_puts(" 86C=");          uart_puthex(XDATA_REG8V(0x086C)); uart_puthex(XDATA_REG8V(0x086D)); uart_puthex(XDATA_REG8V(0x086E)); uart_puthex(XDATA_REG8V(0x086F));
     uart_puts("]\n");
     { uint8_t k; uart_puts("[P2 775="); uart_puthex(XDATA_REG8V(0x0775));
       uart_puts(" 752="); uart_puthex(XDATA_REG8V(0x0752));

@@ -1005,7 +1005,9 @@ static void u4lb_s5_diag(void) {
   uart_puts(" 6A="); uart_puthex(SB_RD(0x6A)); uart_puthex(SB_RD(0x6B)); uart_puthex(SB_RD(0x6C)); uart_puthex(SB_RD(0x6D));
   uart_puts(" 6db="); uart_puthex(REG_PHY_VENDOR_CTRL_C6DB);
   uart_puts(" cb4b="); uart_puthex(PR(0xC2CB)); uart_puthex(PR(0xC34B));
-  uart_puts(" r="); uart_puthex(REG_PHY_LANEA_C294); uart_puthex(REG_PHY_LANEB_C314); uart_putc(']');
+  uart_puts(" r="); uart_puthex(REG_PHY_LANEA_C294); uart_puthex(REG_PHY_LANEB_C314);
+  uart_puts(" pll="); uart_puthex(REG_PHY_LANEA_LOCK_C2D0); uart_puthex(REG_PHY_LANEB_LOCK_C350);  /* bit6=PLL bit4=full-CDR-lock */
+  uart_putc(']');
 }
 
 /* 8501: a synchronous PHY CC10-mailbox command+wait/ack (NOT a no-op). Stock 8501 -> e50d/e8ef/e80a:
