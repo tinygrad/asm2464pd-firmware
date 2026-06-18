@@ -112,6 +112,47 @@ static void cm_arm_c00d(void) {
   XDATA_REG8V(0x05B4) = 0x10;                                     /* arm the link core */
 }
 
+/* ============================================================================
+ * B220 PCIe-config-TLP mailbox engine (stock c1f9 + sub-helpers). Issues a PCIe
+ * config read/write TLP over the tunnel to the downstream device (the GPU) and
+ * returns the result u32 in XDATA[0xB220..0xB223]. This is the core of the
+ * per-port adapter walk. cfg address = 0x00D000{token} in XDATA[0x05AF..0x05B2].
+ * ========================================================================== */
+static void cm_mbox_stage_clear(void) { uint8_t i; for (i = 0; i < 0x0C; i++) XDATA_REG8(0xB210 + i) = 0; }
+static void cm_mbox_kick_999d(void) {
+  XDATA_REG8(0xB296) = 1; XDATA_REG8(0xB296) = 2; XDATA_REG8(0xB296) = 4; XDATA_REG8(0xB254) = 0x0F;
+}
+static uint8_t cm_mbox_busy_99eb(void) { return (uint8_t)((XDATA_REG8(0xB296) & 0x04) ? 1 : 0); }
+static void cm_mbox_ack_9a95(void) { XDATA_REG8(0xB296) = 4; }
+static uint8_t cm_mbox_9a74(void) { XDATA_REG8(0xB296) = 2; return XDATA_REG8(0xB22C); }
+/* e762: set cfg addr = 0x00D000{token} -> XDATA[0x05AF..0x05B2] BE. */
+static void cm_cfg_addr(uint8_t token) {
+  XDATA_REG8V(0x05AF) = 0x00; XDATA_REG8V(0x05B0) = 0xD0;
+  XDATA_REG8V(0x05B1) = 0x00; XDATA_REG8V(0x05B2) = token;
+}
+/* c1f9: cfg-mailbox engine. dir from XDATA[0x05AE]; addr u32 from XDATA[0x05AF..0x05B2].
+ * Read result lands at XDATA[0xB220..0xB223]. Returns 0 ok / 0xFE busy-err / 0xFF mismatch. */
+static uint8_t cm_c1f9(void) {
+  uint8_t a;
+  cm_mbox_stage_clear();
+  XDATA_REG8(0xB210) = (uint8_t)(XDATA_REG8V(0x05AE) ? 0x40 : 0x00);
+  XDATA_REG8(0xB213) = 1;
+  XDATA_REG8(0xB217) = 0x0F; XDATA_REG8(0xB216) = 0x20;
+  XDATA_REG8(0xB218) = XDATA_REG8V(0x05AF); XDATA_REG8(0xB219) = XDATA_REG8V(0x05B0);
+  XDATA_REG8(0xB21A) = XDATA_REG8V(0x05B1); XDATA_REG8(0xB21B) = XDATA_REG8V(0x05B2);
+  cm_mbox_kick_999d();
+  { uint16_t g = 0; while (cm_mbox_busy_99eb() == 0 && ++g < 0x4000) { } }   /* bounded busy-wait */
+  cm_mbox_ack_9a95();
+  if (XDATA_REG8V(0x05AE)) return 0;                       /* write -> done */
+  { uint16_t g = 0; for (;;) { a = (uint8_t)((XDATA_REG8(0xB296) & 0x02) >> 1); if (a) break;
+      if (XDATA_REG8(0xB296) & 1) { XDATA_REG8(0xB296) = 1; return 0xFE; } if (++g >= 0x4000) return 0xFE; } }
+  if (cm_mbox_9a74() != 0) return 0xFF;
+  if (XDATA_REG8(0xB22D) != 0) return 0xFF;
+  if (XDATA_REG8(0xB22B) != 0x04) return 0xFF;
+  return 0;
+}
+static uint8_t cm_cfg_read_commit(void) { XDATA_REG8V(0x05AE) = 0; return cm_c1f9(); }
+
 /* 9037 cm_pcie_link_step_machine: phases 1-4 (restart / timed / link-core / link-up poll).
  * Returns 0 = still working; nonzero = done/error (caller -> SM state 2). The per-port
  * adapter walk (link-up success path) is STAGE 3 — here we latch link-up and report success. */
@@ -148,8 +189,18 @@ static uint8_t cm_pcie_link_step_machine(void) {
     return 0;
   }
 
-  /* LINK UP. TODO(Stage 3): per-port adapter walk (c5ff/a183/c874/c6d3/e788, port
-   * array @0x00A8) — that is what makes the host PCIeDn adapter go Disabled->L0. */
+  /* LINK UP. Validate the B220 config-TLP mailbox engine by reading the downstream
+   * PCIe config space offset 0 (vendor/device ID). If it returns the AMD GPU id
+   * (1002/7590), the tunnel carries PCIe TLPs to the GPU and the engine works — the
+   * foundation for the full per-port walk (89db/Phase-A) that flips host PCIeDn->L0. */
+  { uint8_t rc; uint16_t g;
+    REG_PCIE_PERST_CTRL = (uint8_t)(REG_PCIE_PERST_CTRL & 0xFE);   /* deassert PERST (c00d asserted it) */
+    for (g = 0; g < 0x4000; g++) { __asm nop __endasm; }           /* brief settle */
+    cm_cfg_addr(0); rc = cm_cfg_read_commit();
+    uart_puts("\r\n[CFG0 rc="); uart_puthex(rc);
+    uart_puts(" id="); uart_puthex(XDATA_REG8(0xB220)); uart_puthex(XDATA_REG8(0xB221));
+    uart_puthex(XDATA_REG8(0xB222)); uart_puthex(XDATA_REG8(0xB223));
+    uart_puts(" ltssm="); uart_puthex(REG_PCIE_LTSSM_STATE); uart_putc(']'); }
   XDATA_REG8V(0x044B) = XDATA_REG8V(0x06E5);
   return 1;
 }
