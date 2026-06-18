@@ -62,6 +62,7 @@ static volatile uint8_t __xdata __at(0x0B52) fsm_stall;
 #include "boot_phy.h"
 #include "usb4_connect.h"
 #include "usb4_lanebond.h"
+#include "cm_tunnel.h"
 
 /* Hardware status packet */
 typedef struct {
@@ -595,6 +596,17 @@ void main(void) {
   u4lb_s5_seen = 0; u4lb_s5_last759 = 0; u4lb_s5_last75b = 0;
   u4lb_s5_lasta0 = 0; u4lb_s5_last775 = 0; u4lb_s5_lastaf38 = 0; u4lb_s5_lasttx = 0;
 
+  // CM PCIe-tunnel state cells (cm_tunnel.h). crt0 does NOT zero XDATA; seed to idle.
+  XDATA_REG8V(0x0002) = 0;
+  XDATA_REG8V(0x044B) = 0; XDATA_REG8V(0x044C) = 0; XDATA_REG8V(0x044D) = 0;
+  XDATA_REG8V(0x0464) = 0; XDATA_REG8V(0x0579) = 0;
+  XDATA_REG8V(0x05A6) = 0; XDATA_REG8V(0x05A7) = 0; XDATA_REG8V(0x05AC) = 0; XDATA_REG8V(0x05AD) = 0;
+  XDATA_REG8V(0x05B4) = 0;
+  XDATA_REG8V(0x06E5) = 0; XDATA_REG8V(0x06E6) = 0; XDATA_REG8V(0x06E7) = 0;
+  XDATA_REG8V(0x06E8) = 0; XDATA_REG8V(0x06EB) = 0;
+  XDATA_REG8V(0x07EF) = 0; XDATA_REG8V(0x0A59) = 0;
+  XDATA_REG8V(0x0B39) = 0; XDATA_REG8V(0x0B3A) = 0; XDATA_REG8V(0x0B3B) = 0; XDATA_REG8V(0x0B3C) = 0;
+
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
@@ -606,6 +618,46 @@ void main(void) {
   uint8_t kicks = 0;
   uint8_t sb_diag_count = 0;
   while (1) {
+    /* ===== CM PCIe-tunnel super-loop state machine (stock main 0x0A59 SM) =====
+     * Drives the CM tunnel AFTER the lane bond so the host's PCIeDn adapter goes
+     * Disabled->L0. BOND-SAFETY GUARD: the state-0->1 arm (which fires c00d's
+     * PERST/RXPLL/B401 re-drive) is allowed ONLY when BOTH lanes are already CL0,
+     * so it can never perturb the lane bond mid-train. */
+    if (u4_entered_usb_mode != 0 && u4_entered_usb_mode != 0x10) {
+      if (XDATA_REG8V(0x0A59) == 0) {
+        /* BOOTSTRAP (diagnostic): stock arms when 0x0AE8==0 && 0x09FA==4, both set post-bond by the
+         * c105/a522 link-width handler that the host triggers via C80A.4 — which never fires to the
+         * handmade. So on bond-complete (both lanes CL0) we replicate a522's 0x09FA set (E710&0xE0|4,
+         * so a840 in the CM core matches stock's tunnel context) + 0x0AE8=0, then arm directly. */
+        if ((uint8_t)(SB_RD(0xA0) & 0x0F) == 0x02 && (uint8_t)(SB_RD(0xA1) & 0x0F) == 0x02) {
+          XDATA_REG8V(0x09FA) = (uint8_t)((REG_LINK_WIDTH_E710 & 0xE0) | 0x04);
+          XDATA_REG8V(0x0AE8) = 0;
+          XDATA_REG8V(0x0A59) = 1;
+          XDATA_REG8V(0x0B39) = 0;
+          XDATA_REG8V(0x0002) = 0xFF;
+          XDATA_REG8V(0x06E6) = 1;
+          cm_e8e4_settle();              /* = stock e8e4 -> c00d arm */
+          uart_puts("\r\n[CM arm 9fa="); uart_puthex(XDATA_REG8V(0x09FA)); uart_putc(']');
+        }
+      }
+      if (XDATA_REG8V(0x0A59) == 1) {
+        if (cm_timer4_csr_fired()) {
+          uint8_t r = cm_pcie_link_step_machine();
+          /* change-gated diag (on r + link regs, NOT the step counter which ++ every poll). */
+          { static __xdata uint8_t cm_lr, cm_lb432, cm_le765;
+            uint8_t b = REG_POWER_CTRL_B432, e = REG_SYS_CTRL_E765;
+            if (r != cm_lr || b != cm_lb432 || e != cm_le765) {
+              cm_lr = r; cm_lb432 = b; cm_le765 = e;
+              uart_puts("\r\n[CMpoll step="); uart_puthex(XDATA_REG8V(0x0B39));
+              uart_puts(" b432="); uart_puthex(b); uart_puts(" e765="); uart_puthex(e);
+              uart_puts(" r="); uart_puthex(r); uart_putc(']');
+            }
+          }
+          if (r != 0) { XDATA_REG8V(0x0A59) = 2; XDATA_REG8V(0x06E6) = 1; cm_arm_c00d(); }
+        }
+      }
+    }
+
     /* FSM-advance, run first and delay-free so it tracks the connect edge tightly. */
     if ((XDATA_REG8V(0x09F9) & 0x83) && XDATA_REG8V(0x06EC)) {
       uint8_t fsm_before = XDATA_REG8V(0x06ED);

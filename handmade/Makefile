@@ -21,7 +21,10 @@ LDFLAGS = --code-loc 0x0000 --code-size 0x10000
 # 0x0BC0-0x0BFF (64 bytes) was HW-probed at state-5 as both safe (no stall) and free (a boot
 # signature survived untouched to state-5), clear of the mailbox (0x0B02-0x1F) and the walker's
 # CM scratch (<=0x0B2D). XISEG is empty (no initialized __xdata) so only this 64B window is needed.
-LDFLAGS += --xram-loc 0x0BC0 --xram-size 0x40
+# 2026-06-18: the CM PCIe-tunnel layer (cm_tunnel.h) enlarged the main() call tree; extend the SDCC
+# XDATA window DOWN to 0x0B60 (160B). Still within the valid 0x0000-0x0BFF CM RAM and clear of the
+# mailbox (0x0B02-0x1F), walker scratch (<=0x0B2D), the CM cells (0x0B39-0x3C) and diag block (0x0B40-0x5F).
+LDFLAGS += --xram-loc 0x0B60 --xram-size 0xA0
 LDFLAGS += --iram-size 0x100
 
 # Directories
