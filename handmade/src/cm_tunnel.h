@@ -193,21 +193,23 @@ static uint8_t cm_pcie_link_step_machine(void) {
    * PCIe config space offset 0 (vendor/device ID). If it returns the AMD GPU id
    * (1002/7590), the tunnel carries PCIe TLPs to the GPU and the engine works — the
    * foundation for the full per-port walk (89db/Phase-A) that flips host PCIeDn->L0. */
-  { uint16_t g; uint8_t st;
+  { uint16_t g; uint8_t rc;
     REG_PCIE_PERST_CTRL = (uint8_t)(REG_PCIE_PERST_CTRL & 0xFE);   /* deassert PERST (c00d asserted it) */
     for (g = 0; g < 0x8000; g++) { __asm nop __endasm; }           /* settle for link */
-    /* CONFIG READ type 0 of the directly-attached GPU, register 0 (vendor/device ID), using the
-     * PROVEN USB3 TLP engine pattern (main.c vendor handler): FMT_TYPE=0x04 (cfg rd type 0),
-     * BYTE_EN=0xF, ADDR=0 (reg 0), trigger ERROR/COMPLETE/KICK + EXEC, poll STATUS&0x03. */
-    REG_PCIE_FMT_TYPE = 0x04; REG_PCIE_BYTE_EN = 0x0F;
-    REG_PCIE_ADDR_0 = 0; REG_PCIE_ADDR_1 = 0; REG_PCIE_ADDR_2 = 0; REG_PCIE_ADDR_3 = 0;
-    XDATA_REG8(0xB21C) = 0; XDATA_REG8(0xB21D) = 0; XDATA_REG8(0xB21E) = 0; XDATA_REG8(0xB21F) = 0;
-    REG_PCIE_STATUS = PCIE_STATUS_ERROR; REG_PCIE_STATUS = PCIE_STATUS_COMPLETE;
-    REG_PCIE_STATUS = PCIE_STATUS_KICK;  REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
-    g = 0; while (((st = (uint8_t)(REG_PCIE_STATUS & 0x03)) == 0) && ++g < 0x4000) { }
-    uart_puts("\r\n[CFGrd st="); uart_puthex(st);
-    uart_puts(" id="); uart_puthex(REG_PCIE_DATA_0); uart_puthex(XDATA_REG8(0xB221));
-    uart_puthex(XDATA_REG8(0xB222)); uart_puthex(XDATA_REG8(0xB223));
+    /* ROUTE PRIME (c5ff subset): bind the 0x00D000xx ECAM aperture to the GPU cfg space by pushing
+     * the route descriptor word 0x01D000D0 to the B220 DATA FIFO with FMT=0x40 (write/prime variant),
+     * then trigger. Without this the aperture reads 0 (no bus route to the GPU). */
+    XDATA_REG8V(0x0A5F) = 0x00; XDATA_REG8V(0x0A60) = 0x00;
+    XDATA_REG8V(0x0A61) = 0x00; XDATA_REG8V(0x0A62) = 0x02;        /* cfg-target scratch = 0x02000000 */
+    cm_cfg_addr(0x00);                                            /* 0x05AF..0x05B2 = 00 D0 00 00 */
+    XDATA_REG8(0xB220) = 0xD0; XDATA_REG8(0xB221) = 0x00;          /* route word 0x01D000D0 (LE) */
+    XDATA_REG8(0xB222) = 0xD0; XDATA_REG8(0xB223) = 0x01;
+    XDATA_REG8V(0x05AE) = 1; (void)cm_c1f9(); XDATA_REG8V(0x05AE) = 0;  /* FMT=0x40 push+trigger */
+    /* ECAM MemRd (FMT=0x00) of 0x00D00000 = GPU cfg dword0. id LE: vid=B221:B220, did=B223:B222. */
+    cm_cfg_addr(0x00); rc = cm_cfg_read_commit();
+    uart_puts("\r\n[CFGrd rc="); uart_puthex(rc);
+    uart_puts(" id="); uart_puthex(XDATA_REG8(0xB221)); uart_puthex(XDATA_REG8(0xB220));
+    uart_putc(' '); uart_puthex(XDATA_REG8(0xB223)); uart_puthex(XDATA_REG8(0xB222));
     uart_puts(" 22A="); uart_puthex(XDATA_REG8(0xB22A));
     uart_puts(" ltssm="); uart_puthex(REG_PCIE_LTSSM_STATE); uart_putc(']'); }
   XDATA_REG8V(0x044B) = XDATA_REG8V(0x06E5);
