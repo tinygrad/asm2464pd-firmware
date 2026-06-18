@@ -292,11 +292,17 @@ static void sb_con_consequence(void) {
   if (!sb_8a89_done) sb_run_8a89_pending = 1;
 }
 
-/* eed6: post-[Lane Bonded] consequence (0x072D=1 + the SB[0xC9]/page1 0x01C8 confirm). */
+/* eed6: post-[Lane Bonded] consequence. Byte-true: lb_lane_bonded_flag=1; sb_init_and_read_field_6f1
+ * (SB[0xC9]=0xFF W1C + sb_active_port_rr = (SB[0x24]&6)>>1 re-latch); u4lb_c593() — the POST-BOND
+ * tunnel-PHY commit, which (flag==1 branch) SETS plane-2 P1[0x1335] bit1 = the adapter advertise the
+ * host CM needs to start reading the router config space. (u4lb_c593 is defined in usb4_lanebond.h,
+ * included after this file -> forward-declared.) The prior P1_WR(0x01C8,...) was fabricated; dropped. */
+static void u4lb_c593(void);
 static void sb_lane_bonded_consequence(void) {
   lb_lane_bonded_flag = 1;
   SB_WR(0xC9, 0xFF);
-  P1_WR(0x01C8, (P1_RD(0x01C8) & 0xBF) | 0x40);
+  sb_active_port_rr = (uint8_t)((SB_RD(0x24) & 0x06) >> 1);
+  u4lb_c593();
 }
 
 /* e52d: lane-bond complete -> tunnel up -> downstream PCIe bring-up (deferred to super-loop). */
