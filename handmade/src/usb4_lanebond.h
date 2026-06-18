@@ -1019,9 +1019,16 @@ static void u4lb_s5_diag(void) {
 static void u4lb_8501(void) { phy_cc10_cmd_wait(2, 0, 0x65); }
 
 /* 81d4 finalize: width-settle -> advance state cell 0x0759+lane to 0x60; on counter overflow
- * (>=0x10) reset to 0x00. Composes the device TX[2:3] CL-walk value: the low nibble walks the
- * lane-descriptor ROM (sb_lane_desc) while the high nibble of work[0x081C+lane] is PRESERVED, then
- * bit7 is latched (81f8 969e read, 81fb ANL #0xf0, 8208 ORL, 8211 write; 8215 96a7 |0x80 write). */
+ * (>=0x10) reset to 0x00. Composes the device TX[2:3] CL-walk value into work[0x081C+lane]: the low
+ * nibble walks the lane-descriptor table (sb_lane_desc) with the high nibble PRESERVED, then bit7 is
+ * latched into the SAME cell. Both writes target work[0x1C+lane] (verified byte-true vs Ghidra):
+ *   8211  (9900, A=R6=0x1C+lane):  work[0x1C+lane] = (work[0x1C+lane]&0xF0) | sb_lane_desc[walk_idx]
+ *   8212-821a (A=lane+R7, R7=ROM[0x21ae]=0x1C; 96a7 read @0x0800+0x1C+lane; |0x80; 96d6 write back):
+ *            work[0x1C+lane] |= 0x80           <-- SAME cell as write#1 (R7 is 0x1C, not walk_idx).
+ * NOTE: this is NOT a per-cl_idx "advertise slot" write -- the 0x8B/0xCB bit6 on 0x077B is HOST-driven
+ * (eaac DMA-copies it verbatim from the RX plane; the device only TESTS (snap&0xC0)==0xC0 at 8262).
+ * The device earns bit6 upstream via the primary-lane orientation commit (cm_RXCM_handler cc86:
+ * C2C3.0/C343.0 + phy_lane_gate=0x0AB3), which handmade still omits. */
 static void u4lb_lp1_finalize(uint8_t lane) {
   __xdata uint8_t walk_idx;
   if (lb_settle_counter[lane] >= 0x10) { lb_loop1_state[lane] = LP1_PARKED; return; }
@@ -1029,6 +1036,11 @@ static void u4lb_lp1_finalize(uint8_t lane) {
   walk_idx = (uint8_t)((lb_lane_desc_idx[lane] + 1) & 0x0F);
   lb_lane_desc_idx[lane] = walk_idx;
   u4_work_buf[0x1C + lane] = (uint8_t)((u4_work_buf[0x1C + lane] & 0xF0) | sb_lane_desc[(uint16_t)(0x0 + walk_idx)]);
+  /* 8212-821a write#2: `MOV A,0x21(lane); ADD A,R7; 96a7(ADD#0)->DPTR=0x0800+A; |0x80; 96d6 MOVX@DPTR`.
+   * R7 here is 0x1C (set by 969e@81f8 MOV R7,A, A=ROM[0x21ae]=0x1C) -- NOT walk_idx (that R7 from 81f2
+   * was clobbered by 969e). So target = work[0x1C+lane], the SAME cell as write#1. Verified byte-true
+   * vs Ghidra CODE_BANK1::8212-821a + 96a7/96d6 (2026-06-18). A prior "advertise-slot" edit that wrote
+   * work[lane+walk_idx] was a misread of R7 and a REGRESSION (scribbled 0x80 into the DROM shadow). */
   u4_work_buf[0x1C + lane] |= 0x80;
   lb_loop1_state[lane] = LP1_BOND_WAIT_PUSH;
 }
