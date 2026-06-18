@@ -293,7 +293,80 @@ static void u4lb_cm_conn_routing_setup(void) {
     if ((host_width & 0x20) && (u4_work_buf[0x1A] & 0x20)) lb_lane_width_latch0 = 2;
     uart_puts("[Lt77A="); uart_puthex(host_width); uart_puts(" 81A="); uart_puthex(u4_work_buf[0x1A]);
     uart_puts(" 819="); uart_puthex(u4_work_buf[0x19]); uart_puts("]");
+
+    /* ===== a912-a9c2 deep-PHY lane-capability setup (was OMITTED) =====
+     * Byte-true port of stock cm_conn_routing_setup CODE_BANK1::a912-a9c2. On the LIVE 2-lane path
+     * (latch0==2, 077A.7 & 081A.7 set) this sets 0x0764=1 (gate_b), runs the db80 reg3f/0x09DD lane-
+     * mask program, sets SB[0x65] bit7|bit6, then RMWs the link-status reg E716 lo2->0b11. Without it
+     * both lanes stay symmetric (gate_a|gate_b==0 -> the state-4 e07d SB2[0]|=0x04 lane-select bit
+     * never sets) and the host withholds the CL0 grant. */
+
+    /* a90b-a911: clear both gates (then the sub-FSM sets EXACTLY ONE). */
     u4_phy_gate_a = 0; u4_phy_gate_b = 0;
+
+    /* a912-a95e sub-FSM: set exactly one of gate_a(0x0763)/gate_b(0x0764), or neither.
+     * host_width == u4_host_desc[0x3] (=0x077A) is still in scope. 081A == u4_work_buf[0x1A].
+     * 99f3() == ((081A >> 6) & 1). */
+    if (lb_lane_width_latch0 == 2) {
+      /* latch0==2: gate_b=1 iff (077A.7 && 081A.7); else neither. */
+      if ((host_width & 0x80) && (u4_work_buf[0x1A] & 0x80)) u4_phy_gate_b = 1;
+    } else {
+      uint8_t set_a = 0;
+      if (u4_enter_usb_accepted != 0 &&            /* 0x07BA != 0 */
+          (host_width & 0x40) &&                   /* 077A.6 */
+          (u4_work_buf[0x1A] & 0x40)) {            /* 081A.6 (== 99f3()) */
+        set_a = 1;
+      } else if (u4_connect_route_latch != 0) {    /* 0x07B9 != 0 */
+        if ((host_width & 0x40) ||                  /* 077A.6 */
+            (u4_work_buf[0x1A] & 0x40)) {           /* 081A.6 (== 99f3()) */
+          set_a = 1;
+        }
+      }
+      if (set_a) u4_phy_gate_a = 1;
+    }
+
+    /* a967: LCALL db80(R7=gate_a, R5=gate_b) via trampoline 0x05e3. db80 byte-true:
+     *   0x0A5C(width_rate_code) = gate_a;
+     *   mask = 0x09DD | (gate_b?0x10:0) | (gate_a?0x08:0); a2c1(mask) = {0x09DD=mask; a2c2();}
+     *   0x0B35 = 8; ce23(rate,rate); a2c2(); 0x0B35 = 0x10(a3e2); ce23(rate,rate).
+     * a2c1 == {u4lb_lane_active_flags = v; u4lb_a2c2();}; a3e2 == {u4lb_b35 = 0x10;}. */
+    {
+      uint8_t rate = u4_phy_gate_a;
+      uint8_t mask;
+      u4lb_width_rate_code = u4_phy_gate_a;
+      mask = (uint8_t)(u4lb_lane_active_flags
+                       | (u4_phy_gate_b ? 0x10 : 0x00)
+                       | (u4_phy_gate_a ? 0x08 : 0x00));
+      u4lb_lane_active_flags = mask; u4lb_a2c2();        /* a2c1(mask, 0x09DD) */
+      u4lb_b35 = 0x08;
+      u4lb_ce23(rate, rate);                              /* link_apply_lane_mask_reg3f */
+      u4lb_a2c2();
+      u4lb_b35 = 0x10;                                    /* a3e2 */
+      u4lb_ce23(rate, rate);                              /* link_apply_lane_mask_reg3f (2nd) */
+    }
+
+    /* a96a-a98a: SB[0x65] RMW gated on 9a06()==(gate_a|gate_b).
+     *   nonzero -> SB[0x65] = (SB[0x65] & 0xBF) | 0x40 (write+readback via 96c7), then
+     *              final = (readback & 0x7F) | 0x80, written via 0be6 (bit7=1, bit6=1).
+     *   zero    -> SB[0x65] = SB[0x65] & 0x7F (96c2 clears bit6 first), bit7 cleared. */
+    if ((u4_phy_gate_a | u4_phy_gate_b) != 0) {
+      uint8_t rb = (uint8_t)((SB_RD(0x65) & 0xBF) | 0x40);
+      SB_WR(0x65, rb); rb = SB_RD(0x65);                  /* 96c7: write-then-readback */
+      SB_WR(0x65, (uint8_t)((rb & 0x7F) | 0x80));
+    } else {
+      uint8_t rb = (uint8_t)(SB_RD(0x65) & 0xBF);         /* 96c2: clear bit6, write, readback */
+      SB_WR(0x65, rb); rb = SB_RD(0x65);
+      SB_WR(0x65, (uint8_t)(rb & 0x7F));
+    }
+
+    /* a98d-a9ab latch0==1 sb_lane_desc(0x21c4) reseed: does NOT fire on the live latch0==2 path; omitted. */
+
+    /* a9ae-a9c2: if (u4_connect_gate.0 && u4_route_mode.1) -> E716 lo2 = 0b11.
+     * Stock target CODE_BANK1::9790 == sb_rmw_set_bits01: E716 = (E716 & 0xFC) | 0x03 (verified;
+     * NOT the bank0 d02a/B220 router-op engine). */
+    if ((u4_connect_gate & 0x01) && (u4_route_mode & 0x02)) {
+      REG_LINK_STATUS_E716 = (uint8_t)((REG_LINK_STATUS_E716 & 0xFC) | 0x03);
+    }
   }
 
   /* c586: negotiated-rate descriptor (SB[0x6A-0x6D]/[0x74-0x75]) + Gen2 lane-eq retrim. */
