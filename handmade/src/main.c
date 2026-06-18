@@ -665,14 +665,14 @@ void main(void) {
     }
 
     // Deferred tunnel-up: run the PCIe bring-up here (uses sleep()/long polls).
-    if (sb_tunnel_up_pending) {
+    // Stay PENDING until BOTH lanes actually reach CL0 (the bond completes), then fire ONCE.
+    // (Was a one-shot that cleared the flag before the CL0 check, so an early arm — before the
+    //  bond — deferred AND cleared the pending, and pcie_power_on never ran after Lane Bonded.)
+    if (sb_tunnel_up_pending &&
+        (SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02) {  // both lanes CL0
       sb_tunnel_up_pending = 0;
-      if ((SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02) {  // both lanes CL0
-        uart_puts("[TunnelUp->pcie_on]\n");
-        pcie_power_on();
-      } else {
-        uart_puts("[TunnelUp deferred: lanes not CL0]\n");
-      }
+      uart_puts("[TunnelUp->pcie_on]\n");
+      pcie_power_on();
     }
 
     // While a connect is in progress keep the loop tight; only delay when idle.
