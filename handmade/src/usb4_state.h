@@ -225,6 +225,10 @@ volatile __xdata __at(0x09F6) uint8_t u4_cap20g_gate1;   /* 20G capability gate;
 volatile __xdata __at(0x09F9) uint8_t u4_mode_flag;   /* USB4 runtime mode flag: bit7=VDM-ACK enable, bits1:0=route (0x87=tunnel) */
 volatile __xdata __at(0x09FA) uint8_t u4_route_mode;   /* USB4 route-mode latch: bit0/bit1=lane route, bit2=connect-gate bit */
 volatile __xdata __at(0x09FB) uint8_t u4_lane_gate_sel;   /* ccb3 sub-descriptor lane-gate selector (bits0/1 gate the two sub-descriptors) */
+volatile __xdata __at(0x0A52) uint8_t u4_tunnel_cfg_hi;    /* cd6c/c8db: B411/B41B src (stock SPI 0x7074) */
+volatile __xdata __at(0x0A53) uint8_t u4_tunnel_cfg_lo;    /* cd6c/c8db: B410/B41A src (stock SPI 0x7075) */
+volatile __xdata __at(0x0A54) uint8_t u4_tunnel_cfg_mode;  /* cd6c/c8db: B413/B419 src (stock SPI 0x7076) */
+volatile __xdata __at(0x0A55) uint8_t u4_tunnel_credits;   /* cd6c/c8db: B412/B418 src (stock SPI 0x7077) */
 volatile __xdata __at(0x0A57) uint8_t pd_product_pid_lo;   /* PD RAM Product VDO PID/bcdDevice low byte */
 volatile __xdata __at(0x0A58) uint8_t pd_product_pid_hi;   /* PD RAM Product VDO PID/bcdDevice high byte */
 volatile __xdata __at(0x0A5C) uint8_t u4lb_width_rate_code;   /* lane-bond Chg2 rate/width code (d3b0/d436) */

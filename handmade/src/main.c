@@ -514,6 +514,12 @@ void main(void) {
   XDATA_REG8V(0x0A57) = 0x63;
   XDATA_REG8V(0x0A58) = 0x24;
 
+  // Stock boot_hw_init_main step 6k: enable the USB4 router's PCIe-down tunnel adapter (B401 MASTER
+  // EN + B410-B42B cfg + B298 TLP-routing) so the host CM can discover a PCIe-down adapter and tunnel
+  // PCIe to the GPU. Stock runs this at boot (before the mode decision); pcie_power_on (after the
+  // bond) is the runtime tunnel-up that deasserts PERST and completes the link — keep both.
+  pcie_tunnel_adapter_enable_b401();
+
   // PHY tune + PCIe power cycling only in non-USB4 mode (they clobber CM-owned regs).
   if (!(XDATA_REG8V(0x09F9) & 0x83)) {
     usb_phy_tune();

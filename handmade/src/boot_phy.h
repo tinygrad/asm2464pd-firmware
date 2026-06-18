@@ -183,4 +183,45 @@ static void bank0_92c5_seed(void) {
   REG_USB_EP_CTRL_905F &= 0xEF;
 }
 
+/* c8db: PCIe-tunnel adapter capability/path config (B410-B42B) from 0x0A52/53/54/55.
+ * cc75(addr,hi,lo): [addr]=lo,[addr+1]=hi.  cc80(addr): [addr]=06,[addr+1]=04,[addr+2]=00. */
+static void pcie_tunnel_adapter_config_b410(void) {
+  uint8_t lo = u4_tunnel_cfg_lo, hi = u4_tunnel_cfg_hi, mode = u4_tunnel_cfg_mode, cred = u4_tunnel_credits;
+  REG_TUNNEL_CFG_A_LO = lo;                              /* B410 = [0A53] */
+  XDATA_REG8(0xB411) = hi;                               /* B411 = [0A52] */
+  REG_TUNNEL_DATA_LO = lo; XDATA_REG8(0xB421) = hi;      /* cc75(B420,hi,lo) */
+  REG_TUNNEL_CREDITS = cred;                             /* B412 = [0A55] */
+  REG_TUNNEL_CFG_MODE = mode;                            /* B413 = [0A54] */
+  XDATA_REG8(0xB422) = lo;                               /* B422 = [0A53] */
+  XDATA_REG8(0xB423) = mode;                             /* B423 = [0A54] */
+  XDATA_REG8(0xB415) = 6; XDATA_REG8(0xB416) = 4; XDATA_REG8(0xB417) = 0;  /* cc80(B415) */
+  XDATA_REG8(0xB425) = 6; XDATA_REG8(0xB426) = 4; XDATA_REG8(0xB427) = 0;  /* cc80(B425) */
+  XDATA_REG8(0xB41A) = lo;                               /* B41A = [0A53] */
+  XDATA_REG8(0xB41B) = hi;                               /* B41B = [0A52] */
+  XDATA_REG8(0xB42A) = lo; XDATA_REG8(0xB42B) = hi;      /* cc75(B42A,hi,lo) */
+  REG_TUNNEL_PATH_CREDITS = cred;                        /* B418 = [0A55] */
+  XDATA_REG8(0xB419) = mode;                             /* B419 = [0A54] */
+  XDATA_REG8(0xB428) = lo;                               /* B428 = [0A53] */
+  XDATA_REG8(0xB429) = mode;                             /* B429 = [0A54] */
+}
+
+/* cd6c: PCIe-over-USB4 TUNNEL ADAPTER ENABLE (master tunnel-up). Byte-true to stock CODE:cd6c-cdc5.
+ * Stock runs this in boot_hw_init_main step 6k so the host CM can discover a PCIe-down adapter and
+ * tunnel PCIe to the GPU; it is re-run at runtime via bank0_c00d on tunnel-up. */
+static void pcie_tunnel_adapter_enable_b401(void) {
+  REG_CPU_MODE_NEXT &= 0xEF;                             /* CA06 &= ~0x10 */
+  pcie_tunnel_adapter_config_b410();
+  P1_WR(0x4084, 0x22);                                   /* port0 PHY cfg mailbox */
+  P1_WR(0x5084, 0x22);                                   /* port1 PHY cfg mailbox (val 0x22, NOT 0x50) */
+  REG_PCIE_TUNNEL_CTRL |= 0x01;                          /* B401 |= 1 (TUNNEL MASTER ENABLE) */
+  REG_TUNNEL_ADAPTER_MODE |= 0x01;                       /* B482 |= 1 */
+  REG_TUNNEL_ADAPTER_MODE = (uint8_t)((REG_TUNNEL_ADAPTER_MODE & 0x0F) | 0xF0);
+  REG_PCIE_TUNNEL_CTRL &= 0xFE;                          /* B401 &= ~1 ... */
+  REG_PCIE_PERST_CTRL = (uint8_t)((REG_PCIE_PERST_CTRL & 0xFE) | 0x01);  /* ...then B480 |= 1 (PERST) */
+  REG_TUNNEL_LINK_STATE &= 0xFE;                         /* B430 &= ~1 (link down during cfg) */
+  REG_PCIE_TUNNEL_CFG = (uint8_t)((REG_PCIE_TUNNEL_CFG & 0xEF) | 0x10);  /* B298 TLP-routing bit4 */
+  P1_WR(0x6043, 0x70);
+  P1_WR(0x6025, (uint8_t)((P1_RD(0x6025) & 0x7F) | 0x80));
+}
+
 #endif /* BOOT_PHY_H */
