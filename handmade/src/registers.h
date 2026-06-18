@@ -2601,6 +2601,7 @@
 #define REG_CMD_CFG_E407                   XDATA_REG8V(0xE407)  /* da51 PD RDO/CRC timing config; (E407&0xE0)|0x15 */
 #define REG_CMD_CFG_E408                   XDATA_REG8V(0xE408)  /* da51 PD RDO/CRC timing config; (E408&0xE0)|0x1C */
 #define REG_ROUTEROP_OPCODE_EA80           XDATA_REG8V(0xEA80)  /* USB4 CM router-op inbound opcode/path mailbox */
+#define REG_ROUTEROP_CFG_EA81              XDATA_REG8V(0xEA81)  /* USB4 CM router-op cfg read(0x50)/write(0x51) selector */
 #define REG_ROUTEROP_SPEED_LO_EA88         XDATA_REG8V(0xEA88)  /* router-op speed descriptor lo; seeded 100 */
 #define REG_ROUTEROP_SPEED_HI_EA89         XDATA_REG8V(0xEA89)  /* router-op speed descriptor hi; seeded 0x24 */
 #define REG_ROUTEROP_ENGINE_CTRL_EC00      XDATA_REG8V(0xEC00)  /* USB4 router-op engine enable; bit0 = enable */

@@ -98,6 +98,10 @@ static void usb4_int_demux(void) {
   if (int_sources & 0x10) usb4_int_seen |= 0x02;
   if (REG_NVME_EVENT_STATUS & 0x01) {
     usb4_int_seen |= 0x04;
+    { static __xdata uint8_t ec06_bdg = 40;   /* gate-independent: does the host post router-ops post-bond? */
+      if (ec06_bdg) { ec06_bdg--; uart_puts("\r\n[EC06 ea90="); uart_puthex(REG_SYS_CTRL_EA90);
+        uart_puts(" ea80="); uart_puthex(REG_ROUTEROP_OPCODE_EA80);
+        uart_puts(" ea81="); uart_puthex(REG_ROUTEROP_CFG_EA81); uart_putc(']'); } }
     REG_NVME_EVENT_ACK = 1;
     cm_routerop_mailbox();
   }
