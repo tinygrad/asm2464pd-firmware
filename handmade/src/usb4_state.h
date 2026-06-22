@@ -269,6 +269,20 @@ volatile __xdata __at(0x0AED) uint8_t u4_link_lane;   /* USB4 link lane (a840 R6
 volatile __xdata __at(0x0AF1) uint8_t u4_connect_gate;   /* USB4 connect-time gate/mode flags (.0 gate,.4 PHY-lock) */
 volatile __xdata __at(0x0B02) rmbox_state_t u4_routerop_mbox_state;   /* router-op mailbox state (0=idle,1=read,2=write) */
 volatile __xdata __at(0x0B03) uint8_t u4_routerop_mbox_opcode;   /* router-op mailbox opcode from EA80 (E2/E3) */
+/* c0a5/d945 router-op working buffer — stock 0x0B04(addr)/0x0B08-9(len)/0x0B0A(limit)/0x0B0E. These
+ * live in the handmade XDATA gap 0x0B04-0x0B12 (after 0x0B03, before 0x0B13 sb_eng_data3c_b) so they
+ * do NOT alias any live cell. dir-bit at stock 0x0004 -> relocated below (0x0004 is reset vector). */
+volatile __xdata __at(0x0B04) uint8_t u4_rop_cfg_addr[4];   /* 32-bit config-space target addr (ceef from EA82) */
+volatile __xdata __at(0x0B08) uint8_t u4_rop_len_lo;        /* write-path running length lo (cf5d) */
+volatile __xdata __at(0x0B09) uint8_t u4_rop_len_hi;        /* write-path running length hi (cf5d) */
+volatile __xdata __at(0x0B0A) uint8_t u4_rop_limit[4];      /* 32-bit running limit/cursor (cf2e seeds, cf3f advances) */
+volatile __xdata __at(0x0B0E) uint8_t u4_rop_wr_cursor[4];  /* write-path cursor (cf5d 0x0B0E) */
+/* RELOCATED config-shadow staging (stock used 0x0AAD/0x0AB1/0x0AB2 which ALIAS handmade's live
+ * sb_fsm_state/phy_lane cells — see MEMORY dcb4 collision note). Move to the safe SDCC XRAM pool. */
+static volatile __xdata uint8_t u4_rop_shadow_ptr[4];      /* stock 0x0AAD flash config-shadow pointer */
+static volatile __xdata uint8_t u4_rop_resp_hdr[2];        /* stock 0x0AB1/0x0AB2 response status hdr */
+static volatile __xdata uint8_t u4_rop_dir;                /* stock 0x0004 read(0)/write(1) direction bit */
+static volatile __xdata uint8_t u4_rop_xfer_len;           /* stock idata 0x4D transfer length */
 volatile __xdata __at(0x0B13) uint8_t sb_eng_data3c_b;   /* SB descriptor-engine ENGINE[0x3C] data (variant b) */
 volatile __xdata __at(0x0B14) uint8_t sb_eng_data3d_b;   /* SB descriptor-engine ENGINE[0x3D] data (variant b) */
 volatile __xdata __at(0x0B15) uint8_t sb_eng_data3e_b;   /* SB descriptor-engine ENGINE[0x3E] data (variant b) */

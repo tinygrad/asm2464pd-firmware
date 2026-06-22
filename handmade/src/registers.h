@@ -2422,7 +2422,23 @@
 #define REG_BANK_0200           XDATA_REG8(0x0200)  /* Bank register at 0x0200 */
 #define REG_BANK_1200           XDATA_REG8(0x1200)  /* Bank register at 0x1200 */
 #define REG_BANK_1235           XDATA_REG8(0x1235)  /* Bank register at 0x1235 */
-#define REG_BANK_1407           XDATA_REG8(0x1407)  /* Bank register at 0x1407 */
+/* --- USB4 in-band router config-space + width-event chain (page-1 / DPX=1, accessed via r3 R3=2).
+ * The host's in-band ROUTER_CS read (tb_switch_alloc) is served from the 0x1200 config-space ONLY
+ * after the HW raises the link-WIDTH event. Chain: C80A.4 IRQ -> c105 reads P1[0x1407].0; if set ->
+ * a522 (link-width service) reads P1[0x1203].7; if set -> c8c7 builds the 0x1200 config-space, whose
+ * leaf c251 writes P1[0x1201]=CURRENT_WIDTH(=2 dual).
+ * HW-VERIFIED (24th agent, held-bond force): P1[0x1201]/[0x1202] are HW-WRITE-LOCKED (firmware MOVX
+ * reads back 00, even with the host forcing the lane adapter to CURRENT_WIDTH=2 + LB). P1[0x1407].0
+ * and P1[0x1203].7 are pure HW status (W1C, no firmware writer) raised only on a real 1->2 lane-width
+ * TRANSITION the device PHY registers. Handmade bonds to width=2 without the HW registering the
+ * transition -> these stay 00 -> c8c7 never runs / its leaf is a no-op -> config-space empty -> read
+ * times out (-110). P1[0x121E].0 (config-space/control-adapter enable, d894 tail) IS firmware-writable
+ * (sticks) but does NOT wake the transport-RX. The transport is HW-gated, not config-space-gated. */
+#define REG_P1_LANE_ADP_CS_1201 XDATA_REG8(0x1201)  /* CONFIG-SPACE CURRENT_WIDTH leaf (c251). HW-WRITE-LOCKED. */
+#define REG_P1_CFG_1202         XDATA_REG8(0x1202)  /* config-space byte (c8c7). HW-WRITE-LOCKED. */
+#define REG_P1_WIDTH_EVT_1203   XDATA_REG8(0x1203)  /* width-event flag .7 (W1C, HW-set on 1->2 transition); a522 gate to c8c7 */
+#define REG_P1_CFG_ENABLE_121E  XDATA_REG8(0x121E)  /* config-space/control-adapter enable .0 (d894 tail). FW-writable, sticks. */
+#define REG_BANK_1407           XDATA_REG8(0x1407)  /* WIDTH-EVENT SOURCE .0 (pure HW status); c105 a522 gate */
 #define REG_BANK_1504           XDATA_REG8(0x1504)  /* Bank register at 0x1504 */
 #define REG_BANK_1507           XDATA_REG8(0x1507)  /* Bank register at 0x1507 */
 #define REG_BANK_1603           XDATA_REG8(0x1603)  /* Bank register at 0x1603 */
@@ -2521,6 +2537,7 @@
 #define REG_PHY_CDR_SEED_C217              XDATA_REG8V(0xC217)  /* PHY RXPLL/CDR descriptor seed (c307 trim) */
 #define REG_PHY_LINK_CTRL_C21C             XDATA_REG8V(0xC21C)  /* PHY link control bit6 (e373 b796 set) */
 #define REG_PHY_LINK_CTRL_C21D             XDATA_REG8V(0xC21D)  /* PHY link control bits7:6 (8f8e set) */
+#define REG_PHY_LINK_CTRL_C21F             XDATA_REG8V(0xC21F)  /* PHY link control; 8e31 c390 then = (C2A8&0x3F)|0x40 (lane-A rate-START commit) */
 #define REG_PHY_LANEA_C282                 XDATA_REG8V(0xC282)  /* PHY lane-A equalizer trim (DAC8 init) */
 #define REG_PHY_LANEA_C283                 XDATA_REG8V(0xC283)  /* PHY lane-A trim (gen6 bits2:3 clear) */
 #define REG_PHY_LANEA_C289                 XDATA_REG8V(0xC289)  /* PHY lane-A equalizer trim (DAC8 init) */

@@ -56,6 +56,7 @@ static volatile uint8_t __xdata __at(0x0B52) fsm_stall;
 #include "pd_dispatch.h"
 #include "vdm.h"
 #include "sb.h"
+#include "ring_log.h"
 #include "usb4.h"
 #include "sb_router.h"
 #include "usb4_irq.h"
@@ -381,6 +382,11 @@ void handle_usb_bulk_data(void) {
 /* Diagnostic print budgets seeded in main(). */
 static volatile uint8_t __xdata isr_dbg_budget, isr_dbg_budget2, isr_dbg_budget3;
 
+/* Steady-state connect-service re-run toggle (2026-06-22). Stock re-runs c7a5->d7cd->c35b every
+ * superloop iteration; handmade lacked it (emulate/diff_trace.py --steady differential). Default 1
+ * (enabled, byte-true to stock). Set 0 in main() for a HW A/B if the bond regresses. */
+static volatile uint8_t __xdata reservice_enable;
+
 void int0_isr(void) __interrupt(0) {
   uint8_t int0_type = REG_INT_USB_STATUS;
   if (int0_type & INT_USB_GATE) {
@@ -505,8 +511,12 @@ void main(void) {
 
   // Establish USB4 intent (0x87 = tunnel route + VDM-ACK) before the gates below.
   XDATA_REG8V(0x09F9) = 0x87;
-  // DROM cap bits read by sb_rom_descriptor_load; 0x09F4 deliberately left at default.
-  XDATA_REG8V(0x09F5) = 1; XDATA_REG8V(0x09F6) = 1;   /* cap20g_gate1=1 (stock bank0_8d77 default): 081A keeps bit1 -> conn-routing sets 0x0819=0x03 (2-lane bond, stock latches SB[0xA0]=SB[0xA1]=0x02) */
+  // bank0_8d77 (stock cap-apply) UNCONDITIONALLY seeds 0x09F4=3 at its head (CODE:8d77, BEFORE any
+  // SPI-blob check). Handmade previously dropped this -> 0x09F4 read uninit 0x55 -> usb4_connect_u4's
+  // DP-alt sub-case (0x09F4==3) never ran -> 0x09FA latched 0x07 instead of stock's 0x01 (HW-confirmed
+  // stock@commit: 0x09F4=03 0x07BE=01 0x09FA=01). 0x09F4=3 = DP-alt mode default (stock 8d77 head).
+  XDATA_REG8V(0x09F4) = 3;
+  XDATA_REG8V(0x09F5) = 1; XDATA_REG8V(0x09F6) = 1;   /* cap20g_gate1=1 (stock default): 2-lane. [SINGLE-LANE experiment 2026-06-20: gate1=0 gives a STABLE 1-lane link (La0 CL0) but STILL no router enum — c8c7 config-space is 2-lane-width-event-gated, so 1-lane can't serve the Router-CS read either. The 2-lane bond is required. Reverted.] */
   XDATA_REG8V(0x09F7) = 3; XDATA_REG8V(0x09F8) = 1; XDATA_REG8V(0x09FB) = 3;
   // 0x0A57/0x0A58 = device PID-low / bcdDevice-hi. Stock relies on the boot env (SPI-flash shadow)
   // pre-loading these; there is no firmware writer. Without them they stay uninit 0x55, so the SB
@@ -515,11 +525,32 @@ void main(void) {
   XDATA_REG8V(0x0A57) = 0x63;
   XDATA_REG8V(0x0A58) = 0x24;
 
+  /* STEP 1: seed PCIe-tunnel adapter-config inputs (stock bank0_8d77 SPI-blob path; handmade has no
+   * SPI-shadow load so 0x0A52-0x0A55 read the uninit 0x55 flash-buffer poison -> B410-B42B advertised
+   * garbage). Values captured from STOCK on this board via app/patch_stock_adaptercfg.py:
+   *   [ACFG A52=21 A53=1B A54=63 A55=24 7E=A5 | B410=1B B411=21 B412=24 B413=63 ...]
+   * (7E=A5 == valid SPI blob on stock; A52/A53=21/1B are REAL blob bytes, NOT the PID fallback). The
+   * boot_phy.h c8db port maps lo=[0A53]->B410, hi=[0A52]->B411, mode=[0A54]->B413, cred=[0A55]->B412. */
+  XDATA_REG8V(0x0A52) = 0x21;  /* B411/B41B hi   (stock SPI[0x7074]) */
+  XDATA_REG8V(0x0A53) = 0x1B;  /* B410/B41A lo   (stock SPI[0x7075]) */
+  XDATA_REG8V(0x0A54) = 0x63;  /* B413/B419 mode (stock SPI[0x7076]) */
+  XDATA_REG8V(0x0A55) = 0x24;  /* B412/B418 cred (stock SPI[0x7077]) */
+
   // Stock boot_hw_init_main step 6k: enable the USB4 router's PCIe-down tunnel adapter (B401 MASTER
   // EN + B410-B42B cfg + B298 TLP-routing) so the host CM can discover a PCIe-down adapter and tunnel
   // PCIe to the GPU. Stock runs this at boot (before the mode decision); pcie_power_on (after the
   // bond) is the runtime tunnel-up that deasserts PERST and completes the link — keep both.
   pcie_tunnel_adapter_enable_b401();
+
+  // Stock boot_hw_init_main "main step 6" runs bank0_de16 (= handmade u4lb_e96c) UNCONDITIONALLY at
+  // boot, in sequence after bank0_8d77 and before the PHY-ready gate / mode decision. It zeroes the
+  // SB connect-service state (0x0B30-0x0B33), configures the PHY-DMA/timer (CD30/CD31, CC2A/CC2C/CC2D,
+  // addr=0x00C7) and calls sb_channel_connect_service() to program the SB PHY connect path (C620/C655/
+  // C65A) BEFORE any host/connect event. Stock then re-runs sb_channel_connect_service every main-loop
+  // iteration. EMULATION DIFFERENTIAL (2026-06-22, emulate/diff_trace.py): handmade DEFINED u4lb_e96c
+  // but NEVER CALLED it -> C620/C655/C65A and 92F7 (lane-advance) accessed 0x in handmade vs 43500x in
+  // stock; the entire boot-time SB-connect path was absent. Port stock's unconditional boot call here.
+  u4lb_e96c();
 
   // PHY tune + PCIe power cycling only in non-USB4 mode (they clobber CM-owned regs).
   if (!(XDATA_REG8V(0x09F9) & 0x83)) {
@@ -552,6 +583,19 @@ void main(void) {
   uart_puts(" e741=");        uart_puthex(REG_PHY_PLL_CTRL);
   uart_puts(" cc43=");        uart_puthex(REG_CPU_CLK_CFG); uart_puts("]\n");
 
+  // bank1_eef9 (stock boot_hw_init_main step, Phase-2 ❌ omitted in handmade): enable the bank1/USB4
+  // INT group (INT_ENABLE bit6). The EC06/router-op (control-channel) INT group may be gated by this
+  // bit — without it the host's post-bond Router-CS read never reaches the device mailbox (EC06=0).
+  REG_INT_ENABLE = (uint8_t)((REG_INT_ENABLE & 0xBF) | 0x40);
+
+  // SFR-DIFF FIX (2026-06-20): C809 (REG_INT_CTRL) bit1 = stock 0x2A vs handmade 0x28 at the bond.
+  // Stock sets C809 bit1 via bank0_d894 (`C809 = (C809&0xFD)|0x02`) AND bank0_b031->dcb4 (same write),
+  // run at BOOT in stock's 2f80 control-adapter init. Handmade has the write in u4c_dcb4_transport_reg_
+  // reinit (sb.h:544) but never CALLS dcb4 (it's bundled in the bond-disturbing b031, which handmade
+  // can't run at bond-complete). The C809 bit1 set is an isolated interrupt-enable; safe to apply at
+  // boot (stock's d894 timing) WITHOUT b031's destabilizing transport reinit. Byte-true to d894/dcb4.
+  REG_INT_CTRL = (uint8_t)((REG_INT_CTRL & 0xFD) | 0x02);
+
   // USB4 CM router-op RX-enable so the host's router-op queries are received.
   if (XDATA_REG8V(0x09F9) & 0x81) {
     usb4_routerop_init();
@@ -560,6 +604,12 @@ void main(void) {
     uart_puts(" c807=");        uart_puthex(REG_INT_DMA_CTRL);
     uart_puts(" ea88=");        uart_puthex(XDATA_REG8V(0xEA88)); uart_puts("]\n");
   }
+
+  // ROOT (traced 2026-06-19): config read needs the 0x1200 config-space, set up by c8c7<-a522<-C105<-
+  // C80A.4, which only fires when the in-band transport/control-adapter COMES UP. Handmade reaches
+  // lane-CL0 but the transport layer never fully comes up, so the chain never starts. 0x1201 is HW-set
+  // by c8c7 only (not firmware-writable; confirmed: direct writes + d894-at-boot both fail to make it
+  // stick). See project_inband_routercs_read_wall.md.
 
   // USB-mode fork: skip the USB3 device engine in USB4 mode (it would abandon USB4).
   if (XDATA_REG8V(0x09F9) & 0x83) {
@@ -590,9 +640,16 @@ void main(void) {
   { uint8_t z; for (z = 0; z <= (0x0B58 - 0x0B45); z++) XDATA_REG8V(0x0B45 + z) = 0; }
   sb_con_print_budget = 6;
   af38_s3_budget = 30;
+  af38_s5_budget = 40;
+  c105_fire_bdg = 12;
   u4lb_edf5_print_budget = 40;
   u4lb_s5_print_budget = 60;
+  u4lb_clv_budget = 40; u4lb_clv_seen = 0; u4lb_clv_last = 0;
   isr_dbg_budget = 20; isr_dbg_budget2 = 20; isr_dbg_budget3 = 20;
+  reservice_enable = 1;   /* steady-state c7a5->d7cd->c35b re-run (byte-true to stock; A/B toggle) */
+  tup_e52d_done = 0; tup_dbg_budget = 4; tup_b031_enable = 0; tup_arm_mode = 0;  /* mode 4 = force e4ea Enable leg (REFUTED: 1407 stays 00, route=1 still -110, bond-safe) */
+  /* ring_log.h init (crt0 does NOT zero XDATA). Disarmed until the connect edge arms it. */
+  rl_armed = 0; rl_dumped = 0; rl_idx = 0; rl_wrapped = 0; rl_seq = 0; rl_lean = 0;
   u4lb_s5_seen = 0; u4lb_s5_last759 = 0; u4lb_s5_last75b = 0;
   u4lb_s5_lasta0 = 0; u4lb_s5_last775 = 0; u4lb_s5_lastaf38 = 0; u4lb_s5_lasttx = 0;
 
@@ -618,42 +675,41 @@ void main(void) {
   uint8_t kicks = 0;
   uint8_t sb_diag_count = 0;
   while (1) {
-    /* ===== CM PCIe-tunnel super-loop state machine (stock main 0x0A59 SM) =====
-     * Drives the CM tunnel AFTER the lane bond so the host's PCIeDn adapter goes
-     * Disabled->L0. BOND-SAFETY GUARD: the state-0->1 arm (which fires c00d's
-     * PERST/RXPLL/B401 re-drive) is allowed ONLY when BOTH lanes are already CL0,
-     * so it can never perturb the lane bond mid-train. */
-    if (u4_entered_usb_mode != 0 && u4_entered_usb_mode != 0x10) {
-      if (XDATA_REG8V(0x0A59) == 0) {
-        /* BOOTSTRAP (diagnostic): stock arms when 0x0AE8==0 && 0x09FA==4, both set post-bond by the
-         * c105/a522 link-width handler that the host triggers via C80A.4 — which never fires to the
-         * handmade. So on bond-complete (both lanes CL0) we replicate a522's 0x09FA set (E710&0xE0|4,
-         * so a840 in the CM core matches stock's tunnel context) + 0x0AE8=0, then arm directly. */
-        if ((uint8_t)(SB_RD(0xA0) & 0x0F) == 0x02 && (uint8_t)(SB_RD(0xA1) & 0x0F) == 0x02) {
-          XDATA_REG8V(0x09FA) = (uint8_t)((REG_LINK_WIDTH_E710 & 0xE0) | 0x04);
-          XDATA_REG8V(0x0AE8) = 0;
-          XDATA_REG8V(0x0A59) = 1;
-          XDATA_REG8V(0x0B39) = 0;
-          XDATA_REG8V(0x0002) = 0xFF;
-          XDATA_REG8V(0x06E6) = 1;
-          cm_e8e4_settle();              /* = stock e8e4 -> c00d arm */
-          uart_puts("\r\n[CM arm 9fa="); uart_puthex(XDATA_REG8V(0x09FA)); uart_putc(']');
-        }
-      }
-      if (XDATA_REG8V(0x0A59) == 1) {
-        if (cm_timer4_csr_fired()) {
-          uint8_t r = cm_pcie_link_step_machine();
-          /* change-gated diag (on r + link regs, NOT the step counter which ++ every poll). */
-          { static __xdata uint8_t cm_lr, cm_lb432, cm_le765;
-            uint8_t b = REG_POWER_CTRL_B432, e = REG_SYS_CTRL_E765;
-            if (r != cm_lr || b != cm_lb432 || e != cm_le765) {
-              cm_lr = r; cm_lb432 = b; cm_le765 = e;
-              uart_puts("\r\n[CMpoll step="); uart_puthex(XDATA_REG8V(0x0B39));
-              uart_puts(" b432="); uart_puthex(b); uart_puts(" e765="); uart_puthex(e);
-              uart_puts(" r="); uart_puthex(r); uart_putc(']');
-            }
-          }
-          if (r != 0) { XDATA_REG8V(0x0A59) = 2; XDATA_REG8V(0x06E6) = 1; cm_arm_c00d(); }
+    /* ===== CM PCIe-tunnel super-loop REMOVED 2026-06-18 =====
+     * The cm_arm_c00d()-based CM step machine (the 9037 layer) was PROVEN this session to be the
+     * device's NVMe-storage enumeration, NOT the GPU/PCIeDn path. Worse, a HW bond-vs-nobond runtime
+     * diff showed it is ACTIVELY HARMFUL: when its bond-complete arm fired on the SAME super-loop pass
+     * as the tunnel-up block below (both gate on SB[0xA0]&0xF==2 && SB[0xA1]&0xF==2), cm_arm_c00d's
+     * PERST-assert(B480) + C659-clear + boot_phy_d436_width re-drive collided with pcie_power_on()'s
+     * PERST-deassert + LTSSM-train, leaving the device<->GPU LTSSM stuck at 0x01 -> [PCIe timeout]
+     * (the "cycle-variable" failure was THIS race, not the lane bond — the bond is deterministic).
+     * Removing it lets pcie_power_on() train the downstream link to 0x78 CONNECTED every cycle. */
+
+    /* RING-LOG ARM/STOP harness (2026-06-22): high-frequency XDATA ring capture of the real-time
+     * connect->bond->1407.0 timeline (ring_log.h). Arm on the connect edge (0x06EC 0->1); stop+dump
+     * when the bond commits (A=A1=0x02) OR P1[0x1407].0 fires OR a per-window iteration budget
+     * expires (timeout). No UART during the window — only the post-window dump. */
+    { static __xdata uint8_t rl_lastconn = 0; static __xdata uint32_t rl_winto = 0;
+      static __xdata uint8_t rl_bondhold = 0;
+      uint8_t conn = XDATA_REG8V(0x06EC) ? 1 : 0;
+      /* Arm on the FIRST connect of this boot (rl_dumped guards a re-arm after we've dumped, so the
+       * ring isn't wiped before the post-window UART trace prints). */
+      if (conn && !rl_lastconn && !rl_dumped) { rl_arm(); rl_winto = 0; rl_bondhold = 0; }
+      rl_lastconn = conn;
+      if (rl_armed) {
+        uint8_t a0 = SB_RD(0xA0), a1 = SB_RD(0xA1);
+        uint8_t p1407 = P1_RD(0x1407);
+        IE &= (uint8_t)~IE_EA;  /* serialize ring access vs the INT1 rl_log calls */
+        rl_log(2);              /* sample every super-loop pass (change-gated inside) */
+        IE |= IE_EA;
+        if (p1407 & 0x01) {     /* THE target: width event fired -> dump immediately */
+          rl_stop_dump();
+        } else if ((a0 & 0x0F) == 0x02 && (a1 & 0x0F) == 0x02) {
+          /* Bond reached. Hold a short window AFTER the bond so the ring captures whether 1407.0
+           * fires in the post-bond moment (stock raises it AT/just-after the bond), then dump. */
+          if (++rl_bondhold >= 200) rl_stop_dump();
+        } else if (++rl_winto >= 0x40000UL) {   /* generous window timeout (no bond seen) */
+          rl_stop_dump();
         }
       }
     }
@@ -695,6 +751,21 @@ void main(void) {
       else                                   { fsm_stall = 0; }
     }
 
+    // STEADY-STATE CONNECT-SERVICE RE-RUN (2026-06-22, emulate/diff_trace.py --steady differential).
+    // Stock calls bank0_c7a5 -> bank0_d7cd -> sb_channel_connect_service (c35b: C620/C655/C65A) EVERY
+    // superloop iteration, UNCONDITIONALLY, recomputing the connect-state 0x0B30 from the live B481
+    // lane-count + CD31 timer. handmade ran it only ONCE at boot (u4lb_e96c). The pure-emulation
+    // differential exposed this as the next steady-state execution-path gap: stock re-touches
+    // C620/C655/C65A x1624 in a 15% tail, handmade 0x. The hypothesis under test: the link/connect
+    // state must be CONTINUOUSLY re-driven for the 1->2 width transition (P1[0x1407].0) to be
+    // re-evaluated. Gated EA-off (matching stock's c7a5 EA=0/EA=1 bracket) + behind a runtime toggle
+    // (reservice_enable, default 1) so it can be disabled for a HW A/B if the bond regresses (Abr2).
+    if (reservice_enable) {
+      IE &= (uint8_t)~IE_EA;
+      sb_connect_service_reservice_d7cd();
+      IE |= IE_EA;
+    }
+
     // SB router-op responder, deferred off the INT1 ISR to keep the stack shallow.
     if (sb_pend_int_pending || (SB_RD(0x26) & 0x02)) {
       sb_pend_int_pending = 0;
@@ -722,6 +793,120 @@ void main(void) {
       uart_puts(" ec06=");           uart_puthex(REG_NVME_EVENT_STATUS); uart_puts("]\n");
     }
 
+    // LINK-MODE TRANSITION tracker (2026-06-20): does handmade's E302/CA06 TRANSITION at the bond
+    // (stock 0x97->0x83 / 0x61->0x01) or sit STUCK at the final value? The HW raises C80A.4/the width
+    // event ON the transition. Budgeted + change-gated so it can't flood the bond.
+    { static __xdata uint8_t le302 = 0xFF, lca06 = 0xFF, lkbud = 90;
+      uint8_t e = REG_PHY_MODE_E302, c = XDATA_REG8V(0xCA06);
+      if ((e != le302 || c != lca06) && lkbud) {
+        le302 = e; lca06 = c; lkbud--;
+        uart_puts("[Lk e302="); uart_puthex(e); uart_puts(" ca06="); uart_puthex(c);
+        uart_puts(" c80a="); uart_puthex(REG_INT_PCIE_NVME);
+        uart_puts(" e7e3="); uart_puthex(XDATA_REG8V(0xE7E3));   // PHY link-ctrl latch (dd42; 0xCC=mode1/0x30=mode4)
+        uart_puts(" af1="); uart_puthex(u4_connect_gate);        // u4_connect_gate (.5 gates E7E3)
+        uart_puts(" A0="); uart_puthex(SB_RD(0xA0)); uart_putc(']');
+      } }
+
+    // WIDTH-TRANSITION timeline (2026-06-22): byte-comparable to stock app/patch_stock_widthseq.py.
+    // The stock-vs-handmade discriminator: does P1[0x1201] WALK 00->01->02 (the HW 1->2 width
+    // transition that raises P1[0x1407].0 + P1[0x1203].7), or stay frozen at 00? Change-gated on the
+    // same composite (E710,1201,1407,A0,A1) signature so it prints one line per distinct width state.
+    { static __xdata uint8_t lwsig = 0xFF, lwseen = 0, lwbud = 120;
+      uint8_t e710 = REG_LINK_WIDTH_E710;
+      uint8_t p1201 = P1_RD(0x1201), p1407 = P1_RD(0x1407);
+      uint8_t sa0 = SB_RD(0xA0), sa1 = SB_RD(0xA1);
+      uint8_t sig = (uint8_t)((e710 & 0x0F) ^ (uint8_t)(p1201 << 4) ^ p1407
+                              ^ (uint8_t)(sa0 << 2) ^ (uint8_t)(sa1 << 5));
+      if (lwbud && (!lwseen || sig != lwsig)) {
+        lwseen = 1; lwsig = sig; lwbud--;
+        uart_puts("\r\n[wseq E710="); uart_puthex(e710);
+        uart_puts(" 1201="); uart_puthex(p1201);
+        uart_puts(" 1203="); uart_puthex(P1_RD(0x1203));
+        uart_puts(" 1407="); uart_puthex(p1407);
+        uart_puts(" 819="); uart_puthex(XDATA_REG8V(0x0819)); uart_puthex(XDATA_REG8V(0x081A));
+        uart_puts(" 77A="); uart_puthex(XDATA_REG8V(0x077A));
+        uart_puts(" 1603="); uart_puthex(P1_RD(0x1603));
+        uart_puts(" CA06="); uart_puthex(XDATA_REG8V(0xCA06));
+        uart_puts(" E302="); uart_puthex(REG_PHY_MODE_E302);
+        uart_puts(" A0="); uart_puthex(sa0); uart_puts(" A1="); uart_puthex(sa1);
+        uart_puts(" 9E="); uart_puthex(SB_RD(0x9E)); uart_puts(" 66="); uart_puthex(SB_RD(0x66));
+        uart_putc(']');
+      } }
+
+    // PER-LANE PHY LOCK time-series: RESULT (2026-06-22, agent14, HW-captured both fw + stock RE).
+    // The decisive unmeasured mechanism was per-lane PLL/CDR LOCK TIMING during training (does
+    // lane0 lock before lane1 = staggered, raising the HW 1->2 width step?). MEASURED, both sides:
+    //   handmade in-connect [c2@..]:  pre-bond E2E2 -> rstpll E4E4 -> ec51 6464 -> bond F4F4
+    //   stock   patch_stock_cfg [bk]: validate E4E4; a66 pre-bond plA=plB=E2/50; at-bond plA=plB=F4/50
+    // => laneA == laneB at EVERY sample, in BOTH stock and handmade — the lanes lock SIMULTANEOUSLY,
+    // no stagger, byte-identical timing. RE confirms: stock u4lb_state4_b0b4 (CODE_BANK1::b0b4) arms
+    // lane0 then lane1 BACK-TO-BACK (no inter-lane wait/poll); rst_rx_pll + bank1_b8db validate BOTH
+    // lanes together. There is NO firmware per-lane enable stagger to port. VERDICT (B): the stagger
+    // is analog/host-driven, NOT firmware-reachable. The super-loop sampler only ever caught the
+    // pre-bond E2E2 (the lock transition happens inside the connect ISR burst); the in-connect
+    // [c2@..] diags in usb4_lanebond.h are the live per-lane lock probe — removed the super-loop
+    // duplicate to save IRAM/code.
+
+    // *** ROUTE=1 RESPONDER ARM HARNESS (2026-06-22 host-ftrace lever — RESULT: wall confirmed) ***
+    // At the STABLE bond (A=0202) the host posts a route=1 TB_CFG read (4 retries / ~414ms, port held
+    // UP — host-ftrace + kretprobe oracle confirmed). The device's in-band config responder is dead
+    // (-> tb_cfg_get_upstream_port = -110 -> tb_switch_alloc fails -> no GPU). The responder is brought
+    // up by stock e52d's b031 transport reinit, armed by a522->e06b(1)->sb_link_reinit_gate->P1[0x0109]
+    // (the WIDTH event handmade never gets). This harness tested firing it device-side:
+    //   mode 2 (set P1[0x0109] + run e52d incl. b031): e52d RUNS ([TUP! 109=73]) but b031 POISONS the
+    //          SB read engine (e5b0 descriptor reset) -> device super-loop HANGS on the next SB read ->
+    //          link drops to Training/Bonding, host sees device-disc. EC06 never fires.
+    //   mode 3 (re-run e56f router-op RX engine, bond-safe, no descriptor engine): bond HOLDS but EC06
+    //          still 0 (e56f re-arm alone does NOT make the route=1 TLP land; the b031 descriptor
+    //          channel is genuinely required — and it's the one that hangs the SB block).
+    //   mode 0/1: detect-only baseline — bond HOLDS stable (host CL0/CL0, route=1 still -110).
+    // => the route=1 responder CANNOT be brought up device-side at handmade's bond: b031 (the only
+    //    thing that arms the in-band control-adapter RX descriptor channel) hangs the SB read engine at
+    //    this state. Stock runs b031 only AFTER the host commits (P1[0x0109]) + drives the follow-up
+    //    descriptor exchange that re-establishes the SB engine — handmade has no such follow-up.
+    //    Default = mode 0 (no-op, bond-safe). Set tup_arm_mode=2/3 in init to re-test.
+    if (!tup_e52d_done &&
+        (SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02) {  // both lanes CL0
+      tup_e52d_done = 1;
+      if (tup_arm_mode != 0) {
+        sb_link_reinit_gate = 1;
+        uart_puts("\r\n[ROUTE1-ARM mode="); uart_puthex(tup_arm_mode); uart_putc(']');
+        if (tup_arm_mode == 2) {
+          P1_WR(0x0109, (uint8_t)(P1_RD(0x0109) | 0x01));
+          tup_e52d_done = 0;                   // let sb_lane_bond_complete_tunnel_up's own one-shot gate it
+          sb_lane_bond_complete_tunnel_up();   // full byte-true e52d (b031 gated by tup_b031_enable)
+        } else if (tup_arm_mode == 3) {
+          usb4_routerop_init();                // minimal RX re-arm (bond-safe; insufficient for EC06)
+        } else if (tup_arm_mode == 4) {
+          // *** FORCE the PcieTunnel-Enable leg (u4lb_e4ea) at the stable bond — REFUTED 2026-06-22 ***
+          // The host withholds 1508.4 (Enable) because route=1 is unanswered (-110). e4ea is the leg
+          // the host's Enable request would trigger: it clears B480 PERST bits 0-3 + re-triggers the
+          // PHY RXPLL (e9b5) to bring the DOWNSTREAM PCIe link up. Hypothesis: if the link trains,
+          // E763.2 fires -> [PcieLinkUp] -> the PCIe-DOWN adapter width event 1407.0 -> cascade,
+          // BYPASSING route=1. HW RESULT (force-e4ea agent): the leg runs CLEANLY and BOND-SAFE
+          // ([PwrOn][PcieTunnel-Deassert][PcieTunnel-Enable], A0=02 held, no Abr2) but 1407 STAYS 00,
+          // 1201 STAYS 00, E763 STAYS 00, B480 reads back 0x01 (HW re-asserts PERST). The downstream
+          // PCIe link does NOT train from a device-local PERST-clear/RXPLL-retrigger: the link traffic
+          // flows THROUGH the host's tunnel which is disabled (host withheld Enable b/c route=1=-110).
+          // Host oracle unchanged: tb_tx route=1 seq0-3 (4 retries), tb_rx=0, upport=-110, no GPU.
+          // => CONFIRMS the wall is the HW transport-RX (route=1), not reachable by forcing the
+          //    tunnel-Enable leg device-side. mode 4 kept disabled (harness for future reference).
+          uart_puts("\r\n[FORCE-e4ea pre 1407="); uart_puthex(P1_RD(0x1407));
+          uart_puts("\r\n[FORCE-e4ea pre 1407="); uart_puthex(P1_RD(0x1407));
+          uart_puts(" 1201="); uart_puthex(P1_RD(0x1201));
+          uart_puts(" C659="); uart_puthex(REG_PCIE_LANE_CTRL_C659);
+          uart_puts(" B480="); uart_puthex(REG_PCIE_PERST_CTRL);
+          uart_puts(" E763="); uart_puthex(REG_PHY_RXPLL_TRIGGER); uart_putc(']');
+          u4lb_e4ea();
+          uart_puts("\r\n[FORCE-e4ea post 1407="); uart_puthex(P1_RD(0x1407));
+          uart_puts(" 1201="); uart_puthex(P1_RD(0x1201));
+          uart_puts(" 1203="); uart_puthex(P1_RD(0x1203));
+          uart_puts(" E763="); uart_puthex(REG_PHY_RXPLL_TRIGGER);
+          uart_puts(" A0="); uart_puthex(SB_RD(0xA0)); uart_putc(']');
+        }
+      }
+    }
+
     // Deferred tunnel-up: run the PCIe bring-up here (uses sleep()/long polls).
     // Stay PENDING until BOTH lanes actually reach CL0 (the bond completes), then fire ONCE.
     // (Was a one-shot that cleared the flag before the CL0 check, so an early arm — before the
@@ -729,8 +914,73 @@ void main(void) {
     if (sb_tunnel_up_pending &&
         (SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02) {  // both lanes CL0
       sb_tunnel_up_pending = 0;
-      uart_puts("[TunnelUp->pcie_on]\n");
-      pcie_power_on();
+      // *** FULL byte-true e52d TESTED + REFUTED on HW (2026-06-20) ***
+      // Stock fires e52d from the a066 ISR PART1 gated on P1[0x0109]&1 (the host's lane-bond-DONE
+      // bit) — but handmade NEVER gets that bit set (the host withholds the bond commit / SB[0x66].0).
+      // sb_tunnel_up_pending is instead set by the connect-path shortcut (bank0_c9a8, usb4_connect.h),
+      // which only fires at CL0 (BEFORE the host commits). The full byte-true e52d (b031 -> e06b ->
+      // rom_load -> [pcie block] -> CA60 -> 8a89) was assembled + run HERE in stock order. HW RESULT:
+      //   - pcie_power_on ALONE (no b031): bond STABLE (A=0202, PCIe 78 CONNECTED) but 1203=00 c80a=20
+      //     EC06=00 — transport does NOT come up; config read still -110.
+      //   - +b031 (full e52d, byte-true order): L0:Abr2/L1:Abr2 loop — b031's SB-transport REINIT
+      //     re-drives the just-bonded lanes -> device HW raises Abr2; host stuck Training/Bonding.
+      //   - b031 ALONE (no pcie): SAME Abr2 loop, and [b031 EN ec06=00] -> b031 does NOT raise EC06.
+      // => the disturber is b031's SB-transport reinit (NOT pcie_power_on). Stock avoids it because it
+      // runs e52d only AFTER the host commits the bond (0x0109 set); handmade can only run it
+      // speculatively pre-commit, where the reinit disturbs the unlocked lanes. The byte-true ORDER
+      // does NOT save it. The full e52d port lives in sb_lane_bond_complete_tunnel_up (ISR path,
+      // gated 0x0109&1) for when/if the host ever commits. RESTORED here to the stable HELD no-op.
+      uart_puts("[TunnelUp:HELD]\n");
+      // Upstream-adapter / topology state at the stable bond (just before the host's ROUTER_CS read) —
+      // read-only baseline to diff against stock (does the device's HW recognize route 0x1?).
+      // Full bond-moment SB lane-adapter state, to diff vs stock a066 (66=01 9E=03 A0=02 A1=02 D4=B7
+      // 64=03 2C=F1 2D=F5). The divergent byte is the lane-adapter state the host reads to post cm8.
+      uart_puts("[SBbond 66="); uart_puthex(SB_RD(0x66)); uart_puts(" 9E="); uart_puthex(SB_RD(0x9E));
+      uart_puts(" A0="); uart_puthex(SB_RD(0xA0)); uart_puts(" A1="); uart_puthex(SB_RD(0xA1));
+      uart_puts(" D4="); uart_puthex(SB_RD(0xD4)); uart_puts(" 64="); uart_puthex(SB_RD(0x64));
+      uart_puts(" 2C="); uart_puthex(SB_RD(0x2C)); uart_puts(" 2D="); uart_puthex(SB_RD(0x2D)); uart_puts("]\n");
+      uart_puts("[UPADP 718="); uart_puthex(XDATA_REG8V(0x0718));
+      uart_puts(" 819="); uart_puthex(XDATA_REG8V(0x0819)); uart_puthex(XDATA_REG8V(0x081A));
+      uart_puts(" 777="); { uint8_t z; for (z=0; z<6; z++) uart_puthex(XDATA_REG8V(0x0777+z)); }
+      uart_puts(" 121E="); uart_puthex(P1_RD(0x121E));
+      uart_puts(" 124C="); uart_puthex(P1_RD(0x124C)); uart_puthex(P1_RD(0x124D)); uart_puthex(P1_RD(0x124E));
+      uart_puts(" 140="); uart_puthex(P1_RD(0x1403)); uart_puthex(P1_RD(0x1404)); uart_puthex(P1_RD(0x1406));
+      uart_puts(" 1802="); uart_puthex(P1_RD(0x1802));
+      uart_puts(" e302="); uart_puthex(REG_PHY_MODE_E302);
+      // H2 check: 0x09F9 should be 0x87, 0x09FA should have 0x81; c80a_acc shows which adapter events
+      // fired (.5=SB bond, .4=secondary adapter). usb4_int_seen .04=EC06 ever fired.
+      uart_puts(" 9F9="); uart_puthex(XDATA_REG8V(0x09F9)); uart_puts(" 9FA="); uart_puthex(XDATA_REG8V(0x09FA));
+      /* 0x09FA now 0x01 (stock-matched) via the 0x09F4=3 seed (main.c) + plain (no &0x04) connect_u4 write. */
+      uart_puts(" 9F4="); uart_puthex(XDATA_REG8V(0x09F4));
+      uart_puts(" 9F2="); uart_puthex(XDATA_REG8V(0x09F2)); uart_puthex(XDATA_REG8V(0x09F3));
+      uart_puts(" c80a="); uart_puthex(c80a_acc); uart_puts(" seen="); uart_puthex(usb4_int_seen);
+      uart_puts(" EC00="); uart_puthex(XDATA_REG8V(0xEC00)); uart_puts(" EA90="); uart_puthex(REG_SYS_CTRL_EA90);
+      // width-event link-state (a522 gate: CA06&0x1F==0x10 then C00E&7==0): does handmade reach it?
+      uart_puts(" CA06="); uart_puthex(XDATA_REG8V(0xCA06)); uart_puts(" C00E="); uart_puthex(XDATA_REG8V(0xC00E));
+      uart_puts(" E710="); uart_puthex(REG_LINK_WIDTH_E710); uart_puts(" 1203="); uart_puthex(P1_RD(0x1203));
+      uart_puts("]\n");
+      // Full connect-time config-space image (DPX=1 page-1 adapter regs) for the stock diff.
+      { uint16_t a;
+        uart_puts("\r\n[CFG1200="); for (a=0x1200; a<0x1220; a++) uart_puthex(P1_RD(a)); uart_putc(']');
+        uart_puts("\r\n[CFG1400="); for (a=0x1400; a<0x1420; a++) uart_puthex(P1_RD(a)); uart_putc(']');
+        uart_puts("\r\n[CFG1500="); for (a=0x1500; a<0x1520; a++) uart_puthex(P1_RD(a)); uart_putc(']');
+        uart_puts("\r\n[CFG1600="); for (a=0x1600; a<0x1620; a++) uart_puthex(P1_RD(a)); uart_putc(']');
+        uart_puts("\r\n[CFG1800="); for (a=0x1800; a<0x1820; a++) uart_puthex(P1_RD(a)); uart_putc(']');
+        // c8c7's SNAPSHOT SOURCE: P1[0x0200..0x020F] (r3_read R3=2). If this is populated post-bond (the
+        // lanes ARE trained), c8c7 could passively populate the 0x1200 config-space WITHOUT a PHY re-drive.
+        // Also c8c7's gate P1[0x1291].6 + the 0x097e descriptor it parses.
+        uart_puts("\r\n[P0200="); for (a=0x0200; a<0x0210; a++) uart_puthex(P1_RD(a)); uart_putc(']');
+        uart_puts(" 1291="); uart_puthex(P1_RD(0x1291));
+        uart_puts(" 097e="); { uint8_t z; for (z=0; z<0x10; z++) uart_puthex(XDATA_REG8V(0x097b+z)); } }
+      // EXPERIMENT (2026-06-20): P0200 IS populated post-bond -> test the c8c7 passive config-space bootstrap.
+      // Does c8c7's SNAPSHOT (A) make the P1[0x1201]=2 write STICK, where the refuted direct write did not?
+      { uint8_t i;
+        for (i = 0; i < 0x10; i++) XDATA_REG8V(0x097b + i) = P1_RD((uint16_t)(0x0200 + i)); // c8c7 (A) snapshot
+        (void)P1_RD(0x1291);                            // c206 gate read
+        P1_WR(0x1201, 2); P1_WR(0x1202, 1);             // c8c7 commit (P1[0x1291].6 clear branch)
+        uart_puts("\r\n[c8c7? 1201="); uart_puthex(P1_RD(0x1201));
+        uart_puts(" 1202="); uart_puthex(P1_RD(0x1202));
+        uart_puts(" CFG="); { uint16_t a; for (a = 0x1200; a < 0x1210; a++) uart_puthex(P1_RD(a)); } uart_putc(']'); }
     }
 
     // While a connect is in progress keep the loop tight; only delay when idle.
@@ -843,9 +1093,17 @@ void main(void) {
       uart_puts(" 29=");
       for (k = 0; k < 0x10; k++) uart_puthex(P1_REG8_rd((uint16_t)(0x2900u + k)));
       uart_puts("]\n"); }
-    if (!pd_seen && kicks < 60) {
-      pd_drive_hard_reset();
-      kicks++;
+    /* The boot kick (PD Hard Reset) IS needed to make the host (re)engage PD — but firing it IMMEDIATELY
+       & REPEATEDLY each boot causes the reboot-loop (each hard reset cold-boots the device via VBUS, and
+       the fresh boot kicks again before the host responds). FIX: give the host a SETTLE window after each
+       (re)attach before kicking — so after ONE kick->reboot->re-attach the host engages PD and no further
+       kick fires. (RE: agent a49b7d2d — handmade's initial Rd attach alone doesn't trigger the host's PD;
+       one VBUS cycle does, then the settle lets the contract complete in one clean pass.) */
+    { static __xdata uint8_t pd_settle = 0;
+      if (!pd_seen) {
+        if (pd_settle < 12) { pd_settle++; }
+        else if (kicks < 8) { pd_drive_hard_reset(); kicks++; pd_settle = 0; }
+      }
     }
   }
 }

@@ -57,6 +57,9 @@ static void boot_phy_cf28(void) {
   REG_CPU_EXEC_STATUS_2 = 0x04;
   REG_LINK_CTRL_E324 &= 0xFB;
   REG_TIMER_CTRL_CC3B = REG_TIMER_CTRL_CC3B & 0xFE;
+  /* Stock cf4d->bce7: after CC3B&=0xFE, bce7 ALSO sets E717 = (E717 & 0xFE) | 1 (link-ctrl enable
+   * bit0). Handmade had dropped this E717 strobe (only did the CC3B write). Restored byte-true. */
+  REG_LINK_CTRL_E717 = (REG_LINK_CTRL_E717 & 0xFE) | 0x01;
   REG_CPU_CTRL_CC3E = REG_CPU_CTRL_CC3E & 0xFD;
   REG_TIMER_CTRL_CC3B = REG_TIMER_CTRL_CC3B & 0xFD;
   REG_TIMER_CTRL_CC3B &= 0xBF;

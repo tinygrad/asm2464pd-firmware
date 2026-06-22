@@ -623,6 +623,104 @@ static void u4lb_e74e(void) {
   REG_CPU_EXT_STATUS = 0x02;
 }
 
+/* bank0 e06b (CODE:e06b), byte-true. v=arg (R7):
+ *   XDATA[0x0A9F](u4_routerop_desc2) = v;
+ *   bc57: P1[0x1235] = (P1[0x1235] & 0x3F) | 0x80   (set engine-commit bit7, R1=0x35);
+ *   XDATA[0x0B34] = 1;
+ *   link_apply_lane_mask_reg3f(v, 0x12, 2, v)  == u4lb_ce23(v, v)  (re-apply lane mask -> PHY reg 0x3F);
+ *   sb_link_reinit_gate(0x0B1C) = (XDATA[0x0A9F] != 0) ? 1 : 0;
+ * STOCK calls e06b(1) from a522 (the WIDTH-event service) -> sb_link_reinit_gate=1 -> the next n==3
+ * connect descriptor sets P1[0x0109].0 -> the a066 ISR runs e52d (bond-complete transport-up).
+ * e06b(0) is called inside e52d/b031 and RESETS the gate to 0 (since v=0 -> 0x0A9F=0). So the gate
+ * is the a522 width-event's arming output; handmade never gets a522, so we must arm 0x0B1C manually. */
+static void u4lb_e06b(uint8_t v) {
+  u4_routerop_desc2 = v;                                   /* XDATA[0x0A9F] = v */
+  P12_WR(0x35, (uint8_t)((P12_RD(0x35) & 0x3F) | 0x80));  /* bc57: P1[0x1235] commit-bit (R1=0x35) */
+  u4lb_b34_lanemask = 1;                                   /* XDATA[0x0B34] = 1 */
+  u4lb_ce23(v, v);                                         /* link_apply_lane_mask_reg3f(v,...) */
+  sb_link_reinit_gate = (uint8_t)(u4_routerop_desc2 != 0 ? 1 : 0);
+}
+
+/* bank0 b031 (CODE:b031) — the SB-transport / in-band control-adapter REINIT that e52d runs FIRST at
+ * bond-complete. Disasm-true (CODE:b031-b101). All prelude regs are R3=2/DPX=1 page-1 banked:
+ *   R2=0x12 -> P12_*(0x..) (= P1[0x12xx]);  R2=0x14/0x15/0x18 -> P1[0x14xx/0x15xx/0x18xx].
+ * Helper semantics (disasm): a35f(A)=write[cur]=A,readback->A ; a358=read[cur],A=(A&0xFD)|2 ;
+ *   a3db(A)=A=(A&0xEF)|0x10,write[cur]=A.
+ * Tail chain (b0de-b101): e711(standalone engine reset) -> e8cd(zero 0x0B34..0x0B37) -> e5b0 ->
+ *   e8d6(workbuf seed) -> b779(rom desc load) -> c17f -> d4c8 -> e4d2 -> cbf8 -> dcb4 -> e06b(0) -> e74e.
+ * Engine bodies (e5b0/e8d6/d4c8/e4d2/cbf8/dcb4/c17f/e74e/rom_load) are byte-true in tree (sb.h /
+ * usb4_lanebond.h). */
+/* skip_lane: when nonzero, OMIT the lane/link-disturbing pieces (the P1[0x1404]/[0x1405] LINK-adapter
+ * RMWs + the e06b(0) lane-mask reg3f CLEAR-path re-apply) that re-drive the just-bonded lanes -> Abr2.
+ * Keeps the transport/control-adapter DESCRIPTOR channel arm (P1[0x124x]/[0x1258]/[0x1802]/[0x1508]
+ * adapter cfg + e5b0/e8d6/rom_load/c17f/d4c8/e4d2/cbf8/dcb4) — the part that brings the in-band config
+ * responder live (so HW can raise EC06.0 on a route=1 read). For testing the Abr2 separation. */
+static void u4lb_b031_transport_reinit(uint8_t skip_lane) {
+  uint8_t a;
+
+  /* b031: P1[0x1406] &= 0xFE */
+  P1_WR(0x1406, (uint8_t)(P1_RD(0x1406) & 0xFE));
+  /* b03f: read P1[0x124d]; a3db -> P1[0x124d] = (A&0xEF)|0x10 */
+  P12_WR(0x4D, (uint8_t)((P12_RD(0x4D) & 0xEF) | 0x10));
+  /* b049: DEC R1 -> 0x124c; read; &0xEF; write */
+  P12_WR(0x4C, (uint8_t)(P12_RD(0x4C) & 0xEF));
+  /* b052: P1[0x124e] = 0x02 */
+  P12_WR(0x4E, 0x02);
+  /* b059: read P1[0x124c]; &0xDF; write */
+  P12_WR(0x4C, (uint8_t)(P12_RD(0x4C) & 0xDF));
+  /* b063: P1[0x124e] = 0x04 */
+  P12_WR(0x4E, 0x04);
+  /* b06a: P1[0x1258] = 0x01 */
+  P12_WR(0x58, 0x01);
+  /* b071: P1[0x1802] staged clears of bits1,2,3,4 (a35f write+readback between masks) */
+  a = (uint8_t)(P1_RD(0x1802) & 0xFD); P1_WR(0x1802, a); a = (uint8_t)(P1_RD(0x1802) & 0xFB);
+  P1_WR(0x1802, a); a = (uint8_t)(P1_RD(0x1802) & 0xF7); P1_WR(0x1802, a);
+  a = (uint8_t)(P1_RD(0x1802) & 0xEF); P1_WR(0x1802, a);
+  if (!skip_lane) {
+    /* b08c: a358(read P1[0x1404], A=(A&0xFD)|2); a3db(A=(A&0xEF)|0x10; write P1[0x1404]) */
+    a = (uint8_t)((P1_RD(0x1404) & 0xFD) | 0x02);
+    a = (uint8_t)((a & 0xEF) | 0x10); P1_WR(0x1404, a);
+  }
+  /* b096: INC R2 -> P1[0x1511] = 0x01 */
+  P1_WR(0x1511, 0x01);
+  if (!skip_lane) {
+    /* b09e: DEC R2 -> P1[0x1404]; read; &0xFD; a35f; &0xEF; write */
+    a = (uint8_t)(P1_RD(0x1404) & 0xFD); P1_WR(0x1404, a);
+    a = (uint8_t)(P1_RD(0x1404) & 0xEF); P1_WR(0x1404, a);
+  }
+  /* b0ae: a358(read P1[0x1802], (A&0xFD)|2); &0xFB; |0x04; a35f; &0xF7; |0x08; a35f; a3db(write P1[0x1802]) */
+  a = (uint8_t)((P1_RD(0x1802) & 0xFD) | 0x02);
+  a = (uint8_t)(((a & 0xFB) | 0x04)); P1_WR(0x1802, a); a = (uint8_t)(P1_RD(0x1802));
+  a = (uint8_t)(((a & 0xF7) | 0x08)); P1_WR(0x1802, a); a = (uint8_t)(P1_RD(0x1802));
+  a = (uint8_t)((a & 0xEF) | 0x10); P1_WR(0x1802, a);
+  if (!skip_lane) {
+    /* b0c6: R2=0x14, INC R1 -> P1[0x1405]; read; &0xFE; a35f; |0x01; write */
+    a = (uint8_t)(P1_RD(0x1405) & 0xFE); P1_WR(0x1405, a);
+    a = (uint8_t)(P1_RD(0x1405) | 0x01); P1_WR(0x1405, a);
+  }
+  /* b0d6: INC R2 -> P1[0x1508] = 0x08 */
+  P1_WR(0x1508, 0x08);
+
+  /* ---- tail (b0de-b101) ---- */
+  /* e711 standalone engine reset: P1[0x1235] = P1[0x1234] & 0xC0; zero engine 0x3C/0x3D */
+  P12_WR(0x35, (uint8_t)(P12_RD(0x34) & 0xC0));
+  P12_WR(0x3C, 0x00); P12_WR(0x3D, 0x00);
+  /* e8cd: zero XDATA 0x0B34..0x0B37 */
+  u4lb_b34_lanemask = 0; u4lb_b35 = 0; u4lb_b36 = 0; u4lb_b37 = 0;
+  u4c_e5b0();                  /* e5b0 descriptor-engine pre-config */
+  u4c_e8d6_seed_workbuf();     /* e8d6 working-buffer seed (0x0994-0x09E3) */
+  sb_rom_descriptor_load();    /* b779 DROM/lane desc load */
+  u4lb_c17f();                 /* c17f width descriptors */
+  u4c_d4c8_edge_engine();      /* d4c8 transport-edge engine */
+  u4c_e4d2_edge();             /* e4d2 edge descriptor */
+  u4c_cbf8_commit();           /* cbf8 2-round commit */
+  u4c_dcb4_transport_reg_reinit(); /* dcb4 + d31e CRC engine */
+  if (!skip_lane) {
+    u4lb_e06b(0);              /* e06b(0): lane-mask reg3f re-apply (DISTURBS lanes) */
+  }
+  u4lb_e74e();                 /* e74e: CCF8/CCF9 demux reset */
+}
+
 /* ee29: stock runs bank0_e8a9(0x0f), then d185 which RELOADS DPTR=0xB402, reads B402, ANDs 0xFE,
  * RETs (DPTR still 0xB402); the following MOVX @DPTR,A (ee31) writes the result BACK TO B402
  * (B402 &= 0xFE, clears B402.0) — it does NOT write CA06. The prior transcription wrongly wrote
@@ -634,6 +732,176 @@ static void u4lb_ee29(void) {
   u4lb_e74e();
   PR(0x0B42) = 0;
   PR(0x0B43) = 0;
+}
+
+/* ===========================================================================================
+ * d855 PCIe-tunnel EVENT dispatch (the C80A.4 -> c105 -> d855 leg handmade previously OMITTED).
+ * RE: bank1 d855 reads P1[0x1508] (d172) and dispatches the HIGHEST set bit:
+ *   1508.4 -> e4ea (Enable)            [d17b(0x10) ack]
+ *   1508.3 -> ee29 (DisPath)           [d17b(0x08) ack]   (u4lb_ee29 already ported)
+ *   1508.2 -> e76b (UPS_Rst_Deassert)  [W1C 1508=0x04, then e76b]
+ *   1508.1 -> ee94 + B402 PERST        [W1C 1508=0x02]   (UPS_Rst_Assert)
+ * These legs DRIVE the tunnel-side PCIe link (PERST deassert + PHY RXPLL re-trigger), which is what
+ * makes the PCIe-DOWN adapter train its width (P1[0x1201] 0->1->2) and raise the width event
+ * (P1[0x1203].7 -> P1[0x1407].0). Handmade's old c105 plain-W1C-drained 1508 WITHOUT running these
+ * legs -> the link never re-drove -> width never walked -> no GPU. Ported byte-true to stock.
+ * =========================================================================================== */
+
+/* d149: P1[0x1235] lane-mask reprogram (RMW &0xC0|3 then &0x3F|0x40), P1[0x1236]=9, P1[0x1237]&=0xE0. */
+static void u4lb_d149(void) {
+  P1_WR(0x1235, (uint8_t)((P1_RD(0x1235) & 0xC0) | 0x03));
+  P1_WR(0x1235, (uint8_t)((P1_RD(0x1235) & 0x3F) | 0x40));
+  P1_WR(0x1236, 0x09);
+  P1_WR(0x1237, (uint8_t)(P1_RD(0x1237) & 0xE0));
+}
+
+/* d1dd: read P1[0x1243] -> this value is ee94's return, the e76b/assert heavy-block gate. */
+static uint8_t u4lb_d1dd(void) { return P1_RD(0x1243); }
+
+/* ee94(arg): d149 lane-mask reprogram, e890(arg) sub-block commit, d1dd -> returns P1[0x1243]. */
+static uint8_t u4lb_ee94(uint8_t arg) {
+  u4lb_d149();
+  u4lb_e890(arg);
+  return u4lb_d1dd();
+}
+
+/* e84d: save B402.1 into af38_t6f0(0x0B44), then write B402 with bit1 cleared to 0x0B44 alias. */
+static void u4lb_e84d(void) {
+  af38_t6f0 = (uint8_t)(REG_PCIE_CTRL_B402 & 0x02);
+  PR(0x0B44) = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);
+}
+/* e85c: if af38_t6f0 was set, restore B402.1 (write (B402&~1)|2 to the 0x0B44 alias). */
+static void u4lb_e85c(void) {
+  if (af38_t6f0) PR(0x0B44) = (uint8_t)((REG_PCIE_CTRL_B402 & 0xFD) | 0x02);
+}
+
+/* e76b: UPS_Rst_Deassert leg (byte-true to bank1 e76b). ee94(4) returns P1[0x1243] = the heavy-block
+ * gate (stock `MOV A,R7; JZ skip`). If non-zero: e84d (save B402.1); d1af reads P1[0x7041] (sets the
+ * live ptr to 0x7041); d1c9 writes (P1[0x7041] & 0xBF) BACK to 0x7041; phy_cc10(1,0,0xCF) wait;
+ * d195 (P1[0x7104] RMW); then if C659.0==0: d185(B402&0xFE)->C659 + print Deassert + C659|=1;
+ * e85c (restore B402.1); print UPS_Rst_Deassert. */
+static void u4lb_e76b(void) {
+  if (u4lb_ee94(0x04) != 0) {
+    uint8_t v;
+    u4lb_e84d();
+    v = (uint8_t)(P1_RD(0x7041) & 0xBF);                 /* d1af read + ANL 0xBF */
+    P1_WR(0x7041, v);                                    /* d1c9: write back to 0x7041 */
+    phy_cc10_cmd_wait(1, 0, 0xCF);                       /* phy_cmd_cc10_and_wait */
+    u4lb_d195();
+    if (!(REG_PCIE_LANE_CTRL_C659 & 0x01)) {
+      REG_PCIE_LANE_CTRL_C659 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);   /* d185 -> C659 */
+      uart_puts("\r\n[PcieTunnel-Deassert]");
+      REG_PCIE_LANE_CTRL_C659 = (uint8_t)((REG_PCIE_CTRL_B402 & 0xFE) | 0x01);
+    }
+    u4lb_e85c();
+    uart_puts("[PcieTunnel-UPS_Rst_Deassert]");
+  }
+}
+
+/* e4ea: Enable leg. if C659.0==0: e26a(0x81,1)+C659 write+print Deassert; d30b(3) [CPU-ext clk];
+ * clear B480 PERST bits 0-3; e9b5 PHY RXPLL re-trigger; print Enable. The B480 PERST deassert +
+ * e9b5 RXPLL trigger DRIVES the tunnel PCIe link up -> adapter width trains. */
+static void u4lb_e9b5(void) {
+  /* e9b5: C808 strobe (d1a8), then RXPLL cfg A/B bit2/3 toggles + RXPLL trigger 4/8. */
+  P1_WR(0x1808, P1_RD(0x1808));                          /* d1a8(0xC808)->plane2 0x1808 dead RMW */
+  REG_PHY_RXPLL_CFG_B = 0xFF;
+  REG_PHY_RXPLL_CFG_A = (uint8_t)((REG_PHY_RXPLL_CFG_A & 0xFB) | 0x04);
+  REG_PHY_RXPLL_CFG_B = (uint8_t)(REG_PHY_RXPLL_CFG_B & 0xFB);
+  REG_PHY_RXPLL_CFG_A = (uint8_t)((REG_PHY_RXPLL_CFG_A & 0xF7) | 0x08);
+  REG_PHY_RXPLL_CFG_B = (uint8_t)(REG_PHY_RXPLL_CFG_B & 0xF7);
+  REG_PHY_RXPLL_TRIGGER = 0x04;
+  REG_PHY_RXPLL_TRIGGER = 0x08;
+}
+static void u4lb_e26a_pwr(uint8_t mode, uint8_t arg);    /* defined below */
+static void u4lb_e4ea(void) {
+  if (!(REG_PCIE_LANE_CTRL_C659 & 0x01)) {
+    u4lb_e26a_pwr(1, 1);                                 /* e26a(0x81,1) -> PwrOn envelope */
+    REG_PCIE_LANE_CTRL_C659 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);   /* d185 -> C659 */
+    uart_puts("\r\n[PcieTunnel-Deassert]");
+  }
+  /* d30b(3): CPU-ext clock divider for tunnel — handmade inlines the param==3 branch:
+   * CPU_EXT_CTRL = (&0xF8)|2; CCFA=3; CCFB=0xE7; CPU_EXT_STATUS=1. (e74e prologue handled by caller.) */
+  u4lb_e74e();
+  REG_CPU_EXT_CTRL = (uint8_t)((REG_CPU_EXT_CTRL & 0xF8) | 0x02);
+  XDATA_REG8(0xCCFA) = 0x03;
+  XDATA_REG8(0xCCFB) = 0xE7;
+  REG_CPU_EXT_STATUS = 0x01;
+  REG_PCIE_PERST_CTRL = (uint8_t)(REG_PCIE_PERST_CTRL & 0xFE);     /* B480 PERST clear bits 0-3 */
+  REG_PCIE_PERST_CTRL = (uint8_t)(REG_PCIE_PERST_CTRL & 0xFD);
+  REG_PCIE_PERST_CTRL = (uint8_t)(REG_PCIE_PERST_CTRL & 0xFB);
+  REG_PCIE_PERST_CTRL = (uint8_t)(REG_PCIE_PERST_CTRL & 0xF7);
+  u4lb_e9b5();
+  uart_puts("[PcieTunnel-Enable]");
+}
+
+/* d90e = usb4_link_phy_reconfig (BANK0, byte-true). The WIDTH-event PHY reconfig that emits the
+ * pre-commit [PcieTunnel-Deassert]. Stock reaches it via a522 (P1[0x1407].0 width event) -> a578
+ * sub-leg -> d90e. Steps (CODE:d90e):
+ *   1) rd SB-engine P1[0x1267]; RMW: (&0xFD|2) write, then (&0xFB) write, then (&0xF7|8) write
+ *      (set bit1=lane-width-go, clear bit2, set bit3=commit on the descriptor-engine plane).
+ *   2) if u4_connect_gate.1: e0d9(3) PHY CDR mode-3 seed (C20E/C20F=0x26, C214=0x26, zeros around).
+ *   3) if (u4_route_mode & 0x81): e9b5() RXPLL re-trigger; B402 &= 0xFE; B402 &= 0xFD; print Deassert.
+ *   4) d30b(1): e74e + CPU-ext clock (CPU_EXT_CTRL(&0xF8)|2, CCFA=3, CCFB=0xE7, CPU_EXT_STATUS=1).
+ * The e9b5 RXPLL re-trigger + B402 PERST clears are the SAME link-safe ops e4ea runs (HW-proven not
+ * to drop the bond at handmade's bonded state). The Deassert is the wire event the TB4 host waits
+ * for before posting its post-CL0 router-op + committing SB[0x66]=01 (Lane Bonded). */
+static void u4lb_e0d9_mode3(void) {
+  /* e0d9(3): bVar1 = 3 & 3 = 3 (nonzero) -> the bVar1!=0 branch:
+   *   zero3(C20E) [C20E=C20F=C210=0]; C20E=0x26; C20F=0x26; zero3(C214); C214=0x26. */
+  REG_PHY_RXPLL_RESET = 0x00; REG_PHY_CTRL_C20F = 0x00; REG_PHY_CDR_SEED_C210 = 0x00;
+  REG_PHY_RXPLL_RESET = 0x26; REG_PHY_CTRL_C20F = 0x26;
+  REG_PHY_CDR_SEED_C214 = 0x00; REG_PHY_CDR_SEED_C215 = 0x00; REG_PHY_CDR_SEED_C216 = 0x00;
+  REG_PHY_CDR_SEED_C214 = 0x26;
+}
+static void u4lb_d90e_link_phy_reconfig(void) {
+  uint8_t v = P1_RD(0x1267);
+  P1_WR(0x1267, (uint8_t)((v & 0xFD) | 0x02));               /* set bit1 */
+  v = P1_RD(0x1267);
+  P1_WR(0x1267, (uint8_t)(v & 0xFB));                        /* clear bit2 */
+  v = P1_RD(0x1267);
+  P1_WR(0x1267, (uint8_t)((v & 0xF7) | 0x08));               /* set bit3 (commit) */
+  if (u4_connect_gate & 0x02) {
+    u4lb_e0d9_mode3();
+  }
+  if (u4_route_mode & 0x81) {
+    u4lb_e9b5();                                             /* RXPLL re-trigger */
+    REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);
+    REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);
+    uart_puts("\r\n\n[PcieTunnel-Deassert]");               /* eec7(1) Deassert print */
+  }
+  /* d30b(1): e74e + CPU-ext clock (same envelope e4ea runs inline). */
+  u4lb_e74e();
+  REG_CPU_EXT_CTRL = (uint8_t)((REG_CPU_EXT_CTRL & 0xF8) | 0x02);
+  XDATA_REG8(0xCCFA) = 0x03;
+  XDATA_REG8(0xCCFB) = 0xE7;
+  REG_CPU_EXT_STATUS = 0x01;
+}
+
+/* d855: tunnel-event dispatch on P1[0x1508] highest set bit (byte-true to bank1 d855). assert=1
+ * runs the 1508.1 UPS_Rst_Assert heavy block (stock's param_5 gate); the bit2/bit4/bit3 legs are
+ * always taken when their bit is set (gated internally on u4_route_mode / ee94 return). */
+static void u4lb_d855(uint8_t assert) {
+  uint8_t p1508 = P1_RD(0x1508);
+  if (p1508 & 0x10) {                       /* 1508.4 -> Enable (e4ea), gated u4_route_mode.0/.7 */
+    if (u4_route_mode & 0x81) { P1_WR(0x1508, 0x10); u4lb_e4ea(); }
+  } else if (p1508 & 0x08) {                 /* 1508.3 -> DisPath (ee29), gated u4_route_mode.0/.7 */
+    if (u4_route_mode & 0x81) { P1_WR(0x1508, 0x08); u4lb_ee29(); uart_puts("[PcieTunnel-DisPath]"); }
+  } else if (p1508 & 0x04) {                 /* 1508.2 -> UPS_Rst_Deassert (e76b) */
+    P1_WR(0x1508, 0x04);
+    u4lb_e76b();
+  } else if (p1508 & 0x02) {                 /* 1508.1 -> UPS_Rst_Assert */
+    P1_WR(0x1508, 0x02);
+    u4lb_ee94(0x02);
+    if (assert) {
+      uint8_t v;
+      REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);   /* B402 &= 0xFD */
+      v = (uint8_t)(P1_RD(0x7041) | 0x40);                /* d1af read + ORL 0x40 */
+      P1_WR(0x7041, v);                                   /* d1c9: write back to 0x7041 */
+      phy_cc10_cmd_wait(1, 0, 0xCF);
+      REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);   /* d185 -> B402 */
+      uart_puts("[PcieTunnel-UPS_Rst_Assert]");
+    }
+  }
 }
 
 /* e26a(1,1): stock calls cdc6(1), then sets C656.5 inside the e305 power-on envelope. */
@@ -920,6 +1188,22 @@ static void u4lb_state4_b0b4(void) {
   /* c593: bank0 tunnel/PHY commit */
   u4lb_c593();
 
+  /* ── PCIe-DOWN tunnel-event AGGREGATION UNMASK (the C80A.4 gate, 2026-06-22) ─────────────
+   * HW-DIFF (c80a4 tracer): at the bond stock reads P1[0x1406]=0x16 / P1[0x1507]=0x61, but
+   * handmade reads 0x1F / 0x7F. The extra-SET bits are MASK bits that BLOCK the per-adapter
+   * P1[0x1508] events from aggregating into P1[0x1407] (and thus into C80A.4). Specifically
+   * P1[0x1406].3 masks the TUNNEL event -> P1[0x1407].3; with it set, handmade's pending
+   * P1[0x1508]=0x06 never raises C80A.4, so c105 never runs and the host never gets the
+   * PcieTunnel-Deassert/Enable that lets it enable the PCIe-DOWN adapter -> no GPU. Stock's
+   * unmask (e72e `P1[0x1406]&=0xF7`, b031 `&=0xFE`) lives in functions handmade omits, so
+   * apply the resulting mask state here, byte-true to stock (0x16 / 0x61). */
+  P1_WR(0x1406, (uint8_t)(P1_RD(0x1406) & 0xF6));     /* clear bits 0,3 -> 0x1F becomes 0x16 */
+  P1_WR(0x1507, (uint8_t)(P1_RD(0x1507) & 0x61));     /* clear bits 1-4 -> 0x7F becomes 0x61 */
+  /* NOTE (2026-06-22): the c593 advertise (P1[0x1335]/0x1206) was HW-TESTED non-causal — forcing
+   * them byte-true to stock (1335=02, 1206=58) did NOT make the host post Enable. They are HW-derived
+   * adapter status (1335 from SB[0x05]=v2805, 1206 has no fw writer). The REAL gate is the
+   * UPS_Rst_Assert leg DROPPING the lane bond (A=0202->0707); see d855/e76b notes below. */
+
   /* L0 OS1 trigger, gated 0x0819.0 */
   if (u4_work_buf[0x19] & 0x01) {
     uart_puts("[L0 OS1]");
@@ -1063,6 +1347,14 @@ static uint8_t u4lb_lane_gate(uint8_t lane) { return (uint8_t)(u4_work_buf[0x19]
 static volatile uint8_t __xdata u4lb_s5_last759, u4lb_s5_last75b, u4lb_s5_seen, u4lb_s5_lasta0;
 static volatile uint8_t __xdata u4lb_s5_last775, u4lb_s5_lastaf38, u4lb_s5_lasttx;
 static volatile uint8_t __xdata u4lb_s5_last75a, u4lb_s5_last75c;   /* lane1 LOOP1/LOOP2 trackers */
+
+/* [clv] cl_idx-pair tracer: dump the host-posted per-lane cl_idx (u4_host_desc[2]/[3] = 0779/077A)
+ * EACH TIME the walker reads a fresh descriptor at LP2_CL_EVAL, change-gated so it fires only when
+ * the (0779,077A) pair changes. Proves whether the host posts a CONSECUTIVE (C,D) pair (stock) or a
+ * desynced pair (handmade). Light: ~30 chars, fires only on cl_idx change (a handful per walk). */
+static volatile uint8_t __xdata __at(0x0B5C) u4lb_clv_last;   /* last (0779<<0)^(077A) sig */
+static volatile uint8_t __xdata __at(0x0B5D) u4lb_clv_seen;
+static volatile uint8_t __xdata __at(0x0B5E) u4lb_clv_budget; /* seeded in main */
 static void u4lb_s5_diag(void) {
   /* LEAN bond window: phywide proved the bond is timing-sensitive to super-loop UART
    * overhead (a heavy super-loop hook broke STOCK's bond at a0=07). The old [s5] line
@@ -1283,6 +1575,9 @@ static void u4lb_walk_8000(void) {
   /* LOOP2: the CL-state walker (state @0x075B+lane). */
   for (lane = 0; lane < 2; lane++) {
     if (!u4lb_lane_gate(lane)) continue;
+    /* CM8-PROBE RESULT (2026-06-20): holding lane1 here did NOT make the host send cm8 (0 [af38-A:cm8]).
+       So the host's cm8-vs-0C decision is NOT the lane bring-up state — it's the device's CAPABILITY
+       ADVERTISEMENT earlier in the connect (the af38 reply to desc_type 01, or the DROM). Reverted. */
     state = lb_loop2_state[lane];
     if (state == LP2_CL_INIT) {
       u4_work_buf[0x1E + lane] |= 0x80;
@@ -1303,6 +1598,18 @@ static void u4lb_walk_8000(void) {
 	      else if (((snap >> 7) & 1) == 0) lb_loop2_state[lane] = LP2_CL_PUSH_WAIT;
 	      else {
           __xdata uint8_t cl_idx = (uint8_t)(snap & 0x0F), cap, cl_cfg_hi = 0, cl_cfg_lo = 0;
+          /* [clv] inline cl_idx-pair tracer (inlined to avoid a new DSEG overlay frame). Fires only
+           * when the (0779,077A) pair changes -> a handful of lines per walk, proving (C,D) vs desync. */
+          { __xdata uint8_t sig = (uint8_t)(u4_host_desc[0x2] ^ (uint8_t)(u4_host_desc[0x3] << 1) ^ u4_work_buf[0x1E] ^ (uint8_t)(u4_work_buf[0x1F] << 1));
+            if (u4lb_clv_budget != 0 && (!u4lb_clv_seen || sig != u4lb_clv_last)) {
+              u4lb_clv_budget--; u4lb_clv_seen = 1; u4lb_clv_last = sig;
+              uart_puts("\r\n[clv L"); uart_putc((char)('0' + lane));
+              uart_puts(" i="); uart_puthex(cl_idx);
+              uart_puts(" 779="); uart_puthex(u4_host_desc[0x2]); uart_puthex(u4_host_desc[0x3]);
+              uart_puts(" 1E="); uart_puthex(u4_work_buf[0x1E]); uart_puthex(u4_work_buf[0x1F]);
+              uart_puts(" 6A="); uart_puthex(SB_RD(0x6A)); uart_puthex(SB_RD(0x6B)); uart_puthex(SB_RD(0x6C)); uart_puthex(SB_RD(0x6D));
+              uart_puts(" 75bc="); uart_puthex(lb_loop2_state[0]); uart_puthex(lb_loop2_state[1]); uart_putc(']');
+            } }
           lb_cl_value[lane] = cl_idx;
           u4_work_buf[0x1E + lane] &= 0xF0;
           u4_work_buf[0x1E + lane] |= cl_idx;

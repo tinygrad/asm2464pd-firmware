@@ -51,7 +51,11 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   C390(0xC21F);
   SB_WR(0x49, 0xA0);
 
-  REG_PHY_LANEA_RATE_START_C2A8 = (REG_PHY_LANEA_RATE_START_C2A8 & 0x3F) | 0x40;
+  /* Stock 8e6f-8e74 (CROSS-REGISTER): C21F = (C2A8 & 0x3F) | 0x40 — c343() reads the lane-A
+   * rate-START register C2A8 (read-only here) and the LOW 6 bits are committed (with bit6 set)
+   * into the PHY link-control register C21F. Handmade previously wrote C2A8 itself (wrong target)
+   * and never set C21F's final value -> lane-A PHY link-ctrl mis-seeded. */
+  REG_PHY_LINK_CTRL_C21F = (REG_PHY_LANEA_RATE_START_C2A8 & 0x3F) | 0x40;
   C34A(0xC2C5);
   REG_PHY_LANEA_C2A1 = (REG_PHY_LANEA_C2A1 & 0x9F) | 0x60;
   C2F8(0xC28C); C2F8(0xC29C); C2F8(0xC2AC);
@@ -69,8 +73,12 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   C2F1(0xC2C5);
   C2FF(0xC293);
   C2BF(0xC2CE);
-  REG_PHY_LANEA_C2CE = (REG_PHY_LANEA_C2CE & 0xE3) | 0x14;
-  REG_PHY_LANEB_RATE_START_C328 = (REG_PHY_LANEB_RATE_START_C328 & 0x3F) | 0x40;
+  /* Stock 8ef9-8f03 (CROSS-REGISTER, via c32d): C2CE first gets the transient (C2CE & 0xE3)|0x14,
+   * then c32d reads the lane-B rate-START register C328 (read-only here) and the caller commits
+   * C2CE = (C328 & 0x3F) | 0x40. Handmade previously left C2CE at the transient value and wrote
+   * C328 itself (stock never writes C328) -> lane-A C2CE CDR-config + lane-B rate-START mis-seeded. */
+  REG_PHY_LANEA_C2CE = (REG_PHY_LANEA_C2CE & 0xE3) | 0x14;        /* stock c32d transient write */
+  REG_PHY_LANEA_C2CE = (REG_PHY_LANEB_RATE_START_C328 & 0x3F) | 0x40;  /* stock 8f03 final commit */
 
   C34A(0xC345);
   REG_PHY_LANEB_C321 = (REG_PHY_LANEB_C321 & 0x9F) | 0x60;
@@ -252,7 +260,10 @@ static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
 /* USB4 CM router-op RX-enable: enables the router-op engine and SB-transport RX. */
 static void usb4_routerop_init(void) {
   REG_ROUTEROP_ENGINE_CTRL_EC00 &= 0xFE;
-  phy_cc10_cmd_wait(0, 9, 0);
+  phy_cc10_cmd_wait(0, 0, 9);   /* BUGFIX 2026-06-19: was (0,9,0) — args swapped. Stock e56f =
+                                 * CC12=0(R4), CC13=9(R5); phy_cc10_cmd writes HI=cc12/LO=cc13.
+                                 * The swap mis-synced the router-op RX engine to the link -> the
+                                 * host's in-band Router-CS read never reached EA80 -> EC06=0. */
   REG_ROUTEROP_ENGINE_CTRL_EC00 = (REG_ROUTEROP_ENGINE_CTRL_EC00 & 0xFE) | 0x01;
   REG_ROUTEROP_SPEED_LO_EA88 = 100;
   REG_ROUTEROP_SPEED_HI_EA89 = 0x24;
