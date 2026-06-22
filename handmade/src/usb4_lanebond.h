@@ -96,10 +96,10 @@ static void u4lb_sb_desc_commit(void) {
 /* e890: select sub-block (reg 0x37 &= 0x7F) + GO + e711 tail. */
 static void u4lb_e890(uint8_t ctrl_low6) {
   uint8_t commit = (uint8_t)(P12_RD(0x37) & 0x7F);
+  (void)ctrl_low6;
   P12_WR(0x37, commit);
   u4lb_engine_go();
   u4lb_e711_tail(commit);
-  (void)ctrl_low6;
 }
 /* e7f8 (cursor-relative; in ce23 R1=0x35): write val to reg 0x35, commit reg0x37 + GO + tail. */
 static void u4lb_e7f8(uint8_t val) {
@@ -702,9 +702,10 @@ static void u4lb_b031_transport_reinit(uint8_t skip_lane) {
   P1_WR(0x1508, 0x08);
 
   /* ---- tail (b0de-b101) ---- */
-  /* e711 standalone engine reset: P1[0x1235] = P1[0x1234] & 0xC0; zero engine 0x3C/0x3D */
-  P12_WR(0x35, (uint8_t)(P12_RD(0x34) & 0xC0));
+  /* e711 standalone engine reset: preserve P1[0x1235].7:6 and clear the 0x123C..0x123F engine latch. */
+  P12_WR(0x35, (uint8_t)(P12_RD(0x35) & 0xC0));
   P12_WR(0x3C, 0x00); P12_WR(0x3D, 0x00);
+  P12_WR(0x3E, 0x00); P12_WR(0x3F, 0x00);
   /* e8cd: zero XDATA 0x0B34..0x0B37 */
   u4lb_b34_lanemask = 0; u4lb_b35 = 0; u4lb_b36 = 0; u4lb_b37 = 0;
   u4c_e5b0();                  /* e5b0 descriptor-engine pre-config */
@@ -764,6 +765,7 @@ static uint8_t u4lb_ee94(uint8_t arg) {
   u4lb_e890(arg);
   return u4lb_d1dd();
 }
+static __xdata uint8_t d855_dbg_budget = 8;
 
 /* e84d: save B402.1 into af38_t6f0(0x0B44), then write B402 with bit1 cleared to 0x0B44 alias. */
 static void u4lb_e84d(void) {
@@ -775,13 +777,20 @@ static void u4lb_e85c(void) {
   if (af38_t6f0) PR(0x0B44) = (uint8_t)((REG_PCIE_CTRL_B402 & 0xFD) | 0x02);
 }
 
-/* e76b: UPS_Rst_Deassert leg (byte-true to bank1 e76b). ee94(4) returns P1[0x1243] = the heavy-block
- * gate (stock `MOV A,R7; JZ skip`). If non-zero: e84d (save B402.1); d1af reads P1[0x7041] (sets the
- * live ptr to 0x7041); d1c9 writes (P1[0x7041] & 0xBF) BACK to 0x7041; phy_cc10(1,0,0xCF) wait;
- * d195 (P1[0x7104] RMW); then if C659.0==0: d185(B402&0xFE)->C659 + print Deassert + C659|=1;
- * e85c (restore B402.1); print UPS_Rst_Deassert. */
+/* e76b: UPS_Rst_Deassert leg (byte-true to bank1 e76b). ee94(4) returns P1[0x1243], the stock body
+ * gate for this leg. Early reset events at A0/A1=07/07 W1C 1508.2 but do not print Deassert; the
+ * post-CL0 Deassert comes from the width-event d8d5/d90e path. */
 static void u4lb_e76b(void) {
-  if (u4lb_ee94(0x04) != 0) {
+  uint8_t gate = u4lb_ee94(0x04);
+  if (d855_dbg_budget) {
+    d855_dbg_budget--;
+    uart_puts("\r\n[e76b gate="); uart_puthex(gate);
+    uart_puts(" 1243="); uart_puthex(P1_RD(0x1243));
+    uart_puts(" 1267="); uart_puthex(P1_RD(0x1267));
+    uart_puts(" 1508="); uart_puthex(P1_RD(0x1508));
+    uart_putc(']');
+  }
+  if (gate != 0) {
     uint8_t v;
     u4lb_e84d();
     v = (uint8_t)(P1_RD(0x7041) & 0xBF);                 /* d1af read + ANL 0xBF */
@@ -890,8 +899,17 @@ static void u4lb_d855(uint8_t assert) {
     P1_WR(0x1508, 0x04);
     u4lb_e76b();
   } else if (p1508 & 0x02) {                 /* 1508.1 -> UPS_Rst_Assert */
+    uint8_t gate2;
     P1_WR(0x1508, 0x02);
-    u4lb_ee94(0x02);
+    gate2 = u4lb_ee94(0x02);
+    if (d855_dbg_budget) {
+      d855_dbg_budget--;
+      uart_puts("\r\n[d855 assert gate="); uart_puthex(gate2);
+      uart_puts(" 1243="); uart_puthex(P1_RD(0x1243));
+      uart_puts(" 1267="); uart_puthex(P1_RD(0x1267));
+      uart_puts(" 1508="); uart_puthex(P1_RD(0x1508));
+      uart_putc(']');
+    }
     if (assert) {
       uint8_t v;
       REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);   /* B402 &= 0xFD */
@@ -1061,6 +1079,8 @@ static void u4lb_c593(void) {
   P1_WR(0x1335, (uint8_t)((v & 0xFB) | 0x04));
   P1_WR(0x1334, (uint8_t)((P1_RD(0x1334) & 0x7F) | 0x80));
   P1_WR(0x1285, (uint8_t)((P1_RD(0x1285) & 0x0F) | 0x30));
+  P1_WR(0x1335, 0x02);
+  P1_WR(0x1206, 0x58);
 }
 
 /* b8db: CDR/PLL validate loop. A prologue early-returns in the already-locked cases and otherwise
@@ -1278,7 +1298,7 @@ static void u4lb_e1cb_e2b9(uint8_t is_e1cb) {
   else
     SB_WR(0x15, sb_tx_cmd);                            /* e2b9 96f7: SB[0x15]=byte0 */
   u4lb_d5da(0);                                        /* d5da(0) TX trigger */
-  /* 97ef tail: CCD9 strobe (4,2); stock then DEC A and writes CCD9=1 and 0x0719=1. */
+  /* 97ef tail: CCD9 strobe (4,2); handmade keeps the legacy 1 strobe because removing it stalls TX completion. */
   REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02; REG_XFER2_DMA_STATUS = 0x01;
   e461_inflight_token = 0x01;                          /* 0x0719 = 1 */
 }

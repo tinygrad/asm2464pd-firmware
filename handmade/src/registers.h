@@ -942,6 +942,14 @@
 /* Config Read/Write Type 1 (forwarded by bridges to downstream bus) */
 #define   PCIE_FMT_CFG_READ_1     0x05  /* CfgRd1: 3DW header, no data */
 #define   PCIE_FMT_CFG_WRITE_1    0x45  /* CfgWr1: 3DW header, with data */
+/*
+ * PCIe TLP Control (0xB213)
+ *
+ * Stock's software TLP issuer writes 0x01 here before kicking the request
+ * status/trigger registers. Keep this latched when issuing config or memory
+ * TLPs through the firmware control path; otherwise config reads can return
+ * stale data or Unsupported Request even when the PCIe tunnel itself is up.
+ */
 #define REG_PCIE_TLP_CTRL       XDATA_REG8V(0xB213)
 #define REG_PCIE_TLP_LENGTH     XDATA_REG8V(0xB216)
 #define REG_PCIE_BYTE_EN        XDATA_REG8V(0xB217)
@@ -1110,7 +1118,7 @@
 #define REG_TUNNEL_LINK_STATUS  XDATA_REG8(0xB431)  // Tunnel link training status (stock=0x0C when trained)
 #define   PCIE_LINK_WIDTH_x2    0xC
 #define   PCIE_LINK_WIDTH_x1    0xE
-#define REG_POWER_CTRL_B432     XDATA_REG8(0xB432)  // Power control for lanes (low 3 bits = link width)
+#define REG_POWER_CTRL_B432     XDATA_REG8(0xB432)  // Low bits reach 0x07 once the USB4 PCIe-down path is powered
 #define REG_TUNNEL_CTRL_B403    XDATA_REG8(0xB403)  // Tunnel control (stock=0x01 when trained, set by PHY events)
 #define REG_PCIE_LINK_STATE     XDATA_REG8(0xB434)  // PCIe link state (low nibble = lane enable mask)
 #define   PCIE_LINK_STATE_MASK    0x0F  // Bits 0-3: PCIe link state/lane mask
@@ -1131,9 +1139,15 @@
  *   0x48 = L0 (link trained, normal operation) — observed on ASMedia 174C:2463 stock
  *   0x78 = L0 (link trained) — observed on tinygrad ADD1:0001 stock
  *
- * B450 oscillating between 0x00 and 0x01 means the PHY detects receiver
- * impedance (GPU present) but cannot advance to Polling. This indicates
- * a PHY configuration or power issue, not a missing device.
+ * Important USB4 note:
+ *   B450 is the local downstream PHY LTSSM. With the GPU tunneled over USB4,
+ *   the host can enumerate the GPU in lspci while B450 still reads 0x00/0x01.
+ *   Use host lspci/tbtunnels or the USB4 adapter state as the ground truth for
+ *   the tunneled GPU path; do not require B450==0x78 for DEV=AMD over PCIe.
+ *
+ * B450 oscillating between 0x00 and 0x01 means the local PHY detects receiver
+ * impedance (GPU present) but cannot advance to Polling. In non-USB4 direct
+ * PCIe mode this indicates a PHY configuration or power issue.
  */
 #define REG_PCIE_LTSSM_STATE    XDATA_REG8(0xB450)
 #define   LTSSM_DETECT_QUIET      0x00

@@ -646,6 +646,46 @@ static void u4c_ccb3(uint8_t width_byte) {
   }
 }
 
+/* bbc7 (stock CODE:bbc7): populate the sb_eng_data* DROM descriptor cells (0x0B12-0x0B1A) the host CM
+ * reads back via u4c_c270's three sub-descriptors. Stock runs this in the cap-apply tail (bank0_8d77).
+ * Handmade NEVER wrote these cells -> the connect DROM advertised 0x00 where stock advertises VID 0x174C
+ * (sb_eng_data_lo/hi = 0x4C/0x17) -> the host CM's descriptor read-back diverged. Found via the
+ * DMA/static-data audit (2026-06-22, emulate/diff_trace.py + Ghidra). bc70/bcb8 = nibble-swap helpers
+ * over the SPI-blob bytes 0x0A3C-0x0A41; with NO SPI blob (our case, byte-true to fw_tinygrad.bin where
+ * 0x707e!=0xA5) those inputs are 0, so every nibble-derived field computes to 0 and only the hardcoded
+ * VID (0x4C/0x17) and the runtime u4lb_width_rate_code (3c_b) are non-zero. Byte-true to stock. */
+/* nibble accumulator (stock xdata_00a5b) + the bc70/bcb8 helpers kept in __xdata to avoid the IRAM
+ * ceiling (this call tree is reachable from the connect path; SDCC can't overlay IRAM locals here). */
+static volatile uint8_t __xdata bbc7_a5b;
+static uint8_t bbc7_bc70(uint16_t addr) {
+  uint8_t code = XDATA_REG8(addr);
+  uint8_t hi = (uint8_t)(code >> 4);
+  u4lb_width_rate_code = (uint8_t)(((uint8_t)(hi | (uint8_t)(code << 4))) ^ hi);
+  bbc7_a5b = (uint8_t)((uint8_t)(bbc7_a5b << 4) | hi);
+  return bbc7_a5b;
+}
+static uint8_t bbc7_bcb8(uint16_t addr) {
+  return (uint8_t)(u4lb_width_rate_code | (uint8_t)(XDATA_REG8(addr) >> 4));
+}
+static void sb_eng_data_init_bbc7(void) {
+  uint8_t i;
+  /* zero the 9 SB engine descriptor bytes 0x12-0x1A (stock r3_write_dispatch loop) */
+  for (i = 0; i < 9; i++) P12_WR((uint8_t)(0x12 + i), 0x00);
+  /* xdata_00b12: width-class marker keyed on 0x09F7 */
+  i = XDATA_REG8V(0x09F7);
+  XDATA_REG8(0x0B12) = (i == 0) ? 0x0C : (i == 1) ? 0x1C : 0x00;
+  sb_eng_data_hi = 0x17; sb_eng_data_lo = 0x4C;            /* TBT VID 0x174C */
+  bbc7_a5b = XDATA_REG8(0x0A41);
+  sb_eng_data3d_a = bbc7_bc70(0x0A40);
+  sb_eng_data3c_a = bbc7_bcb8(0x0A3F);
+  bbc7_a5b = 0;
+  sb_eng_data3f_b = bbc7_bc70(0x0A3E);
+  sb_eng_data3e_b = bbc7_bcb8(0x0A3D);
+  bbc7_a5b = 0;
+  sb_eng_data3d_b = bbc7_bc70(0x0A3C);
+  sb_eng_data3c_b = u4lb_width_rate_code;
+}
+
 /* DROM PID descriptors: three descriptors the host CM reads back. */
 static void u4c_c270(uint8_t width_byte) {
   (void)P12_RD(0x34);
@@ -721,6 +761,8 @@ static void sb_assert(void) {
 
   u4_lane_gate_sel = 0x02;
   u4c_ccb3(0x81);
+  sb_eng_data_init_bbc7();   /* stock cap-apply tail: seed sb_eng_data* (VID 0x174C etc.) BEFORE the
+                              * c270 DROM build so the host CM reads back stock-true descriptors */
   u4c_c270(0x81);
   u4c_d556();
   pd_cm_dispatch_sel = 0;

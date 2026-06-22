@@ -18,8 +18,16 @@ __sfr __at(0x88) TCON;
 #define IE_ET0  0x02
 #define IE_EX0  0x01
 
+/* ISR-UART MUTE (2026-06-22 timing experiment): when set, uart_putc returns IMMEDIATELY (no FIFO
+ * spin, no THR write). Set at INT1/INT0 ISR entry, cleared at exit, so EVERY UART call in the ISR
+ * call tree (af38 [a5]/[cmd], eaac, c105, EC06, sb_router [CLW]/[SFR]/Lane-Bonded) costs ~0 cycles
+ * instead of blocking ~250 chars * char-time per CL-walk descriptor exchange. Tests whether the
+ * SDCC-ISR's heavy blocking-UART critical path misses the host's lane-bond CL-walk response window.
+ * Default 0; set 1 in main() to enable for the experiment. */
+volatile __xdata uint8_t isr_uart_mute_arm;   /* master enable (set in main) */
+volatile __xdata uint8_t isr_in_ctx;          /* live: inside an ISR right now (mute UART) */
 /* Blocking UART putc with a bounded spin so a wedged UART can't hang the CPU. */
-void uart_putc(uint8_t ch) { uint16_t g = 0; while (!REG_UART_TFBF && ++g < 0x8000) { } REG_UART_THR = ch; }
+void uart_putc(uint8_t ch) { uint16_t g = 0; if (isr_in_ctx) return; while (!REG_UART_TFBF && ++g < 0x8000) { } REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {
   static __code const char hex[] = "0123456789ABCDEF";
@@ -137,6 +145,27 @@ static void pcie_power_on(void) {
   led_set_rgb(!link_up, link_up, false);
 }
 
+/* Stock bank0_d127: initialize the PCIe TLP DMA ring and CPU-link event path.
+ * Stock runs this immediately after pcie_tunnel_adapter_enable_b401() during boot. */
+static void pcie_dma_ring_init_d127(void) {
+  REG_PCIE_DMA_SIZE_A = 0x08;
+  REG_PCIE_DMA_SIZE_B = 0x00;
+  REG_PCIE_DMA_SIZE_C = 0x08;
+  REG_PCIE_DMA_SIZE_D = 0x08;
+  REG_PCIE_DMA_BUF_A = 0x08;
+  REG_PCIE_DMA_BUF_B = 0x20;
+  REG_PCIE_DMA_BUF_C = 0x08;
+  REG_PCIE_DMA_BUF_D = 0x28;
+  REG_PCIE_DMA_CFG_50 = 0x00;
+  REG_PCIE_DOORBELL_CMD = 0x00;
+  REG_CPU_LINK_CEF3 = CPU_LINK_CEF3_ACTIVE;
+  REG_CPU_LINK_CEF2 = CPU_LINK_CEF2_READY;
+  REG_CPU_LINK_CEF0 = (uint8_t)(REG_CPU_LINK_CEF0 & 0xF7);
+  REG_CPU_LINK_CEEF = (uint8_t)(REG_CPU_LINK_CEEF & 0x7F);
+  REG_INT_DMA_CTRL = (uint8_t)((REG_INT_DMA_CTRL & 0xFB) | 0x04);
+  REG_PCIE_DMA_CTRL_B281 = (uint8_t)((REG_PCIE_DMA_CTRL_B281 & 0xCF) | 0x10);
+}
+
 static void do_usb_bulk_in(void) {
   uint16_t max_dwords = is_usb2 ? (512/4) : (1024/4);
   uint16_t chunk = (dma_dwords > max_dwords) ? max_dwords : (uint16_t)dma_dwords;
@@ -213,9 +242,8 @@ static void handle_usb_control(void) {
       uint16_t vi;
       for (vi = 0; vi < rlen; vi++) {
         if (bank) DPX = bank;
-        uint8_t val = XDATA_REG8(addr + vi);
+        DESC_BUF[vi] = XDATA_REG8(addr + vi);
         if (bank) DPX = 0x00;
-        DESC_BUF[vi] = val;
       }
       usb_send_data(rlen);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE5) {
@@ -299,8 +327,6 @@ static void handle_usb_control(void) {
       /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (addr-lo, addr-hi, value, all LE). */
       uint8_t fmt_type = REG_USB_SETUP_WVAL_L;
       uint8_t byte_en  = REG_USB_SETUP_WVAL_H;
-      uint8_t widx_l   = REG_USB_SETUP_WIDX_L;
-      uint8_t mode  = widx_l & 0x03;
 
       dma_dwords = 0;
 
@@ -315,7 +341,7 @@ static void handle_usb_control(void) {
       REG_PCIE_ADDR_HIGH_2 = DESC_BUF[5];
       REG_PCIE_ADDR_HIGH_3 = DESC_BUF[4];
 
-      if (mode == 0) {
+      if ((REG_USB_SETUP_WIDX_L & 0x03) == 0) {
         /* Single TLP: fire with data from DESC_BUF[8-11] (LE). */
         if (fmt_type & PCIE_FMT_HAS_DATA) {
           REG_PCIE_DATA_3 = DESC_BUF[8];
@@ -323,6 +349,7 @@ static void handle_usb_control(void) {
           REG_PCIE_DATA_1 = DESC_BUF[10];
           REG_PCIE_DATA_0 = DESC_BUF[11];
         }
+        REG_PCIE_TLP_CTRL = 0x01;
         REG_PCIE_STATUS  = PCIE_STATUS_ERROR;
         REG_PCIE_STATUS  = PCIE_STATUS_COMPLETE;
         REG_PCIE_STATUS  = PCIE_STATUS_KICK;
@@ -332,11 +359,11 @@ static void handle_usb_control(void) {
         dma_dwords = ((uint32_t)DESC_BUF[11] << 24) | ((uint32_t)DESC_BUF[10] << 16) |
                      ((uint32_t)DESC_BUF[9] << 8) | DESC_BUF[8];
         if (dma_dwords > 0) {
-          if (mode == 1) {
+          if ((REG_USB_SETUP_WIDX_L & 0x03) == 1) {
             // host to device, we arm the OUT endpoint
             REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
           }
-          if (mode == 2) {
+          if ((REG_USB_SETUP_WIDX_L & 0x03) == 2) {
             // device to host, we do the first IN
             do_usb_bulk_in();
           }
@@ -387,8 +414,69 @@ static volatile uint8_t __xdata isr_dbg_budget, isr_dbg_budget2, isr_dbg_budget3
  * (enabled, byte-true to stock). Set 0 in main() for a HW A/B if the bond regresses. */
 static volatile uint8_t __xdata reservice_enable;
 
+static __xdata uint8_t wseq_lwsig = 0xFF, wseq_lwseen, wseq_lwbud;
+static __xdata uint8_t wseq_sig_cur, wseq_e710, wseq_p1201, wseq_p1203, wseq_p1407;
+static __xdata uint8_t wseq_sa0, wseq_sa1, wseq_h2, wseq_h3, wseq_w1e, wseq_w1f, wseq_l2a, wseq_l2b;
+static void debug_wseq_tick(void) {
+#if 0
+  if (wseq_lwbud == 0) return;
+  wseq_e710 = REG_LINK_WIDTH_E710;
+  wseq_p1201 = P1_RD(0x1201);
+  wseq_p1203 = P1_RD(0x1203);
+  wseq_p1407 = P1_RD(0x1407);
+  wseq_sa0 = SB_RD(0xA0);
+  wseq_sa1 = SB_RD(0xA1);
+  wseq_h2 = u4_host_desc[0x02];
+  wseq_h3 = u4_host_desc[0x03];
+  wseq_w1e = u4_work_buf[0x1E];
+  wseq_w1f = u4_work_buf[0x1F];
+  wseq_l2a = lb_loop2_state[0];
+  wseq_l2b = lb_loop2_state[1];
+  wseq_sig_cur = (uint8_t)(wseq_e710 & 0x0F);
+  wseq_sig_cur ^= (uint8_t)(wseq_p1201 << 4);
+  wseq_sig_cur ^= wseq_p1407;
+  wseq_sig_cur ^= wseq_p1203;
+  wseq_sig_cur ^= wseq_h2;
+  wseq_sig_cur ^= (uint8_t)(wseq_h3 << 1);
+  wseq_sig_cur ^= wseq_w1e;
+  wseq_sig_cur ^= (uint8_t)(wseq_w1f << 1);
+  wseq_sig_cur ^= wseq_l2a;
+  wseq_sig_cur ^= (uint8_t)(wseq_l2b << 1);
+  wseq_sig_cur ^= (uint8_t)(wseq_sa0 << 2);
+  wseq_sig_cur ^= (uint8_t)(wseq_sa1 << 5);
+  if (wseq_lwseen && wseq_sig_cur == wseq_lwsig) return;
+  wseq_lwseen = 1;
+  wseq_lwsig = wseq_sig_cur;
+  wseq_lwbud--;
+  uart_puts("\r\n[wseq E710="); uart_puthex(wseq_e710);
+  uart_puts(" 1201="); uart_puthex(wseq_p1201);
+  uart_puts(" 1203="); uart_puthex(wseq_p1203);
+  uart_puts(" 1407="); uart_puthex(wseq_p1407);
+  uart_puts(" 819="); uart_puthex(XDATA_REG8V(0x0819)); uart_puthex(XDATA_REG8V(0x081A));
+  uart_puts(" 77A="); uart_puthex(XDATA_REG8V(0x077A));
+  uart_puts(" 1603="); uart_puthex(P1_RD(0x1603));
+  uart_puts(" CA06="); uart_puthex(XDATA_REG8V(0xCA06));
+  uart_puts(" E302="); uart_puthex(REG_PHY_MODE_E302);
+  uart_puts(" A0="); uart_puthex(wseq_sa0); uart_puts(" A1="); uart_puthex(wseq_sa1);
+  uart_puts(" 9E="); uart_puthex(SB_RD(0x9E)); uart_puts(" 66="); uart_puthex(SB_RD(0x66));
+  uart_puts(" 2a="); uart_puthex(P1_RD(0x2A02)); uart_puthex(P1_RD(0x2A03));
+  uart_puthex(P1_RD(0x2A04)); uart_puthex(P1_RD(0x2A05));
+  uart_puts(" 2b="); uart_puthex(P1_RD(0x2B02)); uart_puthex(P1_RD(0x2B03));
+  uart_puthex(P1_RD(0x2B04)); uart_puthex(P1_RD(0x2B05));
+  uart_puts(" 6A="); uart_puthex(SB_RD(0x6A)); uart_puthex(SB_RD(0x6B));
+  uart_puthex(SB_RD(0x6C)); uart_puthex(SB_RD(0x6D));
+  uart_puts(" w1C="); uart_puthex(u4_work_buf[0x1C]); uart_puthex(u4_work_buf[0x1D]);
+  uart_puthex(wseq_w1e); uart_puthex(wseq_w1f);
+  uart_puts(" 779="); uart_puthex(wseq_h2); uart_puthex(wseq_h3);
+  uart_puts(" 719="); uart_puthex(e461_inflight_token);
+  uart_puts(" 75b="); uart_puthex(wseq_l2a); uart_puthex(wseq_l2b);
+  uart_putc(']');
+#endif
+}
+
 void int0_isr(void) __interrupt(0) {
   uint8_t int0_type = REG_INT_USB_STATUS;
+  if (isr_uart_mute_arm) isr_in_ctx = 1;
   if (int0_type & INT_USB_GATE) {
     uint8_t periph_status;
     periph_status = REG_USB_PERIPH_STATUS;
@@ -472,11 +560,13 @@ void int0_isr(void) __interrupt(0) {
     uart_puthex(int0_type);
     uart_puts("]\n");
   }
+  isr_in_ctx = 0;
 }
 
 /* INT1 / EX1: the PD / USB4 / system interrupt aggregate (C806/C80A/EC06). */
 void int1_isr(void) __interrupt(1) {
   uint8_t saved_dpx = DPX;
+  if (isr_uart_mute_arm) isr_in_ctx = 1;
   DPX = 0x00;
   if (isr_dbg_budget && XDATA_REG8V(0x06ED) == 5) { isr_dbg_budget--; uart_putc('I'); }
   if (REG_INT_SYSTEM & 0x01) cc_pd_timer_tick();
@@ -487,6 +577,7 @@ void int1_isr(void) __interrupt(1) {
   if (XDATA_REG8V(0x09F9) & 0x83) usb4_int_demux();
   if (REG_INT_SYSTEM & 0x10) { /* C806.4 ack-only (no-op) */ }
   DPX = saved_dpx;
+  isr_in_ctx = 0;
 }
 
 void main(void) {
@@ -541,6 +632,7 @@ void main(void) {
   // PCIe to the GPU. Stock runs this at boot (before the mode decision); pcie_power_on (after the
   // bond) is the runtime tunnel-up that deasserts PERST and completes the link — keep both.
   pcie_tunnel_adapter_enable_b401();
+  pcie_dma_ring_init_d127();
 
   // Stock boot_hw_init_main "main step 6" runs bank0_de16 (= handmade u4lb_e96c) UNCONDITIONALLY at
   // boot, in sequence after bank0_8d77 and before the PHY-ready gate / mode decision. It zeroes the
@@ -588,13 +680,17 @@ void main(void) {
   // bit — without it the host's post-bond Router-CS read never reaches the device mailbox (EC06=0).
   REG_INT_ENABLE = (uint8_t)((REG_INT_ENABLE & 0xBF) | 0x40);
 
-  // SFR-DIFF FIX (2026-06-20): C809 (REG_INT_CTRL) bit1 = stock 0x2A vs handmade 0x28 at the bond.
-  // Stock sets C809 bit1 via bank0_d894 (`C809 = (C809&0xFD)|0x02`) AND bank0_b031->dcb4 (same write),
-  // run at BOOT in stock's 2f80 control-adapter init. Handmade has the write in u4c_dcb4_transport_reg_
-  // reinit (sb.h:544) but never CALLS dcb4 (it's bundled in the bond-disturbing b031, which handmade
-  // can't run at bond-complete). The C809 bit1 set is an isolated interrupt-enable; safe to apply at
-  // boot (stock's d894 timing) WITHOUT b031's destabilizing transport reinit. Byte-true to d894/dcb4.
+  // d894 boot tail. Disassembly says:
+  // P1[0000]&=~2; C809|=2; b031(); P1[1602]&=~1; P1[1603]=1; P1[1602]&=~2; P1[1603]=2; P1[121E]|=1.
+  // The old 0x1604 notes were decompiler artefacts; the byte listing addresses this as 0x1602/0x1603.
+  P1_WR(0x0000, (uint8_t)(P1_RD(0x0000) & 0xFD));
   REG_INT_CTRL = (uint8_t)((REG_INT_CTRL & 0xFD) | 0x02);
+  u4lb_b031_transport_reinit(0);
+  P1_WR(0x1602, (uint8_t)(P1_RD(0x1602) & 0xFE));
+  P1_WR(0x1603, 0x01);
+  P1_WR(0x1602, (uint8_t)(P1_RD(0x1602) & 0xFD));
+  P1_WR(0x1603, 0x02);
+  P1_WR(0x121E, (uint8_t)(P1_RD(0x121E) | 0x01));
 
   // USB4 CM router-op RX-enable so the host's router-op queries are received.
   if (XDATA_REG8V(0x09F9) & 0x81) {
@@ -611,7 +707,8 @@ void main(void) {
   // by c8c7 only (not firmware-writable; confirmed: direct writes + d894-at-boot both fail to make it
   // stick). See project_inband_routercs_read_wall.md.
 
-  // USB-mode fork: skip the USB3 device engine in USB4 mode (it would abandon USB4).
+  // USB-mode fork: skip the USB3 device engine in USB4 mode. The GPU path is the USB4 PCIe tunnel;
+  // tinygrad should use the lspci-backed AMD path, not the ADD1:0001 USB transport.
   if (XDATA_REG8V(0x09F9) & 0x83) {
     uart_puts("[USB4 mode: skip USB3 device bring-up]\n");
   } else {
@@ -619,8 +716,8 @@ void main(void) {
     usb_init_controller(0);
   }
 
-  // Zero the USB4 router-op mailbox and SB-router active-port index before any USB4 INT.
-  { uint8_t z; for (z = 0; z <= (0x0B1F - 0x0B02); z++) XDATA_REG8V(0x0B02 + z) = 0; }
+  // Zero only the USB4 router-op mailbox scratch. 0x0B12+ holds SB transport state that b031 seeds.
+  { uint8_t z; for (z = 0; z <= (0x0B11 - 0x0B02); z++) XDATA_REG8V(0x0B02 + z) = 0; }
   XDATA_REG8V(0x06F1) = 0;
   // SB-router route-up / lane-bonded / per-lane CL0 / transport-substate latches.
   XDATA_REG8V(0x0766) = 0; XDATA_REG8V(0x072D) = 0;
@@ -638,16 +735,26 @@ void main(void) {
 
   // Seed the XDATA scratch flags/budgets (crt0 only zeroes IRAM, not XDATA).
   { uint8_t z; for (z = 0; z <= (0x0B58 - 0x0B45); z++) XDATA_REG8V(0x0B45 + z) = 0; }
-  sb_con_print_budget = 6;
-  af38_s3_budget = 30;
-  af38_s5_budget = 40;
-  c105_fire_bdg = 12;
-  u4lb_edf5_print_budget = 40;
-  u4lb_s5_print_budget = 60;
-  u4lb_clv_budget = 40; u4lb_clv_seen = 0; u4lb_clv_last = 0;
-  isr_dbg_budget = 20; isr_dbg_budget2 = 20; isr_dbg_budget3 = 20;
+  sb_con_print_budget = 0;
+  af38_s3_budget = 0;
+  af38_s5_budget = 0;
+  c105_fire_bdg = 8;
+  u4lb_edf5_print_budget = 0;
+  u4lb_s5_print_budget = 0;
+  u4lb_clv_budget = 0; u4lb_clv_seen = 0; u4lb_clv_last = 0;
+  isr_dbg_budget = 0; isr_dbg_budget2 = 0; isr_dbg_budget3 = 0;
+  isr_uart_mute_arm = 0;  /* ISR-UART MUTE TOOL (2026-06-22 timing experiment): when 1, silences ALL
+                           * ISR-path UART (no FIFO blocking) so the INT1 connect/lane-bond critical
+                           * path runs at near-stock cycle cost. HW-TESTED 1->0: removing ~185-1477ms
+                           * of per-bond-window ISR-UART blocking (a single [a5] dump = ~2.7-21.7ms in
+                           * one ISR call) is BOND-SAFE (CL0/CL0 deterministic) but route=1 STILL -110
+                           * (kprobe tb_cfg_get_upstream_port=0xffffff92, 2 clean runs) -> GPU absent.
+                           * TIMING RULED OUT as the route=1 wall. Default 0 (keep connect-window UART
+                           * diagnostics); set 1 to re-run the silent-ISR timing A/B. */
   reservice_enable = 1;   /* steady-state c7a5->d7cd->c35b re-run (byte-true to stock; A/B toggle) */
-  tup_e52d_done = 0; tup_dbg_budget = 4; tup_b031_enable = 0; tup_arm_mode = 0;  /* mode 4 = force e4ea Enable leg (REFUTED: 1407 stays 00, route=1 still -110, bond-safe) */
+  d855_dbg_budget = 8;
+  wseq_lwsig = 0xFF; wseq_lwseen = 0; wseq_lwbud = 0;
+  tup_e52d_done = 0; tup_dbg_budget = 4; tup_b031_enable = 0; tup_arm_mode = 0;
   /* ring_log.h init (crt0 does NOT zero XDATA). Disarmed until the connect edge arms it. */
   rl_armed = 0; rl_dumped = 0; rl_idx = 0; rl_wrapped = 0; rl_seq = 0; rl_lean = 0;
   u4lb_s5_seen = 0; u4lb_s5_last759 = 0; u4lb_s5_last75b = 0;
@@ -807,31 +914,7 @@ void main(void) {
         uart_puts(" A0="); uart_puthex(SB_RD(0xA0)); uart_putc(']');
       } }
 
-    // WIDTH-TRANSITION timeline (2026-06-22): byte-comparable to stock app/patch_stock_widthseq.py.
-    // The stock-vs-handmade discriminator: does P1[0x1201] WALK 00->01->02 (the HW 1->2 width
-    // transition that raises P1[0x1407].0 + P1[0x1203].7), or stay frozen at 00? Change-gated on the
-    // same composite (E710,1201,1407,A0,A1) signature so it prints one line per distinct width state.
-    { static __xdata uint8_t lwsig = 0xFF, lwseen = 0, lwbud = 120;
-      uint8_t e710 = REG_LINK_WIDTH_E710;
-      uint8_t p1201 = P1_RD(0x1201), p1407 = P1_RD(0x1407);
-      uint8_t sa0 = SB_RD(0xA0), sa1 = SB_RD(0xA1);
-      uint8_t sig = (uint8_t)((e710 & 0x0F) ^ (uint8_t)(p1201 << 4) ^ p1407
-                              ^ (uint8_t)(sa0 << 2) ^ (uint8_t)(sa1 << 5));
-      if (lwbud && (!lwseen || sig != lwsig)) {
-        lwseen = 1; lwsig = sig; lwbud--;
-        uart_puts("\r\n[wseq E710="); uart_puthex(e710);
-        uart_puts(" 1201="); uart_puthex(p1201);
-        uart_puts(" 1203="); uart_puthex(P1_RD(0x1203));
-        uart_puts(" 1407="); uart_puthex(p1407);
-        uart_puts(" 819="); uart_puthex(XDATA_REG8V(0x0819)); uart_puthex(XDATA_REG8V(0x081A));
-        uart_puts(" 77A="); uart_puthex(XDATA_REG8V(0x077A));
-        uart_puts(" 1603="); uart_puthex(P1_RD(0x1603));
-        uart_puts(" CA06="); uart_puthex(XDATA_REG8V(0xCA06));
-        uart_puts(" E302="); uart_puthex(REG_PHY_MODE_E302);
-        uart_puts(" A0="); uart_puthex(sa0); uart_puts(" A1="); uart_puthex(sa1);
-        uart_puts(" 9E="); uart_puthex(SB_RD(0x9E)); uart_puts(" 66="); uart_puthex(SB_RD(0x66));
-        uart_putc(']');
-      } }
+    debug_wseq_tick();
 
     // PER-LANE PHY LOCK time-series: RESULT (2026-06-22, agent14, HW-captured both fw + stock RE).
     // The decisive unmeasured mechanism was per-lane PLL/CDR LOCK TIMING during training (does
@@ -903,6 +986,20 @@ void main(void) {
           uart_puts(" 1203="); uart_puthex(P1_RD(0x1203));
           uart_puts(" E763="); uart_puthex(REG_PHY_RXPLL_TRIGGER);
           uart_puts(" A0="); uart_puthex(SB_RD(0xA0)); uart_putc(']');
+        } else if (tup_arm_mode == 5) {
+          uart_puts("\r\n[FORCE-d90e pre 1407="); uart_puthex(P1_RD(0x1407));
+          uart_puts(" 1201="); uart_puthex(P1_RD(0x1201));
+          uart_puts(" 1203="); uart_puthex(P1_RD(0x1203));
+          uart_puts(" B402="); uart_puthex(REG_PCIE_CTRL_B402);
+          uart_puts(" C659="); uart_puthex(REG_PCIE_LANE_CTRL_C659);
+          uart_putc(']');
+          u4lb_d90e_link_phy_reconfig();
+          uart_puts("\r\n[FORCE-d90e post 1407="); uart_puthex(P1_RD(0x1407));
+          uart_puts(" 1201="); uart_puthex(P1_RD(0x1201));
+          uart_puts(" 1203="); uart_puthex(P1_RD(0x1203));
+          uart_puts(" B402="); uart_puthex(REG_PCIE_CTRL_B402);
+          uart_puts(" C659="); uart_puthex(REG_PCIE_LANE_CTRL_C659);
+          uart_putc(']');
         }
       }
     }

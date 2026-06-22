@@ -54,10 +54,10 @@ static void sb_eaac_populate_0777(void) {
   for (i = 0; i < 0x40; i++) {
     u4_host_desc[i] = SBP2_RD(rx_plane, i);
   }
-  { static __xdata uint8_t dump_budget = 40;
+  { static __xdata uint8_t dump_budget = 0;
     if (dump_budget) { dump_budget--; uart_puts("[eaac b="); uart_puthex((uint8_t)(rx_plane >> 8)); uart_puts(" 777="); uart_puthex(u4_host_desc[0x0]);
       uart_puthex(u4_host_desc[0x1]); uart_puthex(u4_host_desc[0x2]); uart_puthex(u4_host_desc[0x3]); uart_putc(']'); } }
-  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;
+  REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02; REG_XFER2_DMA_STATUS = 0x01;
 }
 
 /* Per-descriptor-type work-buffer base offset (ROM 0x21A1). 0xFF = invalid type. */
@@ -146,7 +146,7 @@ static void sb_af38_descriptor_response(void) {
   /* CMD diag (2026-06-20): the SB-transport command/status at each af38 call, to compare handmade's
    * values at the CL terminal vs stock's commit terminal (stock: 0C=0C 15=40 18=40 A=0101). The 2a
    * route bytes [2:4] identify the terminal (stock reaches 3C3D; handmade tops out at 2CAC). */
-  { static __xdata uint8_t cmdbud = 60;
+  { static __xdata uint8_t cmdbud = 0;
     if (cmdbud) { cmdbud--;
       uart_puts("\r\n[cmd dt="); uart_puthex(desc_type);
       uart_puts(" 0C="); uart_puthex(SB_RD(0x0C)); uart_puts(" 15="); uart_puthex(SB_RD(0x15));

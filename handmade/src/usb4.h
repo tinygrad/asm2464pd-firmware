@@ -224,6 +224,8 @@ static void cm_routerop_mailbox(void) {
  * over the tunnel (adapter-CS P1[0x1335]=07 vs stock 02 / P1[0x1206]=78 vs 58 still diverge). */
 static volatile uint8_t __xdata __at(0x0B56) c105_fire_bdg;   /* free cell per MEMORY headroom map */
 static void u4lb_e74e(void);                                   /* defined in usb4_lanebond.h (incl. after) */
+static void u4lb_a310(uint8_t cur);                             /* descriptor-engine helper (usb4_lanebond.h) */
+static void u4lb_e890(uint8_t ctrl_low6);                       /* descriptor-engine commit (usb4_lanebond.h) */
 static void u4lb_d855(uint8_t heavy);                          /* tunnel-event dispatch (usb4_lanebond.h) */
 static void u4lb_d90e_link_phy_reconfig(void);                 /* a522 width-event PHY reconfig + Deassert */
 
@@ -252,6 +254,9 @@ static void usb4_sec_adapter_link_event_c105(void) {
      * [PcieTunnel-Deassert]. This is the device-side wire event the TB4 host waits for pre-commit. */
     if (P1_RD(0x124E) & 0x02) {
       P1_WR(0x124E, 0x02);                 /* W1C the lane-width-set sub-event */
+      u4lb_a310(0x35);
+      eng_a2df(0x36, 0x03);
+      u4lb_e890(0x03);
       if (P1_RD(0x1243) & 0x80) u4lb_d90e_link_phy_reconfig();
     }
   }

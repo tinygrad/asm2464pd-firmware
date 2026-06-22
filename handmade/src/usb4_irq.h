@@ -249,7 +249,7 @@ static void usb4_irq_ef24(void) {
 /* init_sys_flags arming not covered by pd_int1_enable_group; call once at boot. */
 static void usb4_irq_arm(void) {
   REG_CPU_EXEC_STATUS_3 &= 0xFE;
-  REG_TIMER_CTRL_CC3B = (REG_TIMER_CTRL_CC3B & 0xFD) | 0x02;
+  REG_TIMER_CTRL_CC3B = (REG_TIMER_CTRL_CC3B & 0xFD) | 0x03;
   usb4_irq_ef24();
   usb4_irq_ef1e();
 }
