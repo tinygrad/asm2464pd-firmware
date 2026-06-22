@@ -6,6 +6,7 @@
 #include "types.h"
 #include "registers.h"
 #include "usb.h"
+#include "gpio.h"
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
@@ -68,6 +69,7 @@ static void pcie_power_off(void) {
   REG_PHY_TIMER_CTRL_E764 = 0x00;
   REG_PCIE_LANE_CTRL_C659 &= (uint8_t)~0x01;
   REG_HDDPC_CTRL &= (uint8_t)~0x20;
+  led_set_rgb(false, false, true);  // blue = PCIe powered down
 }
 
 static void pcie_power_on(void) {
@@ -111,6 +113,10 @@ static void pcie_power_on(void) {
     sleep(100);
   }
   if (stable_samples < 3) uart_puts("[PCIe timeout]\n");
+
+  // green = PCIe link up, red = link down
+  bool link_up = (stable_samples >= 3);
+  led_set_rgb(!link_up, link_up, false);
 }
 
 static void do_usb_bulk_in(void) {
@@ -452,6 +458,7 @@ void main(void) {
   REG_UART_LCR &= ~LCR_PARITY_MASK;
 
   uart_puts("\n[BOOT]\n");
+  led_set_rgb(false, false, true);
 
   // flash controller — needed for the USB serial OTP read on enumeration
   flash_init();
