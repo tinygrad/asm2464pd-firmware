@@ -9,21 +9,13 @@ CFLAGS = -mmcs51 --model-small --opt-code-speed --peep-asm --allow-unsafe-read
 CFLAGS += --std-c99
 CFLAGS += -I$(SRC_DIR)
 CFLAGS += --no-xinit-opt
+CFLAGS += $(CFLAGS_EXTRA)
 
 # Memory model settings
 LDFLAGS = --code-loc 0x0000 --code-size 0x10000
-# IRAM-HEADROOM FIX (2026-06-11): relocate SDCC's auto-XDATA segment (XSEG: library long-math PARM
-# areas + the data-plane `static __xdata` scratch we moved out of IRAM) into chip-CM XDATA RAM at
-# 0x0BC0. HISTORY: it was at 0x8820 on the assumption that 0x8820-0x9DFF is free RAM, but the
-# state-5 lane-bond walker (which runs AFTER the PCIe tunnel powers on) STALLS the CPU when it reads
-# any 0x88xx scratch -- once the tunnel is active a DMA/prefetch overlay makes 0x8819+ read-stall.
-# The chip's own CM XDATA (0x0000-0x0BFF) stays valid RAM at state-5 (the whole FSM runs on it).
-# 0x0BC0-0x0BFF (64 bytes) was HW-probed at state-5 as both safe (no stall) and free (a boot
-# signature survived untouched to state-5), clear of the mailbox (0x0B02-0x1F) and the walker's
-# CM scratch (<=0x0B2D). XISEG is empty (no initialized __xdata) so only this 64B window is needed.
-# 2026-06-18: the CM PCIe-tunnel layer (cm_tunnel.h) enlarged the main() call tree; extend the SDCC
-# XDATA window DOWN to 0x0B60 (160B). Still within the valid 0x0000-0x0BFF CM RAM and clear of the
-# mailbox (0x0B02-0x1F), walker scratch (<=0x0B2D), the CM cells (0x0B39-0x3C) and diag block (0x0B40-0x5F).
+# Place SDCC's auto-XDATA segment in the chip's low CM RAM. The USB4 lane-bond
+# path can stall on the 0x88xx scratch area once the tunnel is active, while
+# 0x0B60-0x0BFF stays valid and clear of the mailbox/FSM state.
 LDFLAGS += --xram-loc 0x0B60 --xram-size 0xA0
 LDFLAGS += --iram-size 0x100
 

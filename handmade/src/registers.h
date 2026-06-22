@@ -2436,7 +2436,8 @@
 #define REG_BANK_0200           XDATA_REG8(0x0200)  /* Bank register at 0x0200 */
 #define REG_BANK_1200           XDATA_REG8(0x1200)  /* Bank register at 0x1200 */
 #define REG_BANK_1235           XDATA_REG8(0x1235)  /* Bank register at 0x1235 */
-/* --- USB4 in-band router config-space + width-event chain (page-1 / DPX=1, accessed via r3 R3=2).
+/* --- USB4 in-band router config-space + width-event chain.
+ * These are page-1/DPX=1 addresses. Use P1_RD/P1_WR in firmware code, not direct XDATA_REG8.
  * The host's in-band ROUTER_CS read (tb_switch_alloc) is served from the 0x1200 config-space ONLY
  * after the HW raises the link-WIDTH event. Chain: C80A.4 IRQ -> c105 reads P1[0x1407].0; if set ->
  * a522 (link-width service) reads P1[0x1203].7; if set -> c8c7 builds the 0x1200 config-space, whose
@@ -2448,14 +2449,16 @@
  * transition -> these stay 00 -> c8c7 never runs / its leaf is a no-op -> config-space empty -> read
  * times out (-110). P1[0x121E].0 (config-space/control-adapter enable, d894 tail) IS firmware-writable
  * (sticks) but does NOT wake the transport-RX. The transport is HW-gated, not config-space-gated. */
-#define REG_P1_LANE_ADP_CS_1201 XDATA_REG8(0x1201)  /* CONFIG-SPACE CURRENT_WIDTH leaf (c251). HW-WRITE-LOCKED. */
-#define REG_P1_CFG_1202         XDATA_REG8(0x1202)  /* config-space byte (c8c7). HW-WRITE-LOCKED. */
-#define REG_P1_WIDTH_EVT_1203   XDATA_REG8(0x1203)  /* width-event flag .7 (W1C, HW-set on 1->2 transition); a522 gate to c8c7 */
-#define REG_P1_CFG_ENABLE_121E  XDATA_REG8(0x121E)  /* config-space/control-adapter enable .0 (d894 tail). FW-writable, sticks. */
-#define REG_BANK_1407           XDATA_REG8(0x1407)  /* WIDTH-EVENT SOURCE .0 (pure HW status); c105 a522 gate */
-#define REG_BANK_1504           XDATA_REG8(0x1504)  /* Bank register at 0x1504 */
-#define REG_BANK_1507           XDATA_REG8(0x1507)  /* Bank register at 0x1507 */
-#define REG_BANK_1603           XDATA_REG8(0x1603)  /* Bank register at 0x1603 */
+#define P1_USB4_LANE_ADP_CURRENT_WIDTH  0x1201u  /* c251 current-width leaf. HW-write-locked. */
+#define P1_USB4_LANE_ADP_CFG_1202       0x1202u  /* c8c7 config-space byte. HW-write-locked. */
+#define P1_USB4_WIDTH_EVENT_1203        0x1203u  /* width-event flag .7, W1C, a522 gate to c8c7 */
+#define P1_USB4_CFG_ENABLE_121E         0x121Eu  /* config/control-adapter enable .0; d894 tail */
+#define P1_USB4_ADP_EVENT_MASK_1406     0x1406u  /* secondary-adapter event aggregation mask */
+#define P1_USB4_ADP_EVENT_STATUS_1407   0x1407u  /* .0 width event, .3 tunnel event; c105 source */
+#define P1_USB4_TUNNEL_EVENT_MASK_1507  0x1507u  /* tunnel-event aggregation mask */
+#define P1_USB4_TUNNEL_EVENT_STATUS_1508 0x1508u /* tunnel event bits: enable/dispath/reset */
+#define P1_USB4_BOOT_TAIL_CTRL_1602     0x1602u  /* d894 boot-tail event control */
+#define P1_USB4_BOOT_TAIL_EVENT_1603    0x1603u  /* d894 boot-tail W1C event register */
 #define REG_BANK_2269           XDATA_REG8(0x2269)  /* Bank register at 0x2269 */
 
 //=============================================================================

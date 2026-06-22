@@ -260,10 +260,7 @@ static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
 /* USB4 CM router-op RX-enable: enables the router-op engine and SB-transport RX. */
 static void usb4_routerop_init(void) {
   REG_ROUTEROP_ENGINE_CTRL_EC00 &= 0xFE;
-  phy_cc10_cmd_wait(0, 0, 9);   /* BUGFIX 2026-06-19: was (0,9,0) — args swapped. Stock e56f =
-                                 * CC12=0(R4), CC13=9(R5); phy_cc10_cmd writes HI=cc12/LO=cc13.
-                                 * The swap mis-synced the router-op RX engine to the link -> the
-                                 * host's in-band Router-CS read never reached EA80 -> EC06=0. */
+  phy_cc10_cmd_wait(0, 0, 9);   /* stock e56f: CC12=0(R4), CC13=9(R5) */
   REG_ROUTEROP_ENGINE_CTRL_EC00 = (REG_ROUTEROP_ENGINE_CTRL_EC00 & 0xFE) | 0x01;
   REG_ROUTEROP_SPEED_LO_EA88 = 100;
   REG_ROUTEROP_SPEED_HI_EA89 = 0x24;

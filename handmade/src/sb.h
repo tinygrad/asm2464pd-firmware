@@ -245,12 +245,6 @@ static void sb_block_init(void) {
   SB_WR(0xBA, 0x3F);
   SB_WR(0xBD, 0x3F);
 
-  uart_puts("[KB 81="); uart_puthex(SB_RD(0x81));
-  uart_puts(" 66=");    uart_puthex(SB_RD(0x66));
-  uart_puts(" 9E=");    uart_puthex(SB_RD(0x9E));
-  uart_puts(" 2C=");    uart_puthex(SB_RD(0x2C));
-  uart_puts(" 2D=");    uart_puthex(SB_RD(0x2D));
-  uart_puts(" C9=");    uart_puthex(SB_RD(0xC9)); uart_putc(']');
 }
 
 /* Program the PCIe tunnel link width across 4 lanes. */
@@ -302,13 +296,12 @@ static uint8_t u4c_sb_desc_commit(void) {
   P12_WR(0x37, commit);
   P12_WR(0x38, 0x01);
   for (g = 0; (P12_RD(0x38) & 0x01) && g < 0x2000; g++) { }
-  /* e711 (CODE:e711, DISASM-VERIFIED 2026-06-22, CORRECTED): reg0x35 = (LIVE reg35 & 0xC0);
+  /* e711: reg0x35 = (LIVE reg35 & 0xC0);
    * then CLR A; LCALL a367 -> a367 writes [0x3C]=0; INC R1->0x3D; writes [0x3D]=0; INC R1->0x3E; RET
    *   (a367 returns with R1=0x3E; the 0be6/0adc write helper does NOT auto-increment R1).
    * e711 TAIL then: e71f LCALL 0be6 writes [0x3E]=0; e722 INC R1->0x3F; e723 LJMP 0be6 writes [0x3F]=0.
    * => stock e711 zeros ALL FOUR descriptor bytes 0x3C/0x3D/0x3E/0x3F at every commit.
-   * (REGRESSION FIX: an earlier 2026-06-22 port REMOVED the 0x3E/0x3F zeroing on an INVERTED RE
-   *  reading -- restored here. The d4c8 engine re-stages only 0x3D between back-to-back commits and
+   * The d4c8 engine re-stages only 0x3D between back-to-back commits and
    *  relies on e711 having re-zeroed 0x3E/0x3F each commit; without it, STALE 0x3E/0x3F leak into the
    *  next SB-transport/lane-config descriptor the host CM reads.) Returns A=0 (CLR A through 0be6). */
   P12_WR(0x35, (uint8_t)(P12_RD(0x35) & 0xC0));
@@ -425,8 +418,8 @@ static void u4c_a365_a3d2_block(void) {
 }
 
 /* CODE:cbf8 == phy_cc10_cmd: a2ff/a344/a327/a2df + a2eb/a365/a3d2 descriptor-COMMIT engine. P12 plane.
- * BYTE-TRUE REWRITE (2026-06-22): the prior 4-round plain-write port was WRONG. The real engine is
- * 2 rounds (a327 OR-mask 0x1 then 0x2); each round threads the a2eb/a365/a3d2 data blocks AND relies
+ * The real engine is 2 rounds (a327 OR-mask 0x1 then 0x2); each round threads the a2eb/a365/a3d2
+ * data blocks AND relies
  * on the embedded commit (a2eb / a2f9) leaving R1=0x3d, so the a327 AFTER each commit writes to 0x3d
  * (NOT 0x35). Disasm-traced register/value sequence (R1 tracked through the commit's R1=0x3d exit):
  *   R1=0x34: a327@0x34 (resid&0xC0|1) ; INC->0x35 ; a2df@0x35=0x41 (INC->0x36)
@@ -561,7 +554,7 @@ static void u4c_dcb4_transport_reg_reinit(void) {
   P12_WR(0x4E, 0x01);
   P12_WR(0x4F, 0x08);
   P12_WR(0x4C, (uint8_t)(P12_RD(0x4C) & 0xF7));
-  P1_WR(0x1406, (uint8_t)(P1_RD(0x1406) & 0xFE));
+  P1_WR(P1_USB4_ADP_EVENT_MASK_1406, (uint8_t)(P1_RD(P1_USB4_ADP_EVENT_MASK_1406) & 0xFE));
   PR(0xC809) = (uint8_t)((PR(0xC809) & 0xFD) | 0x02);
   P12_WR(0x4D, (uint8_t)(P12_RD(0x4D) & 0xBF));
   P12_WR(0x7A, (uint8_t)((P12_RD(0x7A) & 0xFE) | 0x01));
@@ -649,8 +642,7 @@ static void u4c_ccb3(uint8_t width_byte) {
 /* bbc7 (stock CODE:bbc7): populate the sb_eng_data* DROM descriptor cells (0x0B12-0x0B1A) the host CM
  * reads back via u4c_c270's three sub-descriptors. Stock runs this in the cap-apply tail (bank0_8d77).
  * Handmade NEVER wrote these cells -> the connect DROM advertised 0x00 where stock advertises VID 0x174C
- * (sb_eng_data_lo/hi = 0x4C/0x17) -> the host CM's descriptor read-back diverged. Found via the
- * DMA/static-data audit (2026-06-22, emulate/diff_trace.py + Ghidra). bc70/bcb8 = nibble-swap helpers
+ * (sb_eng_data_lo/hi = 0x4C/0x17) -> the host CM's descriptor read-back diverged. bc70/bcb8 = nibble-swap helpers
  * over the SPI-blob bytes 0x0A3C-0x0A41; with NO SPI blob (our case, byte-true to fw_tinygrad.bin where
  * 0x707e!=0xA5) those inputs are 0, so every nibble-derived field computes to 0 and only the hardcoded
  * VID (0x4C/0x17) and the runtime u4lb_width_rate_code (3c_b) are non-zero. Byte-true to stock. */
@@ -769,24 +761,7 @@ static void sb_assert(void) {
   sb_lane_flip_init();
   sb_block_init();
   sb_asserted = 1;
-  uart_puts("[SBdone e302=");
-  uart_puthex(REG_PHY_MODE_E302);
-  uart_puts(" sb81=");  uart_puthex(SB_RD(0x81));
-  uart_puts(" sb66=");  uart_puthex(SB_RD(0x66));
-  uart_puts(" sb9e=");  uart_puthex(SB_RD(0x9E));
-  uart_puts(" sb01=");  uart_puthex(SB_RD(0x01));
-  uart_puts(" sb2d=");  uart_puthex(SB_RD(0x2D));
-  uart_puts(" sbc9=");  uart_puthex(SB_RD(0xC9));
-  uart_puts(" sb2c=");  uart_puthex(SB_RD(0x2C));
-  uart_puts("]");
-
-  uart_puts("[HMSB:");
-  uart_puthex(u4_connect_gate); uart_puthex(REG_INT_PCIE_NVME); uart_puthex(REG_PHY_MODE_E302);
-  uart_puthex(u4_mode_flag); uart_puthex(u4_route_mode); uart_puthex(REG_NVME_EVENT_STATUS);
-  uart_puthex(REG_USB_PHY_CTRL_91C0); uart_puthex(REG_PHY_COMPLETION_E318);
-  uart_putc('|');
-  { uint16_t off; for (off = 0; off < 0x100; off++) uart_puthex(SB_RD(off)); }
-  uart_puts("]\n");
+  uart_puts("[SBdone]\n");
 }
 
 #endif /* SB_H */
