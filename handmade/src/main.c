@@ -76,7 +76,11 @@ static void pcie_power_on(void) {
   REG_PCIE_PERST_CTRL  = PCIE_PERST_ASSERT;    // assert PERST#
   REG_TUNNEL_LINK_STATE = 0x00;                // clear tunnel link state
   DPX = 0x01; REG_PHY_TLP_ROUTING = PHY_TLP_ROUTING_ENABLE; DPX = 0x00;
+  bank1_write(0x78AF, 0x4F); bank1_write(0x79AF, 0x4F); // rxphy lane commits
+  bank1_write(0x7AAF, 0xCF); bank1_write(0x7BAF, 0xCF);
   REG_HDDPC_CTRL |= 0x20;                      // enable 3.3V
+  REG_CPU_CTRL_CA81 = 0x0E;
+  REG_CPU_MODE_NEXT = 0x21;
   REG_PCIE_LANE_CTRL_C659 |= 0x01;             // enable 12V
   REG_PHY_TIMER_CTRL_E764 = 0x1C;              // start link training
   REG_PCIE_TUNNEL_CFG = PCIE_TLP_CTRL_TUNNEL;  // fix late issue in RDNA3
