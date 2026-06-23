@@ -13,17 +13,11 @@ static void bank0_8a89(uint8_t mode);
 /* fwd: e52d transport-up sub-fns defined in usb4_lanebond.h / main.c (both included AFTER this
  * header). The FULL byte-true e52d in sb_lane_bond_complete_tunnel_up runs these in stock order. */
 static void u4lb_b031_transport_reinit(uint8_t skip_lane);  /* bank0 b031 (usb4_lanebond.h) */
-static void u4lb_e06b(uint8_t v);                 /* bank0 e06b (usb4_lanebond.h) */
-static void pcie_power_on(void);                  /* bank0 0x3578 pcie_downstream_link_bringup (main.c) */
 static void boot_phy_bceb_set0(uint16_t addr);    /* boot_phy.h (included after this header) */
 static void sb_channel_connect_service(void);     /* defined below; used by u4lb_e96c (e52d) */
 static void u4lb_eb62(uint8_t state_lo, u4_fsm_state_t state);
 static void u4lb_98ec(uint8_t hi, uint8_t lo);
 static void u4lb_d5da(uint8_t param);
-
-/* Run bank0_8a89 (the USB4 lane-MODE engine) once from the super-loop after connect. */
-static volatile uint8_t __xdata __at(0x0B4D) sb_run_8a89_pending;
-static volatile uint8_t __xdata __at(0x0B4E) sb_8a89_done;
 
 /* W1C one connect bit in SB[0xC9]. */
 static void sb_write_c9_ack(uint8_t pos) {
@@ -210,9 +204,6 @@ static void sb_d4cd_transport_edges(void) {
     }
   }
 }
-/* No-op stub: all edges are processed by sb_d4cd_transport_edges. */
-static void sb_transport_substate_poll(void) { }
-
 /* edd9 prelude: consume the SB[0x09] read-ack. */
 static void sb_chan_prelude(void) {
   (void)SB_RD(0x09);
@@ -261,9 +252,6 @@ static void sb_con_consequence(void) {
   P1_WR(0x0100, (P1_RD(0x0100) & 0x7F) | 0x80);
   u4_conn_consequence_done = 1;
   sb_db7a_route_arm();
-  /* Stock does not re-arm lane training from this connect-event consequence; the lane-train strobe
-   * runs from the state-4 bond path instead. */
-  if (!sb_8a89_done) sb_run_8a89_pending = 1;
 }
 
 /* eed6: post-[Lane Bonded] consequence. Byte-true: lb_lane_bonded_flag=1; sb_init_and_read_field_6f1
@@ -376,21 +364,13 @@ static void sb_connect_service_reservice_d7cd(void) {
   sb_phy_connect_config_c35b();                            /* d80c LCALL c35b */
 }
 
-/* e52d: lane-bond complete -> DROM/lane descriptor reload and lane-mode tail.
- * Stock also runs b031 transport reinit here. On this board that reinit is unsafe before the
- * host commits the bond, so it stays behind tup_b031_enable and defaults off. */
-static volatile uint8_t __xdata __at(0x0B4F) sb_tunnel_up_pending;
+/* e52d: lane-bond complete -> DROM/lane descriptor reload and lane-mode tail. */
 static volatile uint8_t __xdata __at(0x0B57) tup_e52d_done;
-static volatile uint8_t __xdata __at(0x0B5A) tup_b031_enable;   /* 0=skip b031 (bond-safe), 1=run it */
 static void sb_lane_bond_complete_tunnel_up(void) {
   if (tup_e52d_done) return;
   tup_e52d_done = 1;
 
-  if (tup_b031_enable) u4lb_b031_transport_reinit(1);
   sb_rom_descriptor_load();                          /* [b7a4] sb_lane_descriptor_loader (DROM/lane re-seed) */
-  if (u4_route_mode & 0x02) {                        /* if (XDATA[0x09FA].1) — the tunnel-route block */
-    sb_tunnel_up_pending = 1;                        /* defer pcie bring-up to super-loop (bond-safe) */
-  }
   REG_CPU_CTRL_CA60 &= 0xF7;
   /* stock e52d tail @CODE_BANK1::e56b: `8a89(0, desc0=2)` (U4 lane-MODE branch) gated XDATA[0x0AF1].0. */
   if (XDATA_REG8V(0x0AF1) & 0x01) {
@@ -614,9 +594,6 @@ static void sb_cdf5_routerop_response(uint8_t r) {
   SB_WR(0x06, 0x01);                                   /* cea4 9934 + cea7 0be6 r3_write_dispatch: SB-transport TX */
 }
 
-/* Fallback set when SB[0x26].1 pending-interrupt is observed outside the stock a066 position. */
-static volatile uint8_t __xdata __at(0x0B55) sb_pend_int_pending;
-
 /* a066: INT1 source C80A.5 service body. PART 1 = per-channel connect poll; PART 2 =
  * connect/disconnect edge + lane CL0/event servicing (all W1C). */
 static void sb_router_event_handler(void) {
@@ -635,7 +612,6 @@ static void sb_router_event_handler(void) {
   }
 
   sb_d4cd_transport_edges();
-  sb_transport_substate_poll();
 
   cs = SB_RD(0x2D);
   if (!(cs & 0x01)) {
@@ -734,24 +710,19 @@ static void sb_router_event_handler(void) {
   (void)SB_RD(0xF6);
 }
 
-/* cb10: per-super-loop SB lane-bond advance. Reads SB[0xA0]/[0xA1] low nibble, compares against
- * the 0x072B/0x072C latches, and on a change updates the latch (NO-OP on a host that stalls). */
-static volatile uint8_t __xdata __at(0x0B50) cb10_seen;
+/* cb10: per-super-loop SB lane-bond advance. */
 static void sb_cb10_lane_advance(void) {
   uint8_t nibble, lat;
   nibble = SB_RD(0xA0) & 0x0F;
   lat = lb_laneA_cl_latch;
   if (nibble != lat) {
-    cb10_seen |= 0x01;
     lb_laneA_cl_latch = nibble;
   }
   nibble = SB_RD(0xA1) & 0x0F;
   lat = lb_laneB_cl_latch;
   if (nibble != lat) {
-    cb10_seen |= 0x02;
     lb_laneB_cl_latch = nibble;
   }
-  if (lb_laneA_cl0_latch != 0 || lb_laneB_cl0_latch != 0) { cb10_seen |= 0x04; }
 }
 
 #endif /* SB_ROUTER_H */

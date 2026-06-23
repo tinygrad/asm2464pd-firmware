@@ -180,10 +180,9 @@ static void bank0_8a89(uint8_t mode) {
     }
     u4_connect_oneshot_suppress = 0x00;
 
-    /* on link-complete, ack and defer the downstream PCIe bring-up to the super-loop */
+    /* On link-complete, ack the tunnel/link transition. */
     if (u4_link_busy == 0 && (REG_CPU_EXEC_STATUS_2 >> 2 & 1)) {
       REG_CPU_EXEC_STATUS_2 = 0x04;
-      sb_tunnel_up_pending = 1;
     }
     uart_puts("[8a89done]");
   }
@@ -193,7 +192,6 @@ static void bank0_8a89(uint8_t mode) {
 static void bank0_c9a8(uint8_t mode) {
   u4_lane_mode_arg = mode;
   if (u4_route_mode & 0x04) {
-    sb_tunnel_up_pending = 1;
     if ((u4_connect_gate & 0x01) &&
         (u4_connect_gate_e8 != 0 || u4_connect_gate_eb != 0)) {
       REG_PHY_CFG_C6A8 &= 0xFE;

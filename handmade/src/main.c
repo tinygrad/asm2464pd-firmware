@@ -47,10 +47,6 @@ static volatile uint8_t __xdata is_usb2;
 /* Streaming PCIe state — dwords remaining for the current transfer. */
 static volatile uint32_t __xdata dma_dwords;
 
-/* Super-loop FSM-stall counter that gates the deferred bank0_8a89 fallback. */
-static volatile uint8_t __xdata __at(0x0B52) fsm_stall;
-
-
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
 #include "i2c.h"
@@ -135,27 +131,6 @@ static void pcie_power_on(void) {
   // green = PCIe link up, red = link down
   bool link_up = (stable_samples >= 3);
   led_set_rgb(!link_up, link_up, false);
-}
-
-/* Stock bank0_d127: initialize the PCIe TLP DMA ring and CPU-link event path.
- * Stock runs this immediately after pcie_tunnel_adapter_enable_b401() during boot. */
-static void pcie_dma_ring_init_d127(void) {
-  REG_PCIE_DMA_SIZE_A = 0x08;
-  REG_PCIE_DMA_SIZE_B = 0x00;
-  REG_PCIE_DMA_SIZE_C = 0x08;
-  REG_PCIE_DMA_SIZE_D = 0x08;
-  REG_PCIE_DMA_BUF_A = 0x08;
-  REG_PCIE_DMA_BUF_B = 0x20;
-  REG_PCIE_DMA_BUF_C = 0x08;
-  REG_PCIE_DMA_BUF_D = 0x28;
-  REG_PCIE_DMA_CFG_50 = 0x00;
-  REG_PCIE_DOORBELL_CMD = 0x00;
-  REG_CPU_LINK_CEF3 = CPU_LINK_CEF3_ACTIVE;
-  REG_CPU_LINK_CEF2 = CPU_LINK_CEF2_READY;
-  REG_CPU_LINK_CEF0 = (uint8_t)(REG_CPU_LINK_CEF0 & 0xF7);
-  REG_CPU_LINK_CEEF = (uint8_t)(REG_CPU_LINK_CEEF & 0x7F);
-  REG_INT_DMA_CTRL = (uint8_t)((REG_INT_DMA_CTRL & 0xFB) | 0x04);
-  REG_PCIE_DMA_CTRL_B281 = (uint8_t)((REG_PCIE_DMA_CTRL_B281 & 0xCF) | 0x10);
 }
 
 static void do_usb_bulk_in(void) {
@@ -376,12 +351,8 @@ static void handle_usb_control(void) {
 /*=== ISR ===*/
 
 void handle_usb_bulk_data(void) {
-  uint8_t bulk_cfg1, bulk_cfg2;
+  uint8_t bulk_cfg1;
   bulk_cfg1 = REG_USB_EP_CFG1;
-  bulk_cfg2 = REG_USB_EP_CFG2;
-  /*uart_puts("[BULK ");
-  uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
-  uart_puts("]\n");*/
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
     REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_OUT_COMPLETE;
     uint16_t dword_count = (((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L) >> 2;
@@ -397,9 +368,6 @@ void handle_usb_bulk_data(void) {
   }
 }
 
-
-/* Stock keeps the sideband connect-service programming fresh while the host walks CL states. */
-static volatile uint8_t __xdata reservice_enable;
 
 void int0_isr(void) __interrupt(0) {
   uint8_t int0_type = REG_INT_USB_STATUS;
@@ -512,10 +480,6 @@ void main(void) {
 
   // Type-C SBU + PHY config + SB-block enable; powers the sideband transport.
   boot_phy_bringup_early();
-  uart_puts("[BOOTPHY cc3f="); uart_puthex(REG_LTSSM_CTRL);
-  uart_puts(" cc30=");          uart_puthex(REG_CPU_MODE);
-  uart_puts(" e712=");          uart_puthex(REG_LINK_STATUS_E712);
-  uart_puts(" sb05=");          uart_puthex(SB_RD(0x05)); uart_puts("]\n");
 
   // Seed the lane-engine link width/mode and the USB4 tunnel state flags.
   bank0_92c5_seed();
@@ -547,7 +511,6 @@ void main(void) {
   // PCIe to the GPU. Stock runs this at boot (before the mode decision); pcie_power_on (after the
   // bond) is the runtime tunnel-up that deasserts PERST and completes the link — keep both.
   pcie_tunnel_adapter_enable_b401();
-  pcie_dma_ring_init_d127();
 
   // Stock seeds the sideband connect-service path at boot and then refreshes it in the main loop.
   u4lb_e96c();
@@ -569,19 +532,12 @@ void main(void) {
   // Bring up the USB PIPE engine and arm the upstream USB4 PHY link.
   usb_pipe_engine_init();
   usb4_phy_arm();
-  uart_puts("[PHYarm e318="); uart_puthex(REG_PHY_COMPLETION_E318);
-  uart_puts(" 91c0=");        uart_puthex(REG_USB_PHY_CTRL_91C0);
-  uart_puts(" e712=");        uart_puthex(REG_LINK_STATUS_E712); uart_puts("]\n");
 
   // Present a PD-capable Type-C attach and arm the PD engine before interrupts.
   pd_keystone_init();
 
   // Arm the USB4 SB-transport / router interrupt path so the host's connect raises C80A.5.
   usb4_irq_arm();
-  uart_puts("[U4irq c21b="); uart_puthex(REG_PHY_LINK_CTRL_C21B);
-  uart_puts(" c202=");        uart_puthex(REG_LINK_CTRL);
-  uart_puts(" e741=");        uart_puthex(REG_PHY_PLL_CTRL);
-  uart_puts(" cc43=");        uart_puthex(REG_CPU_CLK_CFG); uart_puts("]\n");
 
   // Enable the bank1/USB4 interrupt group, including the EC06 router-op mailbox path.
   REG_INT_ENABLE = (uint8_t)((REG_INT_ENABLE & 0xBF) | 0x40);
@@ -601,17 +557,10 @@ void main(void) {
   // USB4 CM router-op RX-enable so the host's router-op queries are received.
   if (XDATA_REG8V(0x09F9) & 0x81) {
     usb4_routerop_init();
-    uart_puts("[U4rop ec00="); uart_puthex(XDATA_REG8V(0xEC00));
-    uart_puts(" ec04=");        uart_puthex(REG_NVME_EVENT_ACK);
-    uart_puts(" c807=");        uart_puthex(REG_INT_DMA_CTRL);
-    uart_puts(" ea88=");        uart_puthex(XDATA_REG8V(0xEA88)); uart_puts("]\n");
   }
 
-  // USB-mode fork: skip the USB3 device engine in USB4 mode. The GPU path is the USB4 PCIe tunnel;
-  // tinygrad should use the lspci-backed AMD path, not the ADD1:0001 USB transport.
-  if (XDATA_REG8V(0x09F9) & 0x83) {
-    uart_puts("[USB4 mode: skip USB3 device bring-up]\n");
-  } else {
+  // USB-mode fork: skip the USB3 device engine in USB4 mode. The GPU path is the USB4 PCIe tunnel.
+  if (!(XDATA_REG8V(0x09F9) & 0x83)) {
     // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
     usb_init_controller(0);
   }
@@ -635,23 +584,22 @@ void main(void) {
 
   // Seed the XDATA scratch flags/budgets (crt0 only zeroes IRAM, not XDATA).
   { uint8_t z; for (z = 0; z <= (0x0B58 - 0x0B45); z++) XDATA_REG8V(0x0B45 + z) = 0; }
-  reservice_enable = 1;
-  tup_e52d_done = 0; tup_b031_enable = 0;
+  tup_e52d_done = 0;
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
-  i2c_init();
-  ina231_init();
+  if (!(XDATA_REG8V(0x09F9) & 0x83)) {
+    i2c_init();
+    ina231_init();
+  }
 
   // Milestone 1: prompt the host into PD with periodic Hard Resets until it engages
   // (pd_seen is set by the PD-RX ISR on the first received message), then just observe.
   uint8_t kicks = 0;
-  uint8_t sb_diag_count = 0;
   while (1) {
     /* FSM-advance, run first and delay-free so it tracks the connect edge tightly. */
     if ((XDATA_REG8V(0x09F9) & 0x83) && XDATA_REG8V(0x06EC)) {
-      uint8_t fsm_before = XDATA_REG8V(0x06ED);
       IE &= (uint8_t)~IE_EA;
       sb_cb10_lane_advance();
       /* Stock cb10 dispatches e672 only while 0x06ED is nonzero. When state 5 finishes it sets
@@ -678,50 +626,19 @@ void main(void) {
       // cdf5 needs (0/2 => build+TX the lane-config response; 1 => nothing this pass, arm stays set).
       if (sb_cdf5_substate_arm != 0) sb_cdf5_routerop_response(u4lb_eda0());
       IE |= IE_EA;
-      // Track FSM stall: count when 0x06ED makes no progress, reset when it advances.
-      if (XDATA_REG8V(0x06ED) == fsm_before) { if (fsm_stall < 0xFF) fsm_stall++; }
-      else                                   { fsm_stall = 0; }
     }
 
     // Stock re-runs the connect-service while the host's sideband state changes.
-    if (reservice_enable) {
-      IE &= (uint8_t)~IE_EA;
-      sb_connect_service_reservice_d7cd();
-      IE |= IE_EA;
-    }
+    IE &= (uint8_t)~IE_EA;
+    sb_connect_service_reservice_d7cd();
+    IE |= IE_EA;
 
     // SB router-op responder, deferred off the INT1 ISR to keep the stack shallow.
-    if (sb_pend_int_pending || (SB_RD(0x26) & 0x02)) {
-      sb_pend_int_pending = 0;
+    if (SB_RD(0x26) & 0x02) {
       IE &= (uint8_t)~IE_EA;
       sb_a5d8_pend_int();
       if (SB_RD(0x26) & 0x02) SB_WR(0x26, 0x02);   // W1C SB[0x26].1 after response, like a066
       IE |= IE_EA;
-    }
-
-    // Deferred bank0_8a89 drive: run once, only after the FSM has clearly stalled.
-    // (batch-5 HW test: disabling this NON-STOCK fallback was NEUTRAL — not the bond perturbation.)
-    if (sb_run_8a89_pending && !sb_8a89_done &&
-        fsm_stall >= 6 &&
-        !((SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02)) {
-      sb_run_8a89_pending = 0;
-      sb_8a89_done = 1;
-      uart_puts("[SBcon->8a89 (deferred)]\n");
-      IE &= (uint8_t)~IE_EX1;
-      bank0_c9a8(0);
-      IE |= IE_EX1;
-      uart_puts("[8a89 ret e764=");  uart_puthex(REG_PHY_TIMER_CTRL_E764);
-      uart_puts(" e751=");           uart_puthex(REG_PHY_POLL_E751);
-      uart_puts(" e302=");           uart_puthex(REG_PHY_MODE_E302);
-      uart_puts(" c80a=");           uart_puthex(REG_INT_PCIE_NVME);
-      uart_puts(" ec06=");           uart_puthex(REG_NVME_EVENT_STATUS); uart_puts("]\n");
-    }
-
-    // Deferred tunnel-up one-shot; the stock e52d path can set this before both lanes reach CL0.
-    if (sb_tunnel_up_pending &&
-        (SB_RD(0xA0) & 0x0F) == 0x02 && (SB_RD(0xA1) & 0x0F) == 0x02) {  // both lanes CL0
-      sb_tunnel_up_pending = 0;
-      uart_puts("[TunnelUp]\n");
     }
 
     // While a connect is in progress keep the loop tight; only delay when idle.
@@ -730,28 +647,6 @@ void main(void) {
     }
     if (sb_asserted) { uint32_t b; for (b = 0; b < 60000UL; b++) { __asm nop __endasm; } }
     else             { sleep(500); }
-    // Compact idle status; the hardware test harness checks the host-side PCIe/tunnel result.
-    if (sb_asserted && sb_diag_count < 8) {
-      sb_diag_count++;
-      { static __xdata uint32_t p; static __xdata uint8_t e302; static __xdata uint8_t best;
-        e302 = 0; best = 0;
-        for (p = 0; p < 2000000UL; p++) {
-          e302 = REG_PHY_MODE_E302;
-          if (((e302 >> 4) & 3) > ((best >> 4) & 3)) best = e302;
-          c80a_acc |= REG_INT_PCIE_NVME;
-          if (((e302 >> 4) & 3) >= 2) break;
-        }
-        uart_puts("[U4 e302=");          uart_puthex(e302);
-        uart_puts(" best=");             uart_puthex(best);
-        uart_puts(" c80a=");             uart_puthex(REG_INT_PCIE_NVME);
-        uart_puts(" ec06=");             uart_puthex(REG_NVME_EVENT_STATUS);
-        uart_puts(" a0=");               uart_puthex(SB_RD(0xA0));
-        uart_puts(" a1=");               uart_puthex(SB_RD(0xA1));
-        uart_puts(" seen=");             uart_puthex(usb4_int_seen);
-        uart_puts("]\n");
-        if (((best >> 4) & 3) >= 2) uart_puts("[*** USB4 TRAINED ***]\n");
-      }
-    }
     /* Give the host a settle window before each Hard Reset kick. Repeated immediate kicks can keep
      * power-cycling the device before the PD contract completes. */
     { static __xdata uint8_t pd_settle = 0;

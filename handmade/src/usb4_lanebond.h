@@ -864,9 +864,8 @@ static void u4lb_d855(uint8_t assert) {
     P1_WR(P1_USB4_TUNNEL_EVENT_STATUS_1508, 0x04);
     u4lb_e76b();
   } else if (p1508 & 0x02) {                 /* 1508.1 -> UPS_Rst_Assert */
-    uint8_t gate2;
     P1_WR(P1_USB4_TUNNEL_EVENT_STATUS_1508, 0x02);
-    gate2 = u4lb_ee94(0x02);
+    (void)u4lb_ee94(0x02);
     if (assert) {
       uint8_t v;
       REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);   /* B402 &= 0xFD */

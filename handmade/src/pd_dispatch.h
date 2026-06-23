@@ -102,7 +102,7 @@ static void pd_build_send_request_rdo(void) {
   REG_TIMER0_THRESHOLD_LO = 0x28;
   REG_TIMER0_CSR = 0x01;
   { uint16_t guard = 0; while (!((REG_TIMER0_CSR >> 1) & 1) && ++guard < PD_WAIT_LIMIT);
-    if (guard >= PD_WAIT_LIMIT) pd_cc_timeout = 1; }
+    (void)guard; }
   REG_TIMER0_CSR = 0x02;
 
   pd_tx_commit_engine();

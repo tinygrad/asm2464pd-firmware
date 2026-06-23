@@ -201,7 +201,7 @@ static void vdm_tx_strobe_commit(void) {
   REG_XFER_DMA_ADDR_HI = 0x50;
   REG_XFER_DMA_CMD = 0x01;
   { uint16_t poll = 0; while (!((REG_XFER_DMA_CMD >> 1) & 1) && ++poll < PD_WAIT_LIMIT);
-    if (poll >= PD_WAIT_LIMIT) pd_cc_timeout = 1; }
+    (void)poll; }
   REG_XFER_DMA_CMD = 0x02;
   if (REG_PHY_EVENT_E40F & 0x01) return;
   pd_tx_commit_engine();

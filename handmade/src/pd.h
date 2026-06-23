@@ -13,8 +13,6 @@
 static volatile uint8_t __xdata __at(0x0B45) pd_seen;
 
 static void pd_rx_message_dispatch(void);
-/* Set if any CC-controller command wait timed out. */
-static volatile uint8_t __xdata __at(0x0B46) pd_cc_timeout;
 
 #define PD_WAIT_LIMIT 0x4000u
 /* Bounded poll until (*reg & mask) matches set (1=wait-for-set, 0=wait-for-clear). */
@@ -22,7 +20,6 @@ static void pd_wait(volatile __xdata uint8_t *reg, uint8_t mask, uint8_t set) {
   uint16_t iters = 0;
   if (set) { while (!(*reg & mask) && ++iters < PD_WAIT_LIMIT); }
   else     { while ( (*reg & mask) && ++iters < PD_WAIT_LIMIT); }
-  if (iters >= PD_WAIT_LIMIT) pd_cc_timeout = 1;
 }
 
 /* RDO/CRC timing constants for the PD engine. */
@@ -232,18 +229,7 @@ static void cc_ccf9_subdemux(void) {
 }
 
 /* INT1 timer-tick PD/USB4 policy-engine tick: services the 6 CC per-channel event regs (bit1=event). */
-/* tick_seen counts tick entries; cc_hit is a bitmask of which CC channels ever showed bit1. */
-static volatile uint8_t __xdata __at(0x0B47) tick_seen;
-static volatile uint8_t __xdata __at(0x0B48) cc_hit;
-
 static void cc_pd_timer_tick(void) {
-  tick_seen++;
-  if (REG_TIMER3_CSR & 0x02) cc_hit |= 0x01;
-  if (REG_CPU_INT_CTRL & 0x02) cc_hit |= 0x02;
-  if (REG_CPU_DMA_INT & 0x02) cc_hit |= 0x04;
-  if (REG_XFER_DMA_CFG & 0x02) cc_hit |= 0x08;
-  if (REG_XFER2_DMA_STATUS & 0x02) cc_hit |= 0x10;
-  if (REG_CPU_EXT_STATUS & 0x02) cc_hit |= 0x20;
   if (REG_TIMER3_CSR & 0x02) {                 /* CC23.1: re-init / SB-reconnect */
     cc_cc23_reinit_event();
     REG_TIMER3_CSR = 0x02;

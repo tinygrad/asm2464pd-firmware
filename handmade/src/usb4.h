@@ -54,13 +54,7 @@ static void usb4_connect_u4(void) {
 
 /* INT1 USB4 event demux: services the USB4 INT sources and applies their W1C acks. */
 
-/* Sticky bitmap of USB4 INT sources seen (bit0=SB, bit1=evt, bit2=routerop, bit3=tunnel). */
-static volatile uint8_t __xdata __at(0x0B49) usb4_int_seen;
-
 static void sb_router_event_handler(void);
-
-/* Sticky accumulator of every C80A value seen in the ISR. */
-static volatile uint8_t __xdata __at(0x0B4A) c80a_acc;
 
 /* c0a5 = cm_routerop_mailbox (CODE_BANK1::c0a5): inbound host router-op responder.
  * EC06.0 fires when the host posts an in-band router-op into the EA80 mailbox. The E2 CONFIG path
@@ -241,22 +235,17 @@ static void usb4_sec_adapter_link_event_c105(void) {
 /* Called from int1_isr after PD-RX: acks and forwards each fired USB4 INT source. */
 static void usb4_int_demux(void) {
   uint8_t int_sources = REG_INT_PCIE_NVME;
-  c80a_acc |= int_sources;
   if (int_sources & 0x20) {
-    usb4_int_seen |= 0x01;
     sb_router_event_handler();
   }
   if (int_sources & 0x10) {                /* C80A.4 = secondary adapter/link event (c105) */
-    usb4_int_seen |= 0x02;
     usb4_sec_adapter_link_event_c105();
   }
   if (REG_NVME_EVENT_STATUS & 0x01) {
-    usb4_int_seen |= 0x04;
     REG_NVME_EVENT_ACK = 1;
     cm_routerop_mailbox();
   }
   if (int_sources & 0x0F) {
-    usb4_int_seen |= 0x08;
     { uint8_t tunnel_status = REG_PHY_RXPLL_TRIGGER;
       if (tunnel_status & 0x04) REG_PHY_RXPLL_TRIGGER = 0x04;
       if (tunnel_status & 0x08) REG_PHY_RXPLL_TRIGGER = 0x08; }

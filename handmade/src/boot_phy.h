@@ -152,38 +152,10 @@ static void boot_phy_bringup_early(void) {
 
 /* Seed the lane-engine link WIDTH/MODE/state RAM the USB4 tunnel reads (non-OTP path). */
 static void bank0_92c5_seed(void) {
-  /* One-shot OTP/strap probe: stock 92c5 reads fuses ONLY if 0x707E==0x5A (+ checksum 0x707F).
-   * If fused, it overrides lane mask (0x0AE9), lane/gen (u4_link_lane/0x0AEE), width (0x086C-71)
-   * from 0x707A/0x707B/0x707D. Handmade omits this -> if the board is fused, our defaults diverge. */
-  { uart_puts("\r\n[OTP 7E="); uart_puthex(XDATA_REG8V(0x707E));
-    uart_puts(" 7F="); uart_puthex(XDATA_REG8V(0x707F));
-    uart_puts(" 7A="); uart_puthex(XDATA_REG8V(0x707A));
-    uart_puts(" 7B="); uart_puthex(XDATA_REG8V(0x707B));
-    uart_puts(" 7D="); uart_puthex(XDATA_REG8V(0x707D));
-    uart_puts(" 74="); uart_puthex(XDATA_REG8V(0x7074)); uart_puthex(XDATA_REG8V(0x7075));
-    uart_puthex(XDATA_REG8V(0x7076)); uart_puthex(XDATA_REG8V(0x7077));
-    uart_puthex(XDATA_REG8V(0x7078)); uart_puthex(XDATA_REG8V(0x7079)); uart_putc(']'); }
-  XDATA_REG8(0x0213) = 0;
-  XDATA_REG8(0x0AEA) = 1;
   XDATA_REG8(0x0AE3) = 1;
-  XDATA_REG8(0x0AE4) = 1;
-  XDATA_REG8(0x0AF0) = 1;
-  XDATA_REG8(0x0AE5) = 1;
-  XDATA_REG8(0x0AE6) = 1;
-  XDATA_REG8(0x0AE7) = 1;
-  XDATA_REG8(0x0AE8) = 1;
-  XDATA_REG8(0x0AE9) = 0x0F;
-  XDATA_REG8(0x0AEE) = 3;
-  XDATA_REG8(0x0AEF) = 3;
-  XDATA_REG8(0x0AEB) = 3;
   XDATA_REG8(0x0AEC) = 3;
   XDATA_REG8(0x0AED) = 3;
-  XDATA_REG8(0x0A83) = 0;
-  XDATA_REG8(0x0AEB) = XDATA_REG8V(0x0AEB) | 0x01;
   XDATA_REG8(0x0AF1) = 0x00;
-  REG_PHY_CFG_C65A &= 0xF7;
-  REG_CPU_EXEC_STATUS_3 &= 0xFB;
-  REG_USB_EP_CTRL_905F &= 0xEF;
 }
 
 /* c8db: PCIe-tunnel adapter capability/path config (B410-B42B) from 0x0A52/53/54/55.
