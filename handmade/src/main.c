@@ -53,7 +53,6 @@ static volatile uint32_t __xdata dma_dwords;
 #include "usb4.h"
 #include "usb4_lanebond.h"
 
-/* Hardware status packet */
 typedef struct {
   uint16_t voltage_mv;   /* INA231 bus voltage */
   int16_t  current_ma;   /* INA231 shunt current (signed) */
@@ -155,19 +154,8 @@ static void handle_usb_control(void) {
     wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
     wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
 
-    if (!(bmReq & USB_SETUP_TYPE_VENDOR)) {
-      uart_puts("[C ");
-      uart_puthex(bmReq);
-      uart_puts(" ");
-      uart_puthex(bReq);
-      uart_puts(" ");
-      uart_puthex(wLen >> 8); uart_puthex(wLen & 0xFF);
-      uart_puts("]\n");
-    }
-
     if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
       usb_handle_set_address(wValL);
-      uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
     } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
@@ -183,7 +171,7 @@ static void handle_usb_control(void) {
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
       // enable USB bulk mode (bypass MSC)
       REG_USB_MSC_CFG = 0x00;
-      // clearn bulk endpoints
+      // clear bulk endpoints
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
@@ -292,6 +280,7 @@ static void handle_usb_control(void) {
       /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (addr-lo, addr-hi, value, all LE). */
       uint8_t fmt_type = REG_USB_SETUP_WVAL_L;
       uint8_t byte_en  = REG_USB_SETUP_WVAL_H;
+      uint8_t tlp_mode = REG_USB_SETUP_WIDX_L & 0x03;   /* 0=single TLP, 1=stream OUT, 2=stream IN */
 
       dma_dwords = 0;
 
@@ -306,7 +295,7 @@ static void handle_usb_control(void) {
       REG_PCIE_ADDR_HIGH_2 = DESC_BUF[5];
       REG_PCIE_ADDR_HIGH_3 = DESC_BUF[4];
 
-      if ((REG_USB_SETUP_WIDX_L & 0x03) == 0) {
+      if (tlp_mode == 0) {
         /* Single TLP: fire with data from DESC_BUF[8-11] (LE). */
         if (fmt_type & PCIE_FMT_HAS_DATA) {
           REG_PCIE_DATA_3 = DESC_BUF[8];
@@ -326,13 +315,10 @@ static void handle_usb_control(void) {
         DMA_DWORDS_BYTE(2) = DESC_BUF[10];
         DMA_DWORDS_BYTE(3) = DESC_BUF[11];
         if (dma_dwords > 0) {
-          if ((REG_USB_SETUP_WIDX_L & 0x03) == 1) {
-            // host to device, we arm the OUT endpoint
-            REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
-          }
-          if ((REG_USB_SETUP_WIDX_L & 0x03) == 2) {
-            // device to host, we do the first IN
-            do_usb_bulk_in();
+          if (tlp_mode == 1) {
+            REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;   // host->device: arm the OUT endpoint
+          } else if (tlp_mode == 2) {
+            do_usb_bulk_in();                         // device->host: kick the first IN
           }
         }
       }
@@ -380,62 +366,35 @@ void int0_isr(void) __interrupt(0) {
       uint8_t link_event = REG_USB_PHY_CTRL_91D1;
       if (link_event & USB_91D1_FLAG) {
         REG_USB_PHY_CTRL_91D1 = USB_91D1_FLAG;
-        bank0_c9a8(0);
-        uart_puts("[91D1.1->c9a8]\n");
+        u4c_lane_reinit_gate(0);
       } else {
         REG_USB_PHY_CTRL_91D1 = link_event;
       }
-      uart_puts("[RST ");
-      uart_puthex(link_event);
-      uart_puts("]\n");
     } else if (periph_status & USB_PERIPH_CONTROL) {
       handle_usb_control();
     } else if (periph_status & USB_PERIPH_ALT_LINK) {
-      uint8_t status = REG_BUF_CFG_9301;
-      uart_puts("[ALT LINK ");
-      uart_puthex(status);
-      uart_puts("]\n");
-      REG_BUF_CFG_9301 = status;
+      uint8_t status = REG_BUF_CFG_9301; REG_BUF_CFG_9301 = status;   /* W1C ack */
     } else if (periph_status & USB_PERIPH_BULK_DATA) {
       handle_usb_bulk_data();
     } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
-      uint8_t ep = REG_USB_EP_READY;
-      uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts("]\n");
-      REG_USB_EP_READY = ep;
+      uint8_t ep = REG_USB_EP_READY; REG_USB_EP_READY = ep;   /* W1C ack */
     } else if (periph_status & USB_PERIPH_LINK_EVENT) {
       /* 0x9302 USB4-router link-event demux; service .2 then the 9300 SS event. */
-      uint8_t s9302 = REG_BUF_CFG_9302;
-      if (s9302 & 0x04) {
+      if (REG_BUF_CFG_9302 & 0x04) {
         REG_BUF_CFG_9302 = 0x04;
-        bank0_c9a8(1);
-        uart_puts("[9302.2->c9a8]\n");
+        u4c_lane_reinit_gate(1);
       }
       uint8_t ep = REG_BUF_CFG_9300;
-      if (ep & BUF_CFG_9300_SS_FAIL) {
-        /* In USB4 mode do not drop to USB2 (that abandons lane training); only ack. */
-        if (!(u4_cfg.mode_flag & 0x83)) {
-          uart_puts("[USB2 fallback]\n");
-          // fallback to USB2
-          is_usb2 = 1;
-          // without this, USB2 is flaky
-          REG_CPU_MODE = CPU_MODE_USB2;
-          // enable USB high speed mode
-          REG_USB_PHY_CTRL_91C0 = 0x10;
-        } else {
-          uart_puts("[SS_FAIL ack (USB4, no USB2 drop)]\n");
-        }
+      /* On SS link failure, fall back to USB2 — but never in USB4 mode (that abandons lane training). */
+      if ((ep & BUF_CFG_9300_SS_FAIL) && !(u4_cfg.mode_flag & 0x83)) {
+        uart_puts("[USB2 fallback]\n");
+        is_usb2 = 1;
+        REG_CPU_MODE = CPU_MODE_USB2;          // without this, USB2 is flaky
+        REG_USB_PHY_CTRL_91C0 = 0x10;          // enable USB high speed mode
       }
       REG_BUF_CFG_9300 = ep;
-      uart_puts("[LINK EVENT ");
-      uart_puthex(ep);
-      uart_puts(" link=");
-      uart_puthex(REG_USB_LINK_STATUS);
-      uart_puts("]\n");
     } else if (periph_status & USB_PERIPH_CBW_RECEIVED) {
-      // BULK OUT (but only if pointed to 0x911B)
-      uint8_t ep = REG_USB_MODE;
-      uart_puts("[CBW_RECEIVED "); uart_puthex(ep); uart_puthex(REG_USB_BULK_EP_CMD); uart_puts("]\n");
-      REG_USB_MODE = ep;
+      uint8_t mode = REG_USB_MODE; REG_USB_MODE = mode;   /* W1C ack */
       REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
     } else {
       uart_puts("[UNHANDLED INT0 ");
@@ -444,8 +403,7 @@ void int0_isr(void) __interrupt(0) {
     }
   }
   if (int0_type & INT_USB_CTRL_PENDING) {
-    // NOTE: MSC interrupts are not enabled, if you want them, you can do the two writes here
-    uart_puts("[MSC]\n");
+    // MSC interrupts are not enabled; ack only.
     REG_USB_MSC_CTRL = 1;
     REG_USB_MSC_STATUS = 0;
   }
@@ -485,11 +443,11 @@ void main(void) {
   boot_phy_bringup_early();
 
   // Seed the lane-engine link width/mode and the USB4 tunnel state flags.
-  bank0_92c5_seed();
+  u4_phy_state_seed();
 
   u4_cfg.dp_alt_mode = 3;
   u4_cfg.cap20g_gate0 = 1; u4_cfg.cap20g_gate1 = 1;
-  u4_cfg.sb_desc_profile = 3; u4_cfg.capability_profile = 1; u4_cfg.lane_gate_sel = 3;
+  u4_cfg.sb_desc_profile = 3; u4_cfg.lane_gate_sel = 3;
   u4_cfg.product_pid_lo = 0x63;
   u4_cfg.product_pid_hi = 0x24;
 
@@ -498,10 +456,10 @@ void main(void) {
   u4_cfg.tunnel_cfg_mode = 0x63;
   u4_cfg.tunnel_credits = 0x24;
 
-  pcie_tunnel_adapter_enable_b401();
+  pcie_tunnel_adapter_enable();
 
   // Stock seeds the sideband connect-service path at boot and then refreshes it in the main loop.
-  u4lb_e96c();
+  u4lb_phy_connect_dma_kick();
 #endif
 
   if (!(u4_cfg.mode_flag & 0x83)) {
@@ -521,13 +479,13 @@ void main(void) {
   usb_pipe_engine_init();
   usb4_phy_arm();
   pd_keystone_init();
-  usb4_irq_arm();
+  usb4_phy_rx_arm();
 
   REG_INT_ENABLE = (uint8_t)((REG_INT_ENABLE & 0xBF) | 0x40);
 
   P1_WR(0x0000, (uint8_t)(P1_RD(0x0000) & 0xFD));
   REG_INT_CTRL = (uint8_t)((REG_INT_CTRL & 0xFD) | 0x02);
-  u4lb_b031_transport_reinit(0);
+  u4lb_transport_reinit(0);
   P1_WR(P1_USB4_BOOT_TAIL_CTRL_1602, (uint8_t)(P1_RD(P1_USB4_BOOT_TAIL_CTRL_1602) & 0xFE));
   P1_WR(P1_USB4_BOOT_TAIL_EVENT_1603, 0x01);
   P1_WR(P1_USB4_BOOT_TAIL_CTRL_1602, (uint8_t)(P1_RD(P1_USB4_BOOT_TAIL_CTRL_1602) & 0xFD));
@@ -546,7 +504,6 @@ void main(void) {
   { uint8_t z; for (z = 0; z < U4_ROUTEROP_MBOX_CLEAR_LEN; z++) U4_XDATA_BYTES(u4_routerop_mbox_state)[z] = 0; }
   u4_sb.active_port_rr = 0;
   u4_sb.route_up_trigger = 0; u4_sb.lane_bonded_flag = 0;
-  u4_sb.laneA_cl0_latch = 0; u4_sb.laneB_cl0_latch = 0;
   u4_sb.transport_edge_toggle = 0; u4_sb.link_edge_toggle = 0; u4_sb.active_plane_port = 0;
   u4_sb.conn_consequence_done = 0; u4_sb.state = U4FSM_IDLE;
   u4_sb.conn_routing_substate = CONNRT_PRINT_STATUS; lb_loop1_state[0] = LP1_PARKED; lb_loop1_state[1] = LP1_PARKED;
@@ -555,10 +512,10 @@ void main(void) {
   u4_sb.connect_descriptor = 0; u4_sb.tx_command_desc = 0;
   u4_pd.connect_oneshot_suppress = 0;
 
-  u4_boot.pcie_ctrl_b402_shadow = 0;
+  u4_boot.pcie_ctrl_shadow = 0;
   u4_boot.pd_seen = 0;
   u4_boot.sb_asserted = 0;
-  u4_boot.tup_e52d_done = 0;
+  u4_boot.tunnel_up_done = 0;
 #endif
 
   // enable interrupts (EX1 = PD/USB4 INT1)
@@ -576,31 +533,31 @@ void main(void) {
 #if HANDMADE_USB4_MODE_FLAGS
     if ((u4_cfg.mode_flag & 0x83) && u4_sb.conn_consequence_done) {
       IE &= (uint8_t)~IE_EA;
-      sb_cb10_lane_advance();
+      sb_lane_cl_track();
       if (u4_sb.state != U4FSM_IDLE) {
-        uint16_t cur = u4lb_ee57();
+        uint16_t cur = u4lb_read_lane_width_cnt();
         uint8_t cur_hi = (uint8_t)(cur >> 8), cur_lo = (uint8_t)cur;
         uint8_t snap_hi = u4_sb.walk_throttle_snap_hi, snap_lo = u4_sb.walk_throttle_snap_lo;  /* 0x076A:0x076B */
         uint8_t d_lo = (uint8_t)(snap_lo - cur_lo);
         uint8_t d_hi = (uint8_t)(snap_hi - cur_hi - (uint8_t)((snap_lo < cur_lo) ? 1 : 0));
         if (d_hi >= (uint8_t)((d_lo < 3) ? 1 : 0)) {
-          u4lb_e672();
-          cur = u4lb_ee57();
+          u4lb_fsm_step();
+          cur = u4lb_read_lane_width_cnt();
           u4_sb.walk_throttle_snap_hi = (uint8_t)(cur >> 8);
           u4_sb.walk_throttle_snap_lo = (uint8_t)cur;
         }
       }
-      if (u4_sb.cdf5_substate_arm != 0) sb_cdf5_routerop_response(u4lb_eda0());
+      if (u4_sb.routerop_resp_armed != 0) sb_routerop_response(u4lb_routerop_poll());
       IE |= IE_EA;
     }
 
     IE &= (uint8_t)~IE_EA;
-    sb_connect_service_reservice_d7cd();
+    sb_connect_reservice();
     IE |= IE_EA;
 
     if (SB_RD(0x26) & 0x02) {
       IE &= (uint8_t)~IE_EA;
-      sb_a5d8_pend_int();
+      sb_routerop_pending();
       if (SB_RD(0x26) & 0x02) SB_WR(0x26, 0x02);   // W1C SB[0x26].1 after response, like a066
       IE |= IE_EA;
     }

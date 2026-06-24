@@ -51,11 +51,9 @@ _Static_assert(sizeof(rmbox_state_t) == 1, "rmbox_state_t must be 1 byte");
 
 typedef struct {
     uint8_t lane_cap[2];
-    uint8_t cdr_arm_mask;
 } u4_phy_runtime_t;
 
 typedef struct {
-    uint8_t rxpll_train_busy;
     uint8_t conn_consequence_done;
     u4_fsm_state_t state;
     uint8_t transport_edge_toggle;
@@ -63,18 +61,16 @@ typedef struct {
     uint8_t active_plane_port;
     uint8_t active_port_rr;
     uint8_t route_enable_latch;
-    uint8_t e461_inflight_token;
-    uint8_t cdf5_substate_arm;
+    uint8_t routerop_push_token;  /* e461 */
+    uint8_t routerop_resp_armed;  /* cdf5 */
     uint8_t laneA_cl_latch;
     uint8_t laneB_cl_latch;
     uint8_t lane_bonded_flag;
-    uint8_t laneA_cl0_latch;
-    uint8_t laneB_cl0_latch;
     uint8_t lane_width_latch0;
     uint8_t lane_width_latch1;
     uint8_t connect_descriptor;
     uint8_t tx_command_desc;
-    uint8_t af38_copy_len;
+    uint8_t sb_desc_resp_len;  /* af38 */
     connrt_substate_t conn_routing_substate;
     uint8_t phy_gate_a;
     uint8_t phy_gate_b;
@@ -94,7 +90,6 @@ typedef struct {
     uint8_t contract_state;
     uint8_t connect_route_latch;
     uint8_t enter_usb_accepted;
-    uint8_t connect_pending;
     uint8_t role_state;
     uint8_t msg_substate;
     uint8_t usb3_fallback_flag;
@@ -104,32 +99,21 @@ typedef struct {
     uint8_t tx_msg_len;
     uint8_t bist_mode;
     uint8_t sop_field;
-    uint8_t state_07cb;
-    uint8_t route_confirm_07cc;
+    uint8_t eudo_mode_confirm;  /* 07cc */
     uint8_t confirm_input_cd;
     uint8_t confirm_input_ce;
     uint8_t confirm_input_cf;
     uint8_t rx_slot_mask;
     uint8_t decoded_voltage_hi;
     uint8_t decoded_voltage_lo;
-    uint8_t timer_a;
-    uint8_t timer_b;
-    uint8_t timer_c;
-    uint8_t timer_d;
     uint8_t softreset_pending;
-    uint8_t hardreset_done;
-    uint8_t timer_e;
-    uint8_t timer_f;
-    uint8_t timer_g;
-    uint8_t state_07e3;
-    uint8_t connect_gate_e8;
-    uint8_t connect_gate_eb;
+    uint8_t enter_usb_reinit_gate;  /* e8 */
+    uint8_t connect_reinit_gate;  /* eb */
     uint8_t connect_oneshot_suppress;
     uint8_t cm_dispatch_sel;
 } u4_pd_policy_t;
 
 typedef struct {
-    uint8_t descr_engine_scratch;
     uint8_t hdr0;
     uint8_t hdr1;
     uint8_t hdr2;
@@ -141,7 +125,6 @@ typedef struct {
     uint8_t cap20g_gate0;
     uint8_t cap20g_gate1;
     uint8_t sb_desc_profile;
-    uint8_t capability_profile;
     uint8_t mode_flag;
     uint8_t route_mode;
     uint8_t lane_gate_sel;
@@ -162,13 +145,12 @@ typedef struct {
 } u4_cfg_shadow_t;
 
 typedef struct {
-    uint8_t lane_profile;
-    uint8_t data3c_b;
-    uint8_t data3d_b;
-    uint8_t data3e_b;
-    uint8_t data3f_b;
-    uint8_t data3c_a;
-    uint8_t data3d_a;
+    uint8_t p12_desc_b0;  /* 3c */
+    uint8_t p12_desc_b1;  /* 3d */
+    uint8_t p12_desc_b2;  /* 3e */
+    uint8_t p12_desc_b3;  /* 3f */
+    uint8_t p12_desc_a0;  /* 3c */
+    uint8_t p12_desc_a1;  /* 3d */
     uint8_t data_lo;
     uint8_t data_hi;
     uint8_t cc_subdemux_src;
@@ -177,10 +159,10 @@ typedef struct {
 } u4_p12_temp_t;
 
 typedef struct {
-    uint8_t pcie_ctrl_b402_shadow;
+    uint8_t pcie_ctrl_shadow;  /* b402 */
     uint8_t pd_seen;
     uint8_t sb_asserted;
-    uint8_t tup_e52d_done;
+    uint8_t tunnel_up_done;  /* e52d */
 } u4_boot_scratch_t;
 
 #define U4_XDATA_BYTES(sym) ((volatile __xdata uint8_t *)&(sym))
@@ -189,7 +171,6 @@ typedef struct {
 /* Fixed XDATA map shared with stock-style PD, sideband, and router-op flows. */
 
 /* Sideband descriptor tables and host work buffers. */
-volatile __xdata __at(0x0600) uint8_t sb_cfg06[0x10];
 volatile __xdata __at(0x06F2) uint8_t sb_width_lut[0x13];
 volatile __xdata __at(0x0705) uint8_t sb_branchA_gate[0x13];
 volatile __xdata __at(0x071A) uint8_t sb_lane_desc[0x10];
@@ -221,11 +202,11 @@ volatile __xdata u4_boot_scratch_t u4_boot;
 
 /* Lane-bond descriptor-engine scratch. */
 volatile __xdata __at(0x09DD) uint8_t u4lb_lane_active_flags;
-volatile __xdata __at(0x0B34) uint8_t u4lb_b34_lanemask;
-volatile __xdata __at(0x0B35) uint8_t u4lb_b35;
-volatile __xdata __at(0x0B36) uint8_t u4lb_b36;
-volatile __xdata __at(0x0B37) uint8_t u4lb_b37;
-volatile __xdata __at(0x0B38) uint8_t u4lb_b38_setlanes;
+volatile __xdata __at(0x0B34) uint8_t u4lb_desc0_lanemask;
+volatile __xdata __at(0x0B35) uint8_t u4lb_desc1;
+volatile __xdata __at(0x0B36) uint8_t u4lb_desc2;
+volatile __xdata __at(0x0B37) uint8_t u4lb_desc3;
+volatile __xdata __at(0x0B38) uint8_t u4lb_desc_set_mode;
 volatile __xdata __at(0x0AA2) uint8_t u4_routerop_op_lo;
 volatile __xdata __at(0x0AA3) uint8_t u4_routerop_op_len;
 volatile __xdata __at(0x0AA4) uint8_t u4_routerop_opcode;

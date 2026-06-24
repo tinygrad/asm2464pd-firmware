@@ -2540,7 +2540,6 @@
 #define REG_PHY_LANEA_CDR_C2CB             XDATA_REG8V(0xC2CB)  /* PHY lane-A CDR cfg bit2 (e35f, paired C34B) */
 #define REG_PHY_LANEA_C2CE                 XDATA_REG8V(0xC2CE)  /* PHY lane-A trim bits4:2 (paired C34E) */
 #define REG_PHY_LANEA_LOCK_C2D0            XDATA_REG8V(0xC2D0)  /* PHY lane-A lock status (bit5 rate,bit6 PLL) */
-#define REG_PHY_LANEA_STATUS_C2D1          XDATA_REG8V(0xC2D1)  /* PHY lane-A status (debug dump, paired C351) */
 #define REG_PHY_LANEA_MARGIN_PHASE_C2D2    XDATA_REG8V(0xC2D2)  /* PHY lane-A CDR phase margin (bits5:0) */
 #define REG_PHY_LANEA_MARGIN_EYE_C2D9      XDATA_REG8V(0xC2D9)  /* PHY lane-A CDR eye-margin sample lo */
 #define REG_PHY_LANEA_MARGIN_EYE_C2DA      XDATA_REG8V(0xC2DA)  /* PHY lane-A CDR eye-margin sample hi */
@@ -2573,7 +2572,6 @@
 #define REG_PHY_LANEB_CDR_C34B             XDATA_REG8V(0xC34B)  /* PHY lane-B CDR cfg bit2 (e36c, paired C2CB) */
 #define REG_PHY_LANEB_C34E                 XDATA_REG8V(0xC34E)  /* PHY lane-B trim bits4:2 (paired C2CE) */
 #define REG_PHY_LANEB_LOCK_C350            XDATA_REG8V(0xC350)  /* PHY lane-B lock status (bit5 rate,bit6 PLL) */
-#define REG_PHY_LANEB_STATUS_C351          XDATA_REG8V(0xC351)  /* PHY lane-B status (debug dump, paired C2D1) */
 #define REG_PHY_LANEB_MARGIN_PHASE_C352    XDATA_REG8V(0xC352)  /* PHY lane-B CDR phase margin (bits5:0) */
 #define REG_PHY_LANEB_MARGIN_EYE_C359      XDATA_REG8V(0xC359)  /* PHY lane-B CDR eye-margin sample lo */
 #define REG_PHY_LANEB_MARGIN_EYE_C35A      XDATA_REG8V(0xC35A)  /* PHY lane-B CDR eye-margin sample hi */

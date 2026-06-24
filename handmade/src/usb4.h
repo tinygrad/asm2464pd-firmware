@@ -12,29 +12,29 @@ static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13) {
   REG_TIMER0_CSR = 0x02;
 }
 
-static uint8_t boot_phy_d118(uint8_t ctrl) {
+static uint8_t boot_phy_ltssm_kick(uint8_t ctrl) {  /* d118 */
   REG_LTSSM_CTRL = ctrl;
   phy_cc10_cmd_wait(0, 0, 0xF9);
   return REG_LTSSM_CTRL;
 }
-static void boot_phy_d0d3_typec_sbu(void) {
+static void boot_phy_typec_sbu_seq(void) {  /* d0d3 */
   REG_LTSSM_CTRL &= 0xDF;
   REG_LTSSM_CTRL &= 0xBF;
   phy_cc10_cmd_wait(0, 0, 0x09);
-  REG_LTSSM_CTRL = (boot_phy_d118(REG_LTSSM_CTRL & 0xFD) & 0xDF) | 0x20;
+  REG_LTSSM_CTRL = (boot_phy_ltssm_kick(REG_LTSSM_CTRL & 0xFD) & 0xDF) | 0x20;
   phy_cc10_cmd_wait(1, 1, 0x67);
-  REG_LTSSM_CTRL = (boot_phy_d118(REG_LTSSM_CTRL & 0xFB) & 0xBF) | 0x40;
+  REG_LTSSM_CTRL = (boot_phy_ltssm_kick(REG_LTSSM_CTRL & 0xFB) & 0xBF) | 0x40;
   phy_cc10_cmd_wait(0, 0, 0xF9);
   REG_LTSSM_STATE &= 0x7F;
 }
 
-static void boot_phy_bceb_set0(uint16_t addr) {
+static void boot_phy_set_bit0(uint16_t addr) {  /* bceb */
   XDATA_REG8(addr) = (XDATA_REG8V(addr) & 0xFE) | 0x01;
 }
-static void boot_phy_cf28(void) {
-  boot_phy_bceb_set0(0xCC30);
+static void boot_phy_link_clk_setup(void) {  /* cf28 */
+  boot_phy_set_bit0(0xCC30);
   REG_LINK_WIDTH_E710 = (REG_LINK_WIDTH_E710 & 0xE0) | 0x04;
-  boot_phy_bceb_set0(0xC6A8);
+  boot_phy_set_bit0(0xC6A8);
   REG_CPU_EXEC_STATUS_2 = 0x04;
   REG_LINK_CTRL_E324 &= 0xFB;
   REG_TIMER_CTRL_CC3B = REG_TIMER_CTRL_CC3B & 0xFE;
@@ -48,10 +48,10 @@ static void boot_phy_cf28(void) {
   REG_TIMER_ENABLE_B = REG_TIMER_ENABLE_B & 0xFD;
   REG_TIMER_ENABLE_A &= 0xFD;
   REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;
-  boot_phy_bceb_set0(0xCA81);
+  boot_phy_set_bit0(0xCA81);
 }
 
-static void boot_phy_bank1_ed02(void) {
+static void boot_phy_sb_keystone_arm(void) {  /* ed02 */
   REG_CPU_CTRL_CC37 = (REG_CPU_CTRL_CC37 & 0xFB) | 0x04;
   SB_WR(0x05, (SB_RD(0x05) & 0x7F) | 0x80);
   REG_CPU_CTRL_CA70 &= 0xFC;
@@ -59,7 +59,7 @@ static void boot_phy_bank1_ed02(void) {
   P1_CLR(0x0000, 0x02);
 }
 
-static void boot_phy_dd42(uint8_t mode) {
+static void boot_phy_set_link_mode(uint8_t mode) {  /* dd42 */
   if (!(XDATA_REG8V(0x0AF1) & 0x20) || mode == 0 || mode == 2) {
     REG_PHY_LINK_CTRL = 0x00;
   } else if (mode == 4) {
@@ -71,7 +71,7 @@ static void boot_phy_dd42(uint8_t mode) {
   }
 }
 
-static void boot_phy_e57d_e764_reset_pulse(uint8_t enable) {
+static void boot_phy_reset_pulse(uint8_t enable) {  /* e57d/e764 */
   if (enable & 0x01) {
     REG_PHY_TIMER_CTRL_E764 &= 0xFD;
     REG_PHY_TIMER_CTRL_E764 &= 0xFE;
@@ -79,7 +79,7 @@ static void boot_phy_e57d_e764_reset_pulse(uint8_t enable) {
     REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFB) | 0x04;
   }
 }
-static void boot_phy_d630_lane_power(uint8_t enable) {
+static void boot_phy_lane_power(uint8_t enable) {  /* d630 */
   XDATA_REG8(0xB432) = (XDATA_REG8V(0xB432) & 0xF8) | 0x07;
   XDATA_REG8(0xB404) = (XDATA_REG8V(0xB404) & 0xF0) | (enable & 0x0F);
   if (enable == 0x01) {
@@ -88,25 +88,25 @@ static void boot_phy_d630_lane_power(uint8_t enable) {
     REG_SYS_CTRL_E77C  = (uint8_t)(REG_SYS_CTRL_E77C & 0xEF);
   }
 }
-static void boot_phy_d436_width(uint8_t width) {
+static void boot_phy_set_lane_width(uint8_t width) {  /* d436 */
   XDATA_REG8(0xB434) = width;
   XDATA_REG8(0xB436) = (XDATA_REG8V(0xB436) & 0xF0) | (width & 0x0F);
 }
-static void boot_phy_d996_pcie_tunnel_boot(void) {
+static void boot_phy_pcie_tunnel_boot(void) {  /* d996 */
   REG_PCIE_CTRL_B402 &= 0xFD;
   REG_PCIE_LANE_CTRL_C659 &= 0xFE;
-  boot_phy_e57d_e764_reset_pulse(0x01);
-  boot_phy_d630_lane_power(0x01);
-  boot_phy_d436_width(0x0F);
+  boot_phy_reset_pulse(0x01);
+  boot_phy_lane_power(0x01);
+  boot_phy_set_lane_width(0x0F);
 }
 
 static void boot_phy_bringup_early(void) {
   uint8_t ltssm = REG_LTSSM_CTRL;
   if (((ltssm >> 1) & 1) || ((ltssm >> 2) & 1)) {
-    boot_phy_d0d3_typec_sbu();
+    boot_phy_typec_sbu_seq();
   }
-  boot_phy_cf28();
-  boot_phy_bank1_ed02();
+  boot_phy_link_clk_setup();
+  boot_phy_sb_keystone_arm();
   REG_PHY_CONFIG &= 0xFC;
   REG_PHY_CONFIG = (REG_PHY_CONFIG & 0xFB) | 0x04;
   phy_cc10_cmd_wait(2, 0, 0x14);
@@ -115,18 +115,18 @@ static void boot_phy_bringup_early(void) {
   { uint16_t spin = 0;
     while (!((REG_LINK_STATUS_E712 & 0x03) || ((REG_TIMER0_CSR >> 1) & 1)) && ++spin < 0xFFFF); }
   phy_cc11_ack();
-  boot_phy_dd42(0);
-  boot_phy_d996_pcie_tunnel_boot();
+  boot_phy_set_link_mode(0);
+  boot_phy_pcie_tunnel_boot();
 }
 
-static void bank0_92c5_seed(void) {
+static void u4_phy_state_seed(void) {  /* 92c5 */
   XDATA_REG8(0x0AE3) = 1;
   XDATA_REG8(0x0AEC) = 3;
   XDATA_REG8(0x0AED) = 3;
   XDATA_REG8(0x0AF1) = 0x00;
 }
 
-static void pcie_tunnel_adapter_config_b410(void) {
+static void pcie_tunnel_adapter_config(void) {  /* b410 */
   uint8_t lo = u4_cfg.tunnel_cfg_lo, hi = u4_cfg.tunnel_cfg_hi, mode = u4_cfg.tunnel_cfg_mode, cred = u4_cfg.tunnel_credits;
   REG_TUNNEL_CFG_A_LO = lo;
   XDATA_REG8(0xB411) = hi;
@@ -146,9 +146,9 @@ static void pcie_tunnel_adapter_config_b410(void) {
   XDATA_REG8(0xB429) = mode;
 }
 
-static void pcie_tunnel_adapter_enable_b401(void) {
+static void pcie_tunnel_adapter_enable(void) {  /* b401 */
   REG_CPU_MODE_NEXT &= 0xEF;
-  pcie_tunnel_adapter_config_b410();
+  pcie_tunnel_adapter_config();
   P1_WR(0x4084, 0x22);
   P1_WR(0x5084, 0x22);
   REG_PCIE_TUNNEL_CTRL |= 0x01;
@@ -162,14 +162,14 @@ static void pcie_tunnel_adapter_enable_b401(void) {
   P1_WR(0x6025, (uint8_t)((P1_RD(0x6025) & 0x7F) | 0x80));
 }
 
-static void u4c_e0d9(uint8_t mode) {
+static void u4c_phy_cdr_seed(uint8_t mode) {  /* e0d9 */
   if (mode == 4) {
     REG_PHY_RXPLL_RESET = 0x3E; REG_PHY_CTRL_C20F = 0x08; REG_PHY_CDR_SEED_C210 = 0x08; REG_PHY_CDR_SEED_C211 = 0x2E; REG_PHY_CDR_SEED_C212 = 0x3E;
     REG_PHY_CDR_SEED_C214 = 0x00; REG_PHY_CDR_SEED_C215 = 0x20; REG_PHY_CDR_SEED_C216 = 0x00; REG_PHY_CDR_SEED_C217 = 0x3F;
   }
 }
 
-static void u4c_e7c1(uint8_t mode) {
+static void u4c_lane_timer_gate(uint8_t mode) {  /* e7c1 */
   if (mode == 1) { REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0xFD; }
   else if (u4_connect_gate & 0x10) { REG_TIMER_ENABLE_B = (REG_TIMER_ENABLE_B & 0xFD) | 0x02; REG_TIMER_ENABLE_A = (REG_TIMER_ENABLE_A & 0xFD) | 0x02; }
 }
@@ -181,9 +181,9 @@ static void usb4_connect_u4(void) {
     REG_CPU_CTRL_CA81 &= 0xFE;
     REG_CPU_MODE_NEXT = (REG_CPU_MODE_NEXT & 0x1F) | 0x60;
   }
-  boot_phy_dd42(0);
-  u4c_e7c1(1);
-  u4c_e0d9(0);
+  boot_phy_set_link_mode(0);
+  u4c_lane_timer_gate(1);
+  u4c_phy_cdr_seed(0);
   if (u4_pd.enter_usb_accepted == 0) {
     if (u4_pd.connect_route_latch == 0) return;
     u4_cfg.route_mode = 0x81;
@@ -213,7 +213,7 @@ static uint8_t u4rop_underflow(void) {
   return 0;
 }
 
-static void u4rop_send_read_resp(void) {
+static void u4rop_read_flash_resp(void) {
   uint8_t xfer_len, shadow_ptr0, shadow_ptr1, shadow_ptr2;
   uint16_t w16, g;
   if (u4rop_underflow()) xfer_len = 0x80;
@@ -273,7 +273,7 @@ static void cm_routerop_mailbox(void) {
         u4_rop_limit[1] = u4_rop_cfg_addr[3];
         u4_rop_limit[2] = u4_rop_cfg_addr[3];
         u4_rop_limit[3] = u4_rop_cfg_addr[3];
-        u4rop_send_read_resp();
+        u4rop_read_flash_resp();
         if (!u4rop_underflow() &&
             (u4_rop_limit[0] != u4_rop_cfg_addr[0] || u4_rop_limit[1] != u4_rop_cfg_addr[1] ||
              u4_rop_limit[2] != u4_rop_cfg_addr[2] || u4_rop_limit[3] != u4_rop_cfg_addr[3]))
@@ -286,7 +286,7 @@ static void cm_routerop_mailbox(void) {
 
   if (u4_routerop_mbox_state == RMBOX_MULTIPKT_1) {
     if (u4_routerop_mbox_opcode == 0xE2) {
-      u4rop_send_read_resp();
+      u4rop_read_flash_resp();
       if (u4rop_underflow()) u4_routerop_mbox_state = RMBOX_IDLE;
       REG_SYS_CTRL_EA90 = 0xA5;
       return;
@@ -302,13 +302,13 @@ static void cm_routerop_mailbox(void) {
   }
 }
 
-static void u4lb_e74e(void);
-static void u4lb_a310(uint8_t cur);
-static void u4lb_e890(uint8_t ctrl_low6);
-static void u4lb_d855(uint8_t heavy);
-static void u4lb_d90e_link_phy_reconfig(void);
+static void u4lb_cpu_ext_kick(void);  /* e74e */
+static void u4lb_reg_set_bit7(uint8_t cur);  /* a310 */
+static void u4lb_desc_commit_noset(uint8_t ctrl_low6);  /* e890 */
+static void u4lb_tunnel_event_dispatch(uint8_t heavy);  /* d855 */
+static void u4lb_link_phy_reconfig(void);  /* d90e */
 
-static void usb4_sec_adapter_link_event_c105(void) {
+static void usb4_sec_adapter_link_event(void) {  /* c105 */
   uint8_t p1407 = P1_RD(P1_USB4_ADP_EVENT_STATUS_1407);
   uint8_t p1508 = P1_RD(P1_USB4_TUNNEL_EVENT_STATUS_1508);
   uint8_t p1603 = P1_RD(P1_USB4_BOOT_TAIL_EVENT_1603);
@@ -320,22 +320,22 @@ static void usb4_sec_adapter_link_event_c105(void) {
     }
     if (P1_RD(0x124E) & 0x02) {
       P1_WR(0x124E, 0x02);
-      u4lb_a310(0x35);
-      eng_a2df(0x36, 0x03);
-      u4lb_e890(0x03);
-      if (P1_RD(0x1243) & 0x80) u4lb_d90e_link_phy_reconfig();
+      u4lb_reg_set_bit7(0x35);
+      ENG_DESC_WR_CLR(0x36, 0x03);
+      u4lb_desc_commit_noset(0x03);
+      if (P1_RD(0x1243) & 0x80) u4lb_link_phy_reconfig();
     }
   }
 
   if (p1407 & 0x08) {
-    u4lb_d855(0);
+    u4lb_tunnel_event_dispatch(0);
   }
 
   if (p1603 & 0x01) {
     P1_WR(P1_USB4_BOOT_TAIL_EVENT_1603, 0x01);
     if (u4_cfg.route_mode & 0x02) {
       if (REG_POWER_STATUS & 0x40) u4_entered_usb_mode = 1;
-      u4lb_e74e();
+      u4lb_cpu_ext_kick();
       u4_pd.cm_dispatch_sel = 0x69;
     }
   } else if (p1603 & 0x02) {
@@ -349,7 +349,7 @@ static void usb4_int_demux(void) {
     sb_router_event_handler();
   }
   if (int_sources & 0x10) {
-    usb4_sec_adapter_link_event_c105();
+    usb4_sec_adapter_link_event();
   }
   if (REG_NVME_EVENT_STATUS & 0x01) {
     REG_NVME_EVENT_ACK = 1;
@@ -362,7 +362,7 @@ static void usb4_int_demux(void) {
   }
 }
 
-static __code const uint8_t u4rx_tab[324][4] = {
+static __code const uint8_t u4_phy_rx_init_tab[324][4] = {
   {0x78,0x9b,0xcf,0x10}, {0x78,0x9b,0x7f,0x80}, {0x60,0x00,0x3f,0xc0}, {0x60,0x04,0xff,0x01},
   {0x60,0x06,0x0f,0x40}, {0x60,0x07,0x80,0x01}, {0x60,0x59,0x03,0x40}, {0x60,0x5a,0xe0,0x00},
   {0x60,0x0a,0xff,0x11}, {0x60,0x42,0xff,0x03}, {0x60,0x05,0xf9,0x02}, {0x79,0x9b,0xcf,0x10},
@@ -454,76 +454,76 @@ static void PG_WR(uint16_t addr, uint8_t v) {
 }
 
 #define RMW(a, m, o)   PR(a) = (PR(a) & (uint8_t)(m)) | (uint8_t)(o)
-#define C390(a)        RMW((a), 0xFB, 0x04)
-#define C34A(a)        RMW((a), 0x8F, 0x70)
-#define C2F8(a)        RMW((a), 0xFE, 0x01)
-#define C351(a)        RMW((a), 0xFD, 0x02)
-#define C358(a)        RMW((a), 0x1F, 0x60)
-#define C2F1(a)        RMW((a), 0xF0, 0x0B)
-#define C2FF(a)        RMW((a), 0xF3, 0x04)
-#define C2BF(a)        RMW((a), 0xFC, 0x02)
-#define C35F(a)        RMW((a), 0xE0, 0x0A)
-#define C366(a)        RMW((a), 0xE0, 0x03)
-#define C36D(a)        RMW((a), 0xE0, 0x08)
-#define C2E0(a)        RMW((a), 0xF0, 0x07)
-#define C2E7(a)        RMW((a), 0xF0, 0x0F)
-#define C374(a)        RMW((a), 0xE0, 0x11)
-#define C382(a)        RMW((a), 0xF0, 0x0D)
-#define C389(a)        RMW((a), 0x1F, 0x40)
-#define C37B(a)        RMW((a), 0x0F, 0x80)
-static void C335(uint16_t reg) { RMW(reg, 0x0F, 0xE0); RMW(reg + 1, 0x0F, 0x70); }
-static void C30E(uint16_t reg) { PR(reg) &= 0xFE; PR(reg) &= 0xFD; PR(reg) &= 0xFB; PR(reg) &= 0xF7; }
-static void C2D9(uint16_t reg) { RMW(reg, 0x0F, 0x60); RMW(reg + 1, 0xF0, 0x07); }
-static void C397(uint16_t reg) { RMW(reg, 0xF1, 0x0E); PR(reg + 1) = 0; }
+#define PHY_SET_BIT2(a)        RMW((a), 0xFB, 0x04)  /* c390 */
+#define PHY_SET_NIB_HI7(a)        RMW((a), 0x8F, 0x70)  /* c34a */
+#define PHY_SET_BIT0(a)        RMW((a), 0xFE, 0x01)  /* c2f8 */
+#define PHY_SET_BIT1(a)        RMW((a), 0xFD, 0x02)  /* c351 */
+#define PHY_SET_HI3_60(a)        RMW((a), 0x1F, 0x60)  /* c358 */
+#define PHY_SET_LO_0B(a)        RMW((a), 0xF0, 0x0B)  /* c2f1 */
+#define PHY_SET_F3_04(a)        RMW((a), 0xF3, 0x04)  /* c2ff */
+#define PHY_SET_FC_02(a)        RMW((a), 0xFC, 0x02)  /* c2bf */
+#define PHY_SET_E0_0A(a)        RMW((a), 0xE0, 0x0A)  /* c35f */
+#define PHY_SET_E0_03(a)        RMW((a), 0xE0, 0x03)  /* c366 */
+#define PHY_SET_E0_08(a)        RMW((a), 0xE0, 0x08)  /* c36d */
+#define PHY_SET_F0_07(a)        RMW((a), 0xF0, 0x07)  /* c2e0 */
+#define PHY_SET_F0_0F(a)        RMW((a), 0xF0, 0x0F)  /* c2e7 */
+#define PHY_SET_E0_11(a)        RMW((a), 0xE0, 0x11)  /* c374 */
+#define PHY_SET_F0_0D(a)        RMW((a), 0xF0, 0x0D)  /* c382 */
+#define PHY_SET_1F_40(a)        RMW((a), 0x1F, 0x40)  /* c389 */
+#define PHY_SET_BIT7(a)        RMW((a), 0x0F, 0x80)  /* c37b */
+static void phy_set_e0_07_pair(uint16_t reg) { RMW(reg, 0x0F, 0xE0); RMW(reg + 1, 0x0F, 0x70); }  /* c335 */
+static void phy_clr_lo4(uint16_t reg) { PR(reg) &= 0xFE; PR(reg) &= 0xFD; PR(reg) &= 0xFB; PR(reg) &= 0xF7; }  /* c30e */
+static void phy_set_60_07_pair(uint16_t reg) { RMW(reg, 0x0F, 0x60); RMW(reg + 1, 0xF0, 0x07); }  /* c2d9 */
+static void phy_set_0e_clr_next(uint16_t reg) { RMW(reg, 0xF1, 0x0E); PR(reg + 1) = 0; }  /* c397 */
 
-static void usb4_phy_rx_descriptor_8e31(void) {
+static void usb4_phy_rx_descriptor_load(void) {  /* 8e31 */
   REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0xF8) | 0x03;
   REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0xC7) | 0x28;
   REG_PHY_PLL_CFG = (REG_PHY_PLL_CFG & 0xFC) | 0x03;
   REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0x3F) | 0x80;
   REG_PHY_PLL_CFG &= 0xF7;
   REG_CPU_CLK_CFG = (REG_CPU_CLK_CFG & 0x1F) | 0x80;
-  C390(0xC21F);
+  PHY_SET_BIT2(0xC21F);
   SB_WR(0x49, 0xA0);
 
   REG_PHY_LINK_CTRL_C21F = (REG_PHY_LANEA_RATE_START_C2A8 & 0x3F) | 0x40;
-  C34A(0xC2C5);
+  PHY_SET_NIB_HI7(0xC2C5);
   REG_PHY_LANEA_C2A1 = (REG_PHY_LANEA_C2A1 & 0x9F) | 0x60;
-  C2F8(0xC28C); C2F8(0xC29C); C2F8(0xC2AC);
+  PHY_SET_BIT0(0xC28C); PHY_SET_BIT0(0xC29C); PHY_SET_BIT0(0xC2AC);
   REG_PHY_LANEA_C2BC &= 0xFE;
   REG_PHY_LANEA_C28C &= 0xFD;
-  C351(0xC29C); C351(0xC2AC);
+  PHY_SET_BIT1(0xC29C); PHY_SET_BIT1(0xC2AC);
   REG_PHY_LANEA_C2BC &= 0xFD;
   REG_PHY_ORIENT_C2C3 = (REG_PHY_ORIENT_C2C3 & 0xC3) | 0x1C;
   REG_PHY_LANEA_RATE_DESC_C2C9 = (REG_PHY_LANEA_RATE_DESC_C2C9 & 0x80) | 0x41;
-  C335(0xC2A5);
-  C30E(0xC2CA);
-  C358(0xC287);
-  C34A(0xC294);
-  C358(0xC2A2);
-  C2F1(0xC2C5);
-  C2FF(0xC293);
-  C2BF(0xC2CE);
+  phy_set_e0_07_pair(0xC2A5);
+  phy_clr_lo4(0xC2CA);
+  PHY_SET_HI3_60(0xC287);
+  PHY_SET_NIB_HI7(0xC294);
+  PHY_SET_HI3_60(0xC2A2);
+  PHY_SET_LO_0B(0xC2C5);
+  PHY_SET_F3_04(0xC293);
+  PHY_SET_FC_02(0xC2CE);
   REG_PHY_LANEA_C2CE = (REG_PHY_LANEA_C2CE & 0xE3) | 0x14;
   REG_PHY_LANEA_C2CE = (REG_PHY_LANEB_RATE_START_C328 & 0x3F) | 0x40;
 
-  C34A(0xC345);
+  PHY_SET_NIB_HI7(0xC345);
   REG_PHY_LANEB_C321 = (REG_PHY_LANEB_C321 & 0x9F) | 0x60;
-  C2F8(0xC30C); C2F8(0xC31C); C2F8(0xC32C);
+  PHY_SET_BIT0(0xC30C); PHY_SET_BIT0(0xC31C); PHY_SET_BIT0(0xC32C);
   REG_PHY_LANEB_C33C &= 0xFE;
   REG_PHY_LANEB_C30C &= 0xFD;
-  C351(0xC31C); C351(0xC32C);
+  PHY_SET_BIT1(0xC31C); PHY_SET_BIT1(0xC32C);
   REG_PHY_LANEB_C33C &= 0xFD;
   REG_VENDOR_CTRL_C343 = (REG_VENDOR_CTRL_C343 & 0xC3) | 0x1C;
   REG_PHY_LANEB_RATE_DESC_C349 = (REG_PHY_LANEB_RATE_DESC_C349 & 0x80) | 0x41;
-  C335(0xC325);
-  C30E(0xC34A);
-  C358(0xC307);
-  C34A(0xC314);
-  C358(0xC322);
-  C2F1(0xC345);
-  C2FF(0xC313);
-  C2BF(0xC34E);
+  phy_set_e0_07_pair(0xC325);
+  phy_clr_lo4(0xC34A);
+  PHY_SET_HI3_60(0xC307);
+  PHY_SET_NIB_HI7(0xC314);
+  PHY_SET_HI3_60(0xC322);
+  PHY_SET_LO_0B(0xC345);
+  PHY_SET_F3_04(0xC313);
+  PHY_SET_FC_02(0xC34E);
   REG_PHY_LANEB_C34E = (REG_PHY_LANEB_C34E & 0xE3) | 0x14;
   REG_PHY_LINK_CTRL_C21D = (REG_PHY_LINK_CTRL_C21D & 0x3F) | 0x80;
 
@@ -533,61 +533,61 @@ static void usb4_phy_rx_descriptor_8e31(void) {
 
   REG_PHY_LANEA_C290 &= 0x9F;
   REG_PHY_LANEA_C2A0 &= 0x9F;
-  C35F(0xC282);
+  PHY_SET_E0_0A(0xC282);
   REG_PHY_LANEA_C292 = (REG_PHY_LANEA_C292 & 0xE0) | 0x09;
-  C35F(0xC2A2);
-  C366(0xC290);
-  C366(0xC2A0);
-  C36D(0xC291);
-  C36D(0xC2A1);
+  PHY_SET_E0_0A(0xC2A2);
+  PHY_SET_E0_03(0xC290);
+  PHY_SET_E0_03(0xC2A0);
+  PHY_SET_E0_08(0xC291);
+  PHY_SET_E0_08(0xC2A1);
   REG_PHY_LANEA_C2DB = (REG_PHY_LANEA_C2DB & 0xE0) | 0x1B;
   REG_PHY_STATUS = (REG_PHY_STATUS & 0xF0) | 0x05;
-  C2E0(0xC294);
-  C2E7(0xC285);
+  PHY_SET_F0_07(0xC294);
+  PHY_SET_F0_0F(0xC285);
   REG_PHY_LANEA_C295 = (REG_PHY_LANEA_C295 & 0xF0) | 0x0C;
-  C2E7(0xC2A5);
-  C2D9(0xC285);
-  C2E7(0xC296);
-  C374(0xC2A7);
+  PHY_SET_F0_0F(0xC2A5);
+  phy_set_60_07_pair(0xC285);
+  PHY_SET_F0_0F(0xC296);
+  PHY_SET_E0_11(0xC2A7);
   REG_PHY_LANEA_C28B = (REG_PHY_LANEA_C28B & 0xC0) | 0x0A;
   REG_PHY_STATUS = (REG_PHY_STATUS & 0x8F) | 0x40;
   REG_PHY_LANEA_C2A4 &= 0x8F;
   REG_PHY_LANEA_C289 = (REG_PHY_LANEA_C289 & 0x0F) | 0x90;
-  C37B(0xC299);
-  C37B(0xC2A9);
+  PHY_SET_BIT7(0xC299);
+  PHY_SET_BIT7(0xC2A9);
   REG_PHY_LANEA_C282 = (REG_PHY_LANEA_C282 & 0x1F) | 0xA0;
   REG_PHY_LANEA_C292 = (REG_PHY_LANEA_C292 & 0x1F) | 0x20;
-  C382(0xC2C6);
-  C397(0xC2CC);
+  PHY_SET_F0_0D(0xC2C6);
+  phy_set_0e_clr_next(0xC2CC);
 
   REG_PHY_LANEB_C310 &= 0x9F;
   REG_PHY_LANEB_C320 &= 0x9F;
-  C35F(0xC302);
+  PHY_SET_E0_0A(0xC302);
   REG_PHY_LANEB_C312 = (REG_PHY_LANEB_C312 & 0xE0) | 0x09;
-  C35F(0xC322);
-  C366(0xC310);
-  C366(0xC320);
-  C36D(0xC311);
-  C36D(0xC321);
+  PHY_SET_E0_0A(0xC322);
+  PHY_SET_E0_03(0xC310);
+  PHY_SET_E0_03(0xC320);
+  PHY_SET_E0_08(0xC311);
+  PHY_SET_E0_08(0xC321);
   REG_PHY_LANEB_C35B = (REG_PHY_LANEB_C35B & 0xE0) | 0x1B;
   REG_PHY_LANEB_C304 = (REG_PHY_LANEB_C304 & 0xF0) | 0x05;
-  C2E0(0xC314);
-  C2E7(0xC305);
+  PHY_SET_F0_07(0xC314);
+  PHY_SET_F0_0F(0xC305);
   REG_PHY_LANEB_C315 = (REG_PHY_LANEB_C315 & 0xF0) | 0x0C;
-  C2E7(0xC325);
-  C2D9(0xC305);
-  C2E7(0xC316);
-  C374(0xC327);
+  PHY_SET_F0_0F(0xC325);
+  phy_set_60_07_pair(0xC305);
+  PHY_SET_F0_0F(0xC316);
+  PHY_SET_E0_11(0xC327);
   REG_PHY_LANEB_C30B = (REG_PHY_LANEB_C30B & 0xC0) | 0x0A;
   REG_PHY_LANEB_C304 = (REG_PHY_LANEB_C304 & 0x8F) | 0x40;
   REG_PHY_LANEB_C324 &= 0x8F;
   REG_PHY_LANEB_C309 = (REG_PHY_LANEB_C309 & 0x0F) | 0x90;
-  C37B(0xC319);
-  C37B(0xC329);
+  PHY_SET_BIT7(0xC319);
+  PHY_SET_BIT7(0xC329);
   REG_PHY_LANEB_C302 = (REG_PHY_LANEB_C302 & 0x1F) | 0xA0;
   REG_PHY_LANEB_C312 = (REG_PHY_LANEB_C312 & 0x1F) | 0x20;
-  C382(0xC346);
-  C397(0xC34C);
+  PHY_SET_F0_0D(0xC346);
+  phy_set_0e_clr_next(0xC34C);
 
   REG_BUF_DESC_BASE0_HI = 0x01;
   REG_BUF_DESC_BASE0_LO = 0x60; REG_BUF_DESC_SIZE0_HI = 0x00;
@@ -602,39 +602,39 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   REG_BUF_DESC_CFG2_HI = 0x00;
   REG_BUF_DESC_CFG2_LO = 0xE3;
 
-  C2FF(0xC2A3);
-  C2FF(0xC323);
-  C389(0xC297);
+  PHY_SET_F3_04(0xC2A3);
+  PHY_SET_F3_04(0xC323);
+  PHY_SET_1F_40(0xC297);
   REG_PHY_LANEA_C29A = (REG_PHY_LANEA_C29A & 0xF0) | 0x0E;
-  C389(0xC2A7);
+  PHY_SET_1F_40(0xC2A7);
   REG_PHY_LANEA_C2AB &= 0xC0;
-  C389(0xC317);
+  PHY_SET_1F_40(0xC317);
   REG_PHY_LANEB_C31A = (REG_PHY_LANEB_C31A & 0xF0) | 0x0E;
-  C389(0xC327);
+  PHY_SET_1F_40(0xC327);
   REG_PHY_LANEB_C32B &= 0xC0;
-  C382(0xC2AA);
+  PHY_SET_F0_0D(0xC2AA);
   REG_PHY_LANEA_LOCK_C297 = (REG_PHY_LANEA_LOCK_C297 & 0xE0) | 0x10;
   REG_PHY_LANEA_C293 = (REG_PHY_LANEA_C293 & 0xFC) | 0x01;
-  C2FF(0xC283);
-  C2F1(0xC2A6);
-  C2E0(0xC2A4);
-  C2BF(0xC2A3);
+  PHY_SET_F3_04(0xC283);
+  PHY_SET_LO_0B(0xC2A6);
+  PHY_SET_F0_07(0xC2A4);
+  PHY_SET_FC_02(0xC2A3);
   REG_PHY_LANEA_C29B &= 0xC0;
 
-  C382(0xC32A);
+  PHY_SET_F0_0D(0xC32A);
   REG_PHY_LANEB_LOCK_C317 = (REG_PHY_LANEB_LOCK_C317 & 0xE0) | 0x10;
   REG_PHY_LANEB_C313 = (REG_PHY_LANEB_C313 & 0xFC) | 0x01;
-  C2FF(0xC303);
-  C2F1(0xC326);
-  C2E0(0xC324);
-  C2BF(0xC323);
+  PHY_SET_F3_04(0xC303);
+  PHY_SET_LO_0B(0xC326);
+  PHY_SET_F0_07(0xC324);
+  PHY_SET_FC_02(0xC323);
   REG_PHY_LANEB_C31B &= 0xC0;
 
   if (REG_LANE_RATE_C8FF >= 0x05) {
     REG_PHY_LANEA_C294 = (REG_PHY_LANEA_C294 & 0xF0) | 0x06;
-    C374(0xC297);
+    PHY_SET_E0_11(0xC297);
     REG_PHY_LANEB_C314 = (REG_PHY_LANEB_C314 & 0xF0) | 0x06;
-    C374(0xC317);
+    PHY_SET_E0_11(0xC317);
   }
   if (REG_LANE_RATE_C8FF >= 0x06) {
     REG_PHY_LANEA_C283 &= 0xF3;
@@ -642,7 +642,7 @@ static void usb4_phy_rx_descriptor_8e31(void) {
   }
 }
 
-static void usb4_irq_db0d(void) {
+static void usb4_phy_serdes_arm(void) {  /* db0d */
   REG_PHY_LINK_CTRL_C21B = (REG_PHY_LINK_CTRL_C21B & 0x3F) | 0xC0;
   REG_LINK_CTRL = (REG_LINK_CTRL & 0xF7) | 0x08;
   PG_WR(0x1262, PG_RD(0x1262) & 0xEF);
@@ -653,28 +653,28 @@ static void usb4_irq_db0d(void) {
   SB_SET(0x1C, 0x02);
   REG_PHY_LINK_CTRL_C20B &= 0x7F;
   SB_WR(0x1D, SB_RD(0x1D) & 0xFE);
-  C390(0xC22F);
+  PHY_SET_BIT2(0xC22F);
   REG_PHY_SERDES_C22F &= 0xBF;
 }
 
-static void usb4_irq_ef1e(void) {
+static void usb4_phy_rx_table_apply(void) {  /* ef1e */
   uint16_t i;
-  for (i = 0; i < (uint16_t)(sizeof(u4rx_tab) / 4); i++) {
-    uint16_t addr = ((uint16_t)u4rx_tab[i][0] << 8) | u4rx_tab[i][1];
-    PG_WR(addr, (uint8_t)((PG_RD(addr) & u4rx_tab[i][2]) | u4rx_tab[i][3]));
+  for (i = 0; i < (uint16_t)(sizeof(u4_phy_rx_init_tab) / 4); i++) {
+    uint16_t addr = ((uint16_t)u4_phy_rx_init_tab[i][0] << 8) | u4_phy_rx_init_tab[i][1];
+    PG_WR(addr, (uint8_t)((PG_RD(addr) & u4_phy_rx_init_tab[i][2]) | u4_phy_rx_init_tab[i][3]));
   }
 }
 
-static void usb4_irq_ef24(void) {
-  usb4_irq_db0d();
-  usb4_phy_rx_descriptor_8e31();
+static void usb4_phy_rx_bringup(void) {  /* ef24 */
+  usb4_phy_serdes_arm();
+  usb4_phy_rx_descriptor_load();
 }
 
-static void usb4_irq_arm(void) {
+static void usb4_phy_rx_arm(void) {
   REG_CPU_EXEC_STATUS_3 &= 0xFE;
   REG_TIMER_CTRL_CC3B = (REG_TIMER_CTRL_CC3B & 0xFD) | 0x03;
-  usb4_irq_ef24();
-  usb4_irq_ef1e();
+  usb4_phy_rx_bringup();
+  usb4_phy_rx_table_apply();
 }
 
 static void usb4_routerop_init(void) {
@@ -690,55 +690,52 @@ static void usb4_routerop_init(void) {
   u4_routerop_mbox_state = RMBOX_IDLE;
 }
 
-#define U4C_BD23(a)   PR(a) = (PR(a) & 0xDF) | 0x20
-#define U4C_BD3A(a)   PR(a) = (PR(a) & 0xBF) | 0x40
-#define U4C_BD65(a)   PR(a) = (PR(a) & 0x7F) | 0x80
-#define U4C_BCFE(a)   PR(a) = (PR(a) & 0xFD) | 0x02
-#define U4C_BCEB(a)   PR(a) = (PR(a) & 0xFE) | 0x01
-#define U4C_BD5E(a)   PR(a) = (PR(a) & 0xFB) | 0x04
-static void u4c_bd2a(uint16_t a) { PR(a) &= 0xDF; PR(a) &= 0xBF; }
-static void u4c_bcf2(void) { REG_TIMER_ENABLE_B = (REG_TIMER_ENABLE_B & 0xFD) | 0x02; REG_TIMER_ENABLE_A = (REG_TIMER_ENABLE_A & 0xFD) | 0x02; }
-static void u4c_bd41(void) { REG_TIMER_CTRL_CC3B &= 0xFD; }
-static void u4c_bd14(void) { REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0xFD; }
+#define U4C_SET_BIT5(a)   PR(a) = (PR(a) & 0xDF) | 0x20  /* bd23 */
+#define U4C_SET_BIT6(a)   PR(a) = (PR(a) & 0xBF) | 0x40  /* bd3a */
+#define U4C_SET_BIT7(a)   PR(a) = (PR(a) & 0x7F) | 0x80  /* bd65 */
+#define U4C_SET_BIT1(a)   PR(a) = (PR(a) & 0xFD) | 0x02  /* bcfe */
+#define U4C_SET_BIT0(a)   PR(a) = (PR(a) & 0xFE) | 0x01  /* bceb */
+#define U4C_SET_BIT2(a)   PR(a) = (PR(a) & 0xFB) | 0x04  /* bd5e */
+static void u4c_clr_bits6_5(uint16_t a) { PR(a) &= 0xDF; PR(a) &= 0xBF; }  /* bd2a */
+static void u4c_lane_timers_on(void) { REG_TIMER_ENABLE_B = (REG_TIMER_ENABLE_B & 0xFD) | 0x02; REG_TIMER_ENABLE_A = (REG_TIMER_ENABLE_A & 0xFD) | 0x02; }  /* bcf2 */
+static void u4c_timer_cc3b_clr1(void) { REG_TIMER_CTRL_CC3B &= 0xFD; }  /* bd41 */
+static void u4c_lane_timers_off(void) { REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0xFD; }  /* bd14 */
 
-static uint8_t u4c_bd6c(void) {
+static uint8_t u4c_link_go(void) {  /* bd6c */
   REG_CPU_LINK_CTRL_CA00 = (REG_CPU_LINK_CTRL_CA00 & 0xC0) | 0x07;
   REG_CPU_LINK_GO_CA0A = 0x02;
   return u4_cfg.routerop_desc0;
 }
 
-static void u4c_e7ae_bounded(void) {
+static void u4c_uart_drain_wait(void) {  /* e7ae */
   uint16_t g = 0;
   while (((REG_UART_TFBF & 0x1F) != 0x10) && ++g < 0x0800);
   g = 0;
   while (((REG_UART_STATUS & 0x07) != 0x00) && ++g < 0x0800);
 }
 
-static void bank0_8a89(uint8_t mode) {
+static void u4c_link_mode_apply(uint8_t mode) {  /* 8a89 */
   uint8_t config;
   uint8_t link_mode;
   uint8_t descr_arg;
 
   u4_cfg.routerop_desc0 = mode;
-  uart_puts("[8a89:");
-  uart_puthex(mode);
-  uart_putc(']');
 
   if (REG_LANE_RATE_C8FF < 0x06) {
     u4_cfg.routerop_desc3 = 0x0A;
   } else {
     u4_cfg.routerop_desc3 = 0x0B;
-    U4C_BCEB(0xCC37);
-    U4C_BCEB(0xCC36);
+    U4C_SET_BIT0(0xCC37);
+    U4C_SET_BIT0(0xCC36);
     REG_TIMER_ENABLE_B = (REG_TIMER_ENABLE_B & 0xF7) | 0x08;
   }
 
   link_mode = u4_cfg.routerop_desc0;
   if (link_mode < 3) {
-    boot_phy_dd42((uint8_t)(link_mode - 3));
+    boot_phy_set_link_mode((uint8_t)(link_mode - 3));
     REG_PHY_TIMER_CTRL_E764 &= 0xEF;
-    u4c_e7ae_bounded();
-    U4C_BCEB(0xCA81);
+    u4c_uart_drain_wait();
+    U4C_SET_BIT0(0xCA81);
 
     u4_cfg.routerop_desc2 = REG_LINK_WIDTH_E710 & 0x1F;
     u4_cfg.routerop_desc2 = (REG_LINK_WIDTH_E710 & 0xE0) | 0x1F;
@@ -747,59 +744,59 @@ static void bank0_8a89(uint8_t mode) {
 
     config = u4_cfg.routerop_desc3;
     if (config & 0x01) {
-      U4C_BD23(0xE40B);
-      U4C_BD23(0xC698);
-      u4c_bd14();
-      U4C_BCEB(0xCAC4);
+      U4C_SET_BIT5(0xE40B);
+      U4C_SET_BIT5(0xC698);
+      u4c_lane_timers_off();
+      U4C_SET_BIT0(0xCAC4);
       REG_PHY_POLL_E751 = 0x01;
-      U4C_BD65(0xE313);
-      U4C_BCFE(0xE413);
+      U4C_SET_BIT7(0xE313);
+      U4C_SET_BIT1(0xE413);
     }
 
     if (u4_cfg.routerop_desc0 == 0x02) {
       if (config & 0x02) {
         u4_cfg.routerop_desc0 = (REG_LINK_STATUS_E716 & 0xFC);
-        U4C_BCFE(0xCC3E);
+        U4C_SET_BIT1(0xCC3E);
         REG_LINK_CTRL_E717 &= 0xFE;
       }
-      u4c_e7ae_bounded();
+      u4c_uart_drain_wait();
       P1_WR(0x011F, 0x01);
-      if (config & 0x02) u4c_bcf2();
+      if (config & 0x02) u4c_lane_timers_on();
     } else if (u4_cfg.routerop_desc0 == 0x01) {
-      if (config & 0x02) u4c_bd41();
-      u4c_e7ae_bounded();
+      if (config & 0x02) u4c_timer_cc3b_clr1();
+      u4c_uart_drain_wait();
       REG_POWER_DOMAIN = 0x01;
-      if (config & 0x02) { U4C_BD3A(0xCC3B); U4C_BD5E(0xCC37); }
+      if (config & 0x02) { U4C_SET_BIT6(0xCC3B); U4C_SET_BIT2(0xCC37); }
     } else {
-      u4c_e7ae_bounded();
+      u4c_uart_drain_wait();
       REG_USB_EP_CTRL_91D0 = 0x01;
     }
 
     phy_cc10_cmd_wait(0, 0x27, 2);
     u4_pd.connect_oneshot_suppress = 0x01;
 
-    if (u4c_bd6c() != 0 && (config & 0x08)) {
-      U4C_BCFE(0xCC3F);
-      U4C_BD5E(0xCC3F);
-      u4c_bd2a(0xCC3F);
-      U4C_BD65(0xCC3D);
+    if (u4c_link_go() != 0 && (config & 0x08)) {
+      U4C_SET_BIT1(0xCC3F);
+      U4C_SET_BIT2(0xCC3F);
+      u4c_clr_bits6_5(0xCC3F);
+      U4C_SET_BIT7(0xCC3D);
     }
 
     { uint32_t guard = 0;
-      while (u4c_bd6c() != 0 && ++guard < 200000UL) {
+      while (u4c_link_go() != 0 && ++guard < 200000UL) {
         if (REG_INT_PCIE_NVME & 0x40) pd_rx_isr();
         if ((u4_link_busy == 0 && (REG_CPU_EXEC_STATUS_2 >> 2 & 1)) || u4_pd.connect_oneshot_suppress == 0) break;
       }
     }
 
     if ((config & 0x08) && ((int8_t)REG_LTSSM_STATE < 0)) {
-      boot_phy_d0d3_typec_sbu();
+      boot_phy_typec_sbu_seq();
     }
     config = u4_cfg.routerop_desc3;
     if (config & 0x01) {
       REG_CMD_ARM_CAC4 &= 0xFE;
       REG_CMD_CONFIG &= 0xDF;
-      u4c_bd2a(0xC698);
+      u4c_clr_bits6_5(0xC698);
       REG_CMD_LINK_ARM_E313 &= 0x7F;
       REG_CMD_CFG_E413 &= 0xFD;
     }
@@ -813,8 +810,8 @@ static void bank0_8a89(uint8_t mode) {
       if (config & 0x02) {
         u4_cfg.routerop_desc0 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
         u4_cfg.routerop_desc1 = (REG_CPU_CTRL_CC3E & 0xFD);
-        U4C_BCEB(0xCA81);
-        u4c_bd14();
+        U4C_SET_BIT0(0xCA81);
+        u4c_lane_timers_off();
       }
       descr_arg = (u4_cfg.route_mode >> 1 & 1) ? 2 : 1;
     } else if (u4_cfg.routerop_desc0 == 0x01) {
@@ -826,13 +823,13 @@ static void bank0_8a89(uint8_t mode) {
         REG_TIMER_CTRL_CC3B &= 0xBF;
         phy_cc10_cmd_wait(0, 0x13, 2);
         REG_CPU_CTRL_CC37 &= 0xFB;
-        U4C_BCFE(0xCC3B);
+        U4C_SET_BIT1(0xCC3B);
       }
       descr_arg = 4;
     } else {
       descr_arg = 4;
     }
-    boot_phy_dd42(descr_arg);
+    boot_phy_set_link_mode(descr_arg);
 
     if (u4_pd.connect_oneshot_suppress == 0) {
       uint8_t cur_mode = u4_cfg.routerop_desc0;
@@ -841,10 +838,10 @@ static void bank0_8a89(uint8_t mode) {
         REG_LINK_CTRL_E717 = (REG_LINK_CTRL_E717 & 0xFE) | 0x01;
         REG_CPU_CTRL_CC36 &= 0xDF;
       }
-      U4C_BD23(0x92C4);
+      U4C_SET_BIT5(0x92C4);
       if (cur_mode == 0) {
         REG_POWER_MISC_CTRL = (REG_CPU_CTRL_CC3E & 0xFD);
-        U4C_BD23(0xCC36);
+        U4C_SET_BIT5(0xCC36);
       }
       REG_POWER_MISC_CTRL &= 0xDF;
       usb4_connect_u4();
@@ -854,19 +851,18 @@ static void bank0_8a89(uint8_t mode) {
     if (u4_link_busy == 0 && (REG_CPU_EXEC_STATUS_2 >> 2 & 1)) {
       REG_CPU_EXEC_STATUS_2 = 0x04;
     }
-    uart_puts("[8a89done]");
   }
 }
 
-static void bank0_c9a8(uint8_t mode) {
+static void u4c_lane_reinit_gate(uint8_t mode) {  /* c9a8 */
   u4_cfg.lane_mode_arg = mode;
   if (u4_cfg.route_mode & 0x04) {
     if ((u4_connect_gate & 0x01) &&
-        (u4_pd.connect_gate_e8 != 0 || u4_pd.connect_gate_eb != 0)) {
+        (u4_pd.enter_usb_reinit_gate != 0 || u4_pd.connect_reinit_gate != 0)) {
       REG_PHY_CFG_C6A8 &= 0xFE;
-      bank0_8a89(u4_cfg.lane_mode_arg);
+      u4c_link_mode_apply(u4_cfg.lane_mode_arg);
     }
-    u4_pd.connect_gate_e8 = 0x00;
+    u4_pd.enter_usb_reinit_gate = 0x00;
     u4_p12.reinit_pending = 0x01;
     return;
   }

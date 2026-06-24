@@ -20,7 +20,7 @@ static void pd_wait(volatile __xdata uint8_t *reg, uint8_t mask, uint8_t set) {
 }
 
 /* RDO/CRC timing constants for the PD engine. */
-static void pd_da51(void) {
+static void pd_cmd_engine_cfg(void) {  /* da51 */
   REG_CMD_CONFIG = (REG_CMD_CONFIG & 0x7F) | 0x80;
   if (REG_CMD_CONFIG & 0x80) {
     REG_CMD_CFG_E401 = (REG_CMD_CFG_E401 & 0xF8) | 0x04;
@@ -59,7 +59,7 @@ static void cc_pd_phy_term_init(void) {
   REG_CMD_CTRL_E400 = (REG_CMD_CTRL_E400 & 0xC3) | 0x3C;
   REG_CMD_CTRL_E409 &= 0x7F;
   REG_INT_CTRL = (REG_INT_CTRL & 0xDF) | 0x20;
-  pd_da51();
+  pd_cmd_engine_cfg();
   REG_CMD_CFG_E40E = 0x8A;
   REG_CMD_CTRL_E400 = (REG_CMD_CTRL_E400 & 0x7F) | 0x80;
   REG_CMD_CONFIG &= 0xFE;
@@ -90,22 +90,17 @@ static void pd_internal_state_init(void) {
   u4_pd.tx_msgid_counter = 0; u4_pd.tx_msg_len = 0;
   u4_pd.rx_num_data_obj = 0;
   u4_pd.rx_slot_idx = 0;
-  u4_pd.state_07e3 = 0;
   u4_pd.msg_substate = 1;
   u4_pd.rx_slot_mask = (REG_CMD_CTRL_E400 & 0x40) ? 0x10 : 0x01;
   if (u4_pd.softreset_pending == 0) u4_pd.sop_field = 2;
-  u4_pd.softreset_pending = 0; u4_pd.hardreset_done = 0;
+  u4_pd.softreset_pending = 0;
   u4_pd.connect_route_latch = 0; u4_pd.enter_usb_accepted = 0;
-  u4_pd.route_confirm_07cc = 0;
-  u4_pd.state_07cb = 0;
+  u4_pd.eudo_mode_confirm = 0;
   u4_pd.confirm_input_cd = 0; u4_pd.confirm_input_ce = 0; u4_pd.confirm_input_cf = 0;
-  u4_pd.connect_pending = 0;
   u4_pd.bist_mode = 0;
   u4_pd.usb3_fallback_flag = 0;
   u4_pd.role_state = 0;
   cc_ctrl_enable_events();
-  u4_pd.timer_e = 5; u4_pd.timer_f = 0; u4_pd.timer_g = 0;
-  u4_pd.timer_a = 1; u4_pd.timer_b = 0x2C; u4_pd.timer_c = 0; u4_pd.timer_d = 0x64;
 }
 
 /* Transmit a USB-PD HARD RESET to force the host to re-send Source_Cap. No-op once USB4 is up. */
@@ -134,7 +129,6 @@ static void pd_drive_hard_reset(void) {
   for (guard = 0; ((REG_CMD_STATUS_E402 & 0x0E) || (REG_CMD_BUSY_STATUS & 0x01)) && guard < 0x4000; guard++);
   REG_CMD_BUSY_STATUS |= 0x01;
   for (guard = 0; (REG_CMD_BUSY_STATUS & 0x01) && guard < 0x4000; guard++);
-  u4_pd.hardreset_done = 1;
 }
 
 /* Route the C806/C80A PD/system interrupt aggregate to the 8051 EX1 line so INT1 fires. */
@@ -192,8 +186,8 @@ static void pd_rx_isr(void) {
 static uint8_t usb4_mode_entry_commit(void);
 
 /* CC23.1 re-init / SB-reconnect event. */
-static void cc_cc23_reinit_event(void) {
-  u4_pd.connect_gate_e8 = 0x00;
+static void cc_sb_reconnect_event(void) {  /* cc23 */
+  u4_pd.enter_usb_reinit_gate = 0x00;
   u4_p12.reinit_pending = 0x01;
 }
 
@@ -203,7 +197,7 @@ static void cc_state_full_reset(void) {
 }
 
 /* CC81 |= 4 then drive a hard reset. */
-static void pd_cc81_hard_reset_4(void) {
+static void pd_attach_hard_reset(void) {  /* cc81 */
   REG_CPU_INT_CTRL = 0x04;
   pd_drive_hard_reset();
 }
@@ -215,18 +209,18 @@ static void pd_queue_ctrl_msg(uint8_t code) {
 }
 
 /* CC99 default branch. */
-static void cc_cc99_default_event(void) {
+static void cc_role_reset_default(void) {  /* cc99 */
 }
 
 /* CCF9.1 sub-demux on 0x0A9D (copied from 0x0B1B). */
-static void cc_ccf9_subdemux(void) {
+static void cc_routerop_desc_copy(void) {  /* ccf9 */
   u4_cfg.routerop_desc0 = u4_p12.cc_subdemux_src;
 }
 
 /* INT1 timer-tick PD/USB4 policy-engine tick: services the 6 CC per-channel event regs (bit1=event). */
 static void cc_pd_timer_tick(void) {
   if (REG_TIMER3_CSR & 0x02) {                 /* CC23.1: re-init / SB-reconnect */
-    cc_cc23_reinit_event();
+    cc_sb_reconnect_event();
     REG_TIMER3_CSR = 0x02;
   }
   if (REG_CPU_INT_CTRL & 0x02) {                 /* CC81.1: CC attach/detach */
@@ -236,14 +230,13 @@ static void cc_pd_timer_tick(void) {
       if (u4_pd.role_state != 0) pd_queue_ctrl_msg(0x3B);
       cc_state_full_reset();
     } else {
-      pd_cc81_hard_reset_4();
+      pd_attach_hard_reset();
       REG_CPU_INT_CTRL = 0x02;
     }
   }
   if (REG_CPU_DMA_INT & 0x02) {                 /* CC91.1: 1s sender-response timeout -> commit USB4 mode */
     REG_CPU_DMA_INT = 0x02;
     uart_puts("[1 sec time out]\n");
-    u4_pd.connect_pending = 0x01;
     u4_cfg.route_mode = 0x04;
     u4_entered_usb_mode = usb4_mode_entry_commit();
   }
@@ -251,15 +244,15 @@ static void cc_pd_timer_tick(void) {
     uint8_t role = u4_pd.role_state;
     if (role == 0x02) { pd_queue_ctrl_msg(0x3C); pd_drive_hard_reset(); }
     else if (role == 0x03) { pd_queue_ctrl_msg(0xFF); }
-    else { cc_cc99_default_event(); REG_XFER_DMA_CFG = 0x02; }
+    else { cc_role_reset_default(); REG_XFER_DMA_CFG = 0x02; }
   }
   if (REG_XFER2_DMA_STATUS & 0x02) {                 /* CCD9.1 */
     REG_XFER2_DMA_STATUS = 0x02;
-    u4_sb.e461_inflight_token = 0x02;
+    u4_sb.routerop_push_token = 0x02;
   }
   if (REG_CPU_EXT_STATUS & 0x02) {                 /* CCF9.1 */
     REG_CPU_EXT_STATUS = 0x02;
-    cc_ccf9_subdemux();
+    cc_routerop_desc_copy();
   }
 }
 
@@ -297,7 +290,7 @@ static void pd_cc_event_clear(uint16_t reg) {
   PR(reg) = 0x02;
 }
 /* Clear the CC attach event (CC81) before a state transition. */
-static void pd_e933_clear_cc81(void) { pd_cc_event_clear(0xCC81); }
+static void pd_clear_cc81_attach(void) { pd_cc_event_clear(0xCC81); }  /* e933 */
 
 /* Arm the CC sender-response / PS-transition timer. */
 static void pd_arm_cc_timer(uint16_t threshold) {
@@ -371,7 +364,7 @@ static void pd_ctrl_accept(void) {
   uart_puts("[Accept]");
   substate = u4_pd.msg_substate;
   if (substate == 3) {
-    pd_e933_clear_cc81();
+    pd_clear_cc81_attach();
     u4_pd.msg_substate = 4;
     pd_arm_cc_timer(0x1027);
     pd_ctrl_goodcrc();
@@ -379,12 +372,12 @@ static void pd_ctrl_accept(void) {
   }
   if (substate == 0) {
     if (u4_pd.softreset_pending != 0) { u4_pd.softreset_pending = 0; }
-    pd_e933_clear_cc81();
+    pd_clear_cc81_attach();
     pd_ctrl_goodcrc();
     return;
   }
   if (substate == 0x0E) {
-    pd_e933_clear_cc81();
+    pd_clear_cc81_attach();
     u4_pd.msg_substate = 0x0D;
     pd_ctrl_goodcrc();
     return;
@@ -397,7 +390,7 @@ static void pd_ctrl_ps_rdy(void) {
   uint8_t volt_hi, volt_lo;
   uart_puts("[PS_RDY]");
   if (u4_pd.msg_substate != 4) { pd_ctrl_goodcrc(); return; }
-  pd_e933_clear_cc81();
+  pd_clear_cc81_attach();
 
   volt_hi = u4_pd.decoded_voltage_hi;
   volt_lo = u4_pd.decoded_voltage_lo;
@@ -416,7 +409,6 @@ static void pd_ctrl_ps_rdy(void) {
     }
   }
   u4_pd.softreset_pending = 0;
-  u4_pd.hardreset_done = 0;
   pd_ctrl_goodcrc();
 }
 
@@ -426,9 +418,7 @@ static void pd_ctrl_reject(void) {
   uart_puts("[Reject]");
   substate = u4_pd.msg_substate;
   if (substate == 3) {
-    pd_e933_clear_cc81();
-    if (u4_pd.contract_state == 0) {
-    }
+    pd_clear_cc81_attach();
     pd_arm_cc_timer(0);
     pd_ctrl_goodcrc();
     return;
@@ -444,7 +434,7 @@ static void pd_ctrl_reject(void) {
 /* Wait: on substate 3 with an active contract, arm the CC timer and ack. */
 static void pd_ctrl_wait(void) {
   if (u4_pd.msg_substate != 3) { pd_ctrl_goodcrc(); return; }
-  pd_e933_clear_cc81();
+  pd_clear_cc81_attach();
   if (u4_pd.contract_state != 0) {
     pd_arm_cc_timer(0xD007);
     { uint16_t guard = 0; while (!(REG_CPU_INT_CTRL & 0x02) && ++guard < PD_WAIT_LIMIT); }
@@ -472,7 +462,7 @@ static void pd_ctrl_soft_reset(void) {
   uart_puts("[Soft_Reset]");
   u4_pd.tx_msgid_counter = 0;
   u4_pd.rx_slot_idx = 0;
-  pd_e933_clear_cc81();
+  pd_clear_cc81_attach();
 
   pd_tx_buf_clear();
   pd_tx_set_sop_header(0, 3);
@@ -516,7 +506,7 @@ static void pd_dispatch_data(uint8_t msgtype) {
         return;
       }
     }
-    pd_e933_clear_cc81();
+    pd_clear_cc81_attach();
     u4_pd.msg_substate = 2;
     pd_build_send_request_rdo();
     pd_ctrl_goodcrc();
@@ -562,11 +552,6 @@ static void pd_rx_message_dispatch(void) {
   u4_cfg.msg_type = (uint8_t)(hdr0 & 0x1F);
   sop = (uint8_t)(hdr0 >> 6);
   u4_pd.sop_field = sop;
-
-  uart_puts("[D");
-  uart_puthex(u4_pd.rx_slot_idx); uart_putc(' ');
-  uart_puthex(hdr0); uart_puthex(hdr1); uart_putc(' ');
-  uart_puthex(u4_pd.rx_num_data_obj); uart_puthex(u4_cfg.msg_type); uart_putc(']');
 
   ext_bit = (uint8_t)((PR(base + 1) >> 7) & 1);
   if (u4_pd.bist_mode != 0) return;
@@ -715,7 +700,6 @@ static void vdm_handle_enter_mode(void) {
     pd_vdm_hdr_build(1, 4);
     u4_pd.tx_msg_len = 6;
     u4_pd.connect_route_latch = 1;
-    u4_pd.connect_pending = 1;
     uart_puts("[Enter_TBT]");
     return;
   }
@@ -742,8 +726,7 @@ static void pd_handle_enter_usb(void) {
   u4_routerop_opcode = (uint8_t)(eudo1 >> 7);
   u4_pd.usb3_fallback_flag = (uint8_t)(u4_routerop_opcode & 1);
   u4_routerop_op_len = (uint8_t)((eudo2 & 0x06) >> 1);
-  u4_pd.state_07cb = (uint8_t)((eudo2 & 0x18) >> 3);
-  u4_pd.route_confirm_07cc = (uint8_t)(eudo2 >> 5);
+  u4_pd.eudo_mode_confirm = (uint8_t)(eudo2 >> 5);
   u4_routerop_port = mode;
   pd_tx_buf_clear();
 
@@ -756,11 +739,10 @@ static void pd_handle_enter_usb(void) {
   } else if (mode == 2 && u4_pd.role_state == 0) {
     pd_tx_set_sop_header(0, 3);
     if (cable_cur) {
-      u4_pd.connect_pending = 1;
       uart_puts("[Enter_USB 4]");
       u4_pd.enter_usb_accepted = 1;
       u4_cfg.route_mode |= 0x04;
-      u4_pd.connect_gate_e8 = 1;
+      u4_pd.enter_usb_reinit_gate = 1;
     }
   } else {
     pd_tx_set_sop_header(0, 4);
