@@ -1,8 +1,5 @@
 /*
  * ASM2464PD handmade firmware.
- *
- * USB3 mode exposes the ADD1:0001 vendor transport. USB4 mode trains the
- * sideband/router path and exposes the downstream GPU through the PCIe tunnel.
  */
 
 #include "types.h"
@@ -11,7 +8,7 @@
 #include "usb.h"
 #include "gpio.h"
 
-__sfr __at(0x93) DPX;   /* DPTR bank select; DPX=1 accesses internal PHY regs */
+__sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
 __sfr __at(0x88) TCON;
 
@@ -46,6 +43,7 @@ static volatile uint8_t __xdata is_usb2;
 
 /* Streaming PCIe state — dwords remaining for the current transfer. */
 static volatile uint32_t __xdata dma_dwords;
+#define DMA_DWORDS_BYTE(n) (((volatile __xdata uint8_t *)&dma_dwords)[(n)])
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
@@ -128,8 +126,14 @@ static void pcie_power_on(void) {
 }
 
 static void do_usb_bulk_in(void) {
-  uint16_t max_dwords = is_usb2 ? (512/4) : (1024/4);
-  uint16_t chunk = (dma_dwords > max_dwords) ? max_dwords : (uint16_t)dma_dwords;
+  uint16_t chunk = ((uint16_t)DMA_DWORDS_BYTE(1) << 8) | DMA_DWORDS_BYTE(0);
+  if (DMA_DWORDS_BYTE(2) || DMA_DWORDS_BYTE(3)) {
+    chunk = is_usb2 ? (512/4) : (1024/4);
+  } else if (is_usb2) {
+    if (chunk > (512/4)) chunk = (512/4);
+  } else if (chunk > (1024/4)) {
+    chunk = (1024/4);
+  }
   pcie_read_chunk((__xdata uint8_t *)0x8000, chunk);
   uint16_t nbytes = chunk * 4;
   REG_USB_BULK_IN_LEN_H = nbytes >> 8;
@@ -317,8 +321,10 @@ static void handle_usb_control(void) {
         REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
       } else {
         /* Streaming: read dword count from the value field (LE). */
-        dma_dwords = ((uint32_t)DESC_BUF[11] << 24) | ((uint32_t)DESC_BUF[10] << 16) |
-                     ((uint32_t)DESC_BUF[9] << 8) | DESC_BUF[8];
+        DMA_DWORDS_BYTE(0) = DESC_BUF[8];
+        DMA_DWORDS_BYTE(1) = DESC_BUF[9];
+        DMA_DWORDS_BYTE(2) = DESC_BUF[10];
+        DMA_DWORDS_BYTE(3) = DESC_BUF[11];
         if (dma_dwords > 0) {
           if ((REG_USB_SETUP_WIDX_L & 0x03) == 1) {
             // host to device, we arm the OUT endpoint
@@ -407,7 +413,7 @@ void int0_isr(void) __interrupt(0) {
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
         /* In USB4 mode do not drop to USB2 (that abandons lane training); only ack. */
-        if (!(XDATA_REG8V(0x09F9) & 0x83)) {
+        if (!(u4_mode_flag & 0x83)) {
           uart_puts("[USB2 fallback]\n");
           // fallback to USB2
           is_usb2 = 1;
@@ -457,7 +463,7 @@ void int1_isr(void) __interrupt(1) {
   if (REG_INT_SYSTEM & 0x01) cc_pd_timer_tick();
   if (REG_CPU_EXEC_STATUS_2 & 0x04) { REG_CPU_EXEC_STATUS_2 = 0x04; }
   if (REG_INT_PCIE_NVME & 0x40) pd_rx_isr();
-  if (XDATA_REG8V(0x09F9) & 0x83) usb4_int_demux();
+  if (u4_mode_flag & 0x83) usb4_int_demux();
   if (REG_INT_SYSTEM & 0x10) { /* C806.4 ack-only (no-op) */ }
   DPX = saved_dpx;
 }
@@ -469,48 +475,36 @@ void main(void) {
   uart_puts("\n[BOOT]\n");
   led_set_rgb(false, false, true);
 
-  // flash controller — needed for the USB serial OTP read on enumeration
+  // Flash controller for the USB serial OTP read.
   flash_init();
 
+  u4_mode_flag = HANDMADE_USB4_MODE_FLAGS;
+
+#if HANDMADE_USB4_MODE_FLAGS
   // Type-C SBU + PHY config + SB-block enable; powers the sideband transport.
   boot_phy_bringup_early();
 
   // Seed the lane-engine link width/mode and the USB4 tunnel state flags.
   bank0_92c5_seed();
 
-  // Establish USB4 intent (0x87 = tunnel route + VDM-ACK) before the gates below.
-  XDATA_REG8V(0x09F9) = HANDMADE_USB4_MODE_FLAGS;
-  // bank0_8d77 (stock cap-apply) UNCONDITIONALLY seeds 0x09F4=3 at its head (CODE:8d77, BEFORE any
-  // SPI-blob check). Handmade previously dropped this -> 0x09F4 read uninit 0x55 -> usb4_connect_u4's
-  // DP-alt sub-case (0x09F4==3) never ran -> 0x09FA latched 0x07 instead of stock's 0x01 (HW-confirmed
-  // stock@commit: 0x09F4=03 0x07BE=01 0x09FA=01). 0x09F4=3 = DP-alt mode default (stock 8d77 head).
-  XDATA_REG8V(0x09F4) = 3;
-  XDATA_REG8V(0x09F5) = 1; XDATA_REG8V(0x09F6) = 1;   /* 20G capability gates: advertise 2 lanes. */
-  XDATA_REG8V(0x09F7) = 3; XDATA_REG8V(0x09F8) = 1; XDATA_REG8V(0x09FB) = 3;
-  // 0x0A57/0x0A58 = device PID-low / bcdDevice-hi. Stock relies on the boot env (SPI-flash shadow)
-  // pre-loading these; there is no firmware writer. Without them they stay uninit 0x55, so the SB
-  // connect descriptor TX becomes 0104 5555 instead of 0104 6324 and the host never escalates
-  // SB[0x18] 05->63 to assign the route-ID (no lane bond, no GPU). Values from the stock wire trace.
-  XDATA_REG8V(0x0A57) = 0x63;
-  XDATA_REG8V(0x0A58) = 0x24;
+  u4_dp_alt_mode = 3;
+  u4_cap20g_gate0 = 1; u4_cap20g_gate1 = 1;
+  u4_sb_desc_profile = 3; u4_capability_profile = 1; u4_lane_gate_sel = 3;
+  pd_product_pid_lo = 0x63;
+  pd_product_pid_hi = 0x24;
 
-  /* Seed the PCIe-down tunnel adapter config that stock reads from the SPI shadow. */
-  XDATA_REG8V(0x0A52) = 0x21;  /* B411/B41B hi   (stock SPI[0x7074]) */
-  XDATA_REG8V(0x0A53) = 0x1B;  /* B410/B41A lo   (stock SPI[0x7075]) */
-  XDATA_REG8V(0x0A54) = 0x63;  /* B413/B419 mode (stock SPI[0x7076]) */
-  XDATA_REG8V(0x0A55) = 0x24;  /* B412/B418 cred (stock SPI[0x7077]) */
+  u4_tunnel_cfg_hi = 0x21;
+  u4_tunnel_cfg_lo = 0x1B;
+  u4_tunnel_cfg_mode = 0x63;
+  u4_tunnel_credits = 0x24;
 
-  // Stock boot_hw_init_main step 6k: enable the USB4 router's PCIe-down tunnel adapter (B401 MASTER
-  // EN + B410-B42B cfg + B298 TLP-routing) so the host CM can discover a PCIe-down adapter and tunnel
-  // PCIe to the GPU. Stock runs this at boot (before the mode decision); pcie_power_on (after the
-  // bond) is the runtime tunnel-up that deasserts PERST and completes the link — keep both.
   pcie_tunnel_adapter_enable_b401();
 
   // Stock seeds the sideband connect-service path at boot and then refreshes it in the main loop.
   u4lb_e96c();
+#endif
 
-  // PHY tune + PCIe power cycling only in non-USB4 mode (they clobber CM-owned regs).
-  if (!(XDATA_REG8V(0x09F9) & 0x83)) {
+  if (!(u4_mode_flag & 0x83)) {
     usb_phy_tune();
 
     // PCIe TLP engine values that don't change + tuning
@@ -523,22 +517,14 @@ void main(void) {
     pcie_power_on();
   }
 
-  // Bring up the USB PIPE engine and arm the upstream USB4 PHY link.
+#if HANDMADE_USB4_MODE_FLAGS
   usb_pipe_engine_init();
   usb4_phy_arm();
-
-  // Present a PD-capable Type-C attach and arm the PD engine before interrupts.
   pd_keystone_init();
-
-  // Arm the USB4 SB-transport / router interrupt path so the host's connect raises C80A.5.
   usb4_irq_arm();
 
-  // Enable the bank1/USB4 interrupt group, including the EC06 router-op mailbox path.
   REG_INT_ENABLE = (uint8_t)((REG_INT_ENABLE & 0xBF) | 0x40);
 
-  // d894 boot tail. Disassembly says:
-  // P1[0000]&=~2; C809|=2; b031(); P1[1602]&=~1; P1[1603]=1; P1[1602]&=~2; P1[1603]=2; P1[121E]|=1.
-  // The old 0x1604 notes were decompiler artefacts; the byte listing addresses this as 0x1602/0x1603.
   P1_WR(0x0000, (uint8_t)(P1_RD(0x0000) & 0xFD));
   REG_INT_CTRL = (uint8_t)((REG_INT_CTRL & 0xFD) | 0x02);
   u4lb_b031_transport_reinit(0);
@@ -548,61 +534,47 @@ void main(void) {
   P1_WR(P1_USB4_BOOT_TAIL_EVENT_1603, 0x02);
   P1_WR(P1_USB4_CFG_ENABLE_121E, (uint8_t)(P1_RD(P1_USB4_CFG_ENABLE_121E) | 0x01));
 
-  // USB4 CM router-op RX-enable so the host's router-op queries are received.
-  if (XDATA_REG8V(0x09F9) & 0x81) {
-    usb4_routerop_init();
-  }
+  usb4_routerop_init();
+#endif
 
-  // USB-mode fork: skip the USB3 device engine in USB4 mode. The GPU path is the USB4 PCIe tunnel.
-  if (!(XDATA_REG8V(0x09F9) & 0x83)) {
+  if (!(u4_mode_flag & 0x83)) {
     // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
     usb_init_controller(0);
   }
 
-  // Zero only the USB4 router-op mailbox scratch. 0x0B12+ holds SB transport state that b031 seeds.
-  { uint8_t z; for (z = 0; z <= (0x0B11 - 0x0B02); z++) XDATA_REG8V(0x0B02 + z) = 0; }
-  XDATA_REG8V(0x06F1) = 0;
-  // SB-router route-up / lane-bonded / per-lane CL0 / transport-substate latches.
-  XDATA_REG8V(0x0766) = 0; XDATA_REG8V(0x072D) = 0;
-  XDATA_REG8V(0x074E) = 0; XDATA_REG8V(0x074F) = 0;
-  XDATA_REG8V(0x06EE) = 0; XDATA_REG8V(0x06EF) = 0; XDATA_REG8V(0x06F0) = 0;
-  // Lane-bond FSM: enable gate, FSM state, sub-states and route-enable latch.
-  XDATA_REG8V(0x06EC) = 0; XDATA_REG8V(0x06ED) = 0;
-  XDATA_REG8V(0x0758) = 0; XDATA_REG8V(0x0759) = 0; XDATA_REG8V(0x075A) = 0;
-  XDATA_REG8V(0x075B) = 0; XDATA_REG8V(0x075C) = 0; XDATA_REG8V(0x0718) = 0;
-  // b0b4 gate inputs: connect-present, lane-width snapshot, connect-descriptor scratch.
-  XDATA_REG8V(0x0765) = 0; XDATA_REG8V(0x0768) = 0; XDATA_REG8V(0x0769) = 0;
-  XDATA_REG8V(0x0752) = 0; XDATA_REG8V(0x0753) = 0;
-  // Connect_U4 one-shot suppress: force clear so the first connect runs the SB assert.
-  XDATA_REG8V(0x07ED) = 0;
+#if HANDMADE_USB4_MODE_FLAGS
+  { uint8_t z; for (z = 0; z < U4_ROUTEROP_MBOX_CLEAR_LEN; z++) U4_XDATA_BYTES(u4_routerop_mbox_state)[z] = 0; }
+  sb_active_port_rr = 0;
+  sb_route_up_trigger = 0; lb_lane_bonded_flag = 0;
+  lb_laneA_cl0_latch = 0; lb_laneB_cl0_latch = 0;
+  sb_transport_edge_toggle = 0; sb_link_edge_toggle = 0; sb_active_plane_port = 0;
+  u4_conn_consequence_done = 0; u4_fsm_state = U4FSM_IDLE;
+  cm_conn_routing_substate = CONNRT_PRINT_STATUS; lb_loop1_state[0] = LP1_PARKED; lb_loop1_state[1] = LP1_PARKED;
+  lb_loop2_state[0] = LP2_CL_IDLE; lb_loop2_state[1] = LP2_CL_IDLE; u4_route_enable_latch = 0;
+  sb_connect_present = 0; lb_lane_width_cnt_hi = 0; lb_lane_width_cnt_lo = 0;
+  sb_connect_descriptor = 0; sb_tx_command_desc = 0;
+  u4_connect_oneshot_suppress = 0;
 
-  // Seed the XDATA scratch flags/budgets (crt0 only zeroes IRAM, not XDATA).
-  { uint8_t z; for (z = 0; z <= (0x0B58 - 0x0B45); z++) XDATA_REG8V(0x0B45 + z) = 0; }
-  tup_e52d_done = 0;
+  { uint8_t z; for (z = 0; z < U4_BOOT_SCRATCH_CLEAR_LEN; z++) U4_XDATA_BYTES(pd_seen)[z] = 0; }
+#endif
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
-  if (!(XDATA_REG8V(0x09F9) & 0x83)) {
+  if (!(u4_mode_flag & 0x83)) {
     i2c_init();
     ina231_init();
   }
 
-  // Milestone 1: prompt the host into PD with periodic Hard Resets until it engages
-  // (pd_seen is set by the PD-RX ISR on the first received message), then just observe.
+#if HANDMADE_USB4_MODE_FLAGS
   uint8_t kicks = 0;
+#endif
   while (1) {
-    /* FSM-advance, run first and delay-free so it tracks the connect edge tightly. */
-    if ((XDATA_REG8V(0x09F9) & 0x83) && XDATA_REG8V(0x06EC)) {
+#if HANDMADE_USB4_MODE_FLAGS
+    if ((u4_mode_flag & 0x83) && u4_conn_consequence_done) {
       IE &= (uint8_t)~IE_EA;
       sb_cb10_lane_advance();
-      /* Stock cb10 dispatches e672 only while 0x06ED is nonzero. When state 5 finishes it sets
-       * 0x06ED=0 and leaves the host to raise the lane-bond/CL0 events; re-arming state 3 here
-       * restarts the CL walk before SB[A0]/SB[A1] can become 0x02. */
-      /* Stock cb10 throttle (raw cb8d-cbb3): ee57 returns live CCE4:CCE5 in R6:R7. The walker
-       * advances when saved 0x076A:0x076B minus the live counter is >= 3; after e672, stock
-       * samples ee57 again and stores the fresh live value. */
-      if (XDATA_REG8V(0x06ED) != 0) {
+      if (u4_fsm_state != U4FSM_IDLE) {
         uint16_t cur = u4lb_ee57();
         uint8_t cur_hi = (uint8_t)(cur >> 8), cur_lo = (uint8_t)cur;
         uint8_t snap_hi = lb_walk_throttle_snap_hi, snap_lo = lb_walk_throttle_snap_lo;  /* 0x076A:0x076B */
@@ -615,19 +587,14 @@ void main(void) {
           lb_walk_throttle_snap_lo = (uint8_t)cur;
         }
       }
-      // cb10 tail: send the deferred router-op CONFIG-READ RESPONSE (stock cdf5) the host blocks on.
-      // u4lb_eda0() (called here for its 0x0775/0x0719 token-clear side-effect) yields the selector
-      // cdf5 needs (0/2 => build+TX the lane-config response; 1 => nothing this pass, arm stays set).
       if (sb_cdf5_substate_arm != 0) sb_cdf5_routerop_response(u4lb_eda0());
       IE |= IE_EA;
     }
 
-    // Stock re-runs the connect-service while the host's sideband state changes.
     IE &= (uint8_t)~IE_EA;
     sb_connect_service_reservice_d7cd();
     IE |= IE_EA;
 
-    // SB router-op responder, deferred off the INT1 ISR to keep the stack shallow.
     if (SB_RD(0x26) & 0x02) {
       IE &= (uint8_t)~IE_EA;
       sb_a5d8_pend_int();
@@ -635,8 +602,7 @@ void main(void) {
       IE |= IE_EA;
     }
 
-    // While a connect is in progress keep the loop tight; only delay when idle.
-    if (XDATA_REG8V(0x06EC)) {
+    if (u4_conn_consequence_done) {
       continue;
     }
     if (sb_asserted) { uint32_t b; for (b = 0; b < 60000UL; b++) { __asm nop __endasm; } }
@@ -649,5 +615,6 @@ void main(void) {
         else if (kicks < 8) { pd_drive_hard_reset(); kicks++; pd_settle = 0; }
       }
     }
+#endif
   }
 }

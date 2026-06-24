@@ -40,8 +40,8 @@ clear_ram_loop:
     mov     @r0, a
     djnz    r0, clear_ram_loop
 
-    ; Keep stack above DSEG. The USB4 INT1 and lane-bond paths need roughly 128 bytes.
-    mov     sp, #0x7F
+    ; First push lands at SDCC's current stack start.
+    mov     sp, #0x5C
 
     ; Initialize DPX = 0 (bank 0)
     mov     0x96, #0x00

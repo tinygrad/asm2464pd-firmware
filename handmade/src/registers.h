@@ -2409,19 +2409,7 @@
 #define REG_BANK_0200           XDATA_REG8(0x0200)  /* Bank register at 0x0200 */
 #define REG_BANK_1200           XDATA_REG8(0x1200)  /* Bank register at 0x1200 */
 #define REG_BANK_1235           XDATA_REG8(0x1235)  /* Bank register at 0x1235 */
-/* --- USB4 in-band router config-space + width-event chain.
- * These are page-1/DPX=1 addresses. Use P1_RD/P1_WR in firmware code, not direct XDATA_REG8.
- * The host's in-band ROUTER_CS read (tb_switch_alloc) is served from the 0x1200 config-space ONLY
- * after the HW raises the link-WIDTH event. Chain: C80A.4 IRQ -> c105 reads P1[0x1407].0; if set ->
- * a522 (link-width service) reads P1[0x1203].7; if set -> c8c7 builds the 0x1200 config-space, whose
- * leaf c251 writes P1[0x1201]=CURRENT_WIDTH(=2 dual).
- * HW-VERIFIED (24th agent, held-bond force): P1[0x1201]/[0x1202] are HW-WRITE-LOCKED (firmware MOVX
- * reads back 00, even with the host forcing the lane adapter to CURRENT_WIDTH=2 + LB). P1[0x1407].0
- * and P1[0x1203].7 are pure HW status (W1C, no firmware writer) raised only on a real 1->2 lane-width
- * TRANSITION the device PHY registers. Handmade bonds to width=2 without the HW registering the
- * transition -> these stay 00 -> c8c7 never runs / its leaf is a no-op -> config-space empty -> read
- * times out (-110). P1[0x121E].0 (config-space/control-adapter enable, d894 tail) IS firmware-writable
- * (sticks) but does NOT wake the transport-RX. The transport is HW-gated, not config-space-gated. */
+/* USB4 page-1 config-space and event registers. Use P1_RD/P1_WR, not direct XDATA_REG8. */
 #define P1_USB4_LANE_ADP_CURRENT_WIDTH  0x1201u  /* c251 current-width leaf. HW-write-locked. */
 #define P1_USB4_LANE_ADP_CFG_1202       0x1202u  /* c8c7 config-space byte. HW-write-locked. */
 #define P1_USB4_WIDTH_EVENT_1203        0x1203u  /* width-event flag .7, W1C, a522 gate to c8c7 */

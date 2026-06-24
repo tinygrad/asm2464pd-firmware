@@ -228,27 +228,33 @@ static void sb_pcie_width_ramp(uint8_t width) {
   REG_PCIE_LINK_STATE = width; REG_PCIE_LINK_STATE_HI_B435 = width; REG_PCIE_LANE_CONFIG = width; REG_PCIE_LANE_CONFIG_HI_B437 = width;
 }
 
-static void eng_a30c(uint8_t cur, uint8_t v) {
-  P12_WR(cur, v); P12_WR((uint8_t)(cur + 1), (uint8_t)((P12_RD((uint8_t)(cur + 1)) & 0x3F) | 0x80));
-}
-static void eng_a308(uint8_t cur, uint8_t v) {
-  P12_WR(cur, (uint8_t)((v & 0xF0) | 0x0F));
-  P12_WR((uint8_t)(cur + 1), (uint8_t)((P12_RD((uint8_t)(cur + 1)) & 0x3F) | 0x80));
-}
-static void eng_a2df(uint8_t cur, uint8_t v) {
-  P12_WR(cur, v); P12_WR((uint8_t)(cur + 1), (uint8_t)(P12_RD((uint8_t)(cur + 1)) & 0xE0));
-}
-static void eng_a31c(uint8_t cur, uint8_t v) {
-  P12_WR(cur, v);
-  P12_WR((uint8_t)(cur + 1), (uint8_t)((P12_RD((uint8_t)(cur + 1)) & 0xC0) | 0x04));
-  P12_WR((uint8_t)(cur + 1), (uint8_t)((P12_RD((uint8_t)(cur + 1)) & 0x3F) | 0x40));
-}
-static void eng_a348(uint8_t cur, uint8_t v) {
-  P12_WR(cur, v); (void)P12_RD((uint8_t)(cur + 1));
-}
-static void eng_a327(uint8_t cur, uint8_t v) {
-  P12_WR(cur, v); P12_WR(cur, (uint8_t)((P12_RD(cur) & 0x3F) | 0x40));
-}
+#define eng_a30c(cur, v) do { \
+  P12_WR((cur), (uint8_t)(v)); \
+  P12_WR((uint8_t)((cur) + 1), (uint8_t)((P12_RD((uint8_t)((cur) + 1)) & 0x3F) | 0x80)); \
+} while (0)
+#define eng_a308(cur, v) do { \
+  P12_WR((cur), (uint8_t)(((v) & 0xF0) | 0x0F)); \
+  P12_WR((uint8_t)((cur) + 1), (uint8_t)((P12_RD((uint8_t)((cur) + 1)) & 0x3F) | 0x80)); \
+} while (0)
+#define eng_a2df(cur, v) do { \
+  P12_WR((cur), (uint8_t)(v)); \
+  P12_WR((uint8_t)((cur) + 1), (uint8_t)(P12_RD((uint8_t)((cur) + 1)) & 0xE0)); \
+} while (0)
+#define eng_a31c(cur, v) do { \
+  P12_WR((cur), (uint8_t)(v)); \
+  P12_WR((uint8_t)((cur) + 1), (uint8_t)((P12_RD((uint8_t)((cur) + 1)) & 0xC0) | 0x04)); \
+  P12_WR((uint8_t)((cur) + 1), (uint8_t)((P12_RD((uint8_t)((cur) + 1)) & 0x3F) | 0x40)); \
+} while (0)
+#define eng_a348(cur, v) do { \
+  P12_WR((cur), (uint8_t)(v)); \
+  (void)P12_RD((uint8_t)((cur) + 1)); \
+} while (0)
+#define eng_a327(cur, v) do { \
+  P12_WR((cur), (uint8_t)(v)); \
+  P12_WR((cur), (uint8_t)((P12_RD(cur) & 0x3F) | 0x40)); \
+} while (0)
+#define eng_a31c_exact(cur, v) \
+  (P12_WR((cur), (uint8_t)(v)), (uint8_t)((P12_RD((uint8_t)((cur) + 1)) & 0xC0) | 0x04))
 
 static uint8_t u4c_sb_desc_commit(void) {
   uint8_t commit; uint16_t g;
@@ -271,11 +277,6 @@ static void u4c_e8d6_seed_workbuf(void) {
   XDATA_REG8V(0x09DC) = 0x10;
   XDATA_REG8V(0x09E2) = 0x04;
   XDATA_REG8V(0x09E0) = 0x06;
-}
-
-static uint8_t eng_a31c_exact(uint8_t cur, uint8_t v) {
-  P12_WR(cur, v);
-  return (uint8_t)((P12_RD((uint8_t)(cur + 1)) & 0xC0) | 0x04);
 }
 
 static void u4c_d4c8_edge_engine(void) {
@@ -462,7 +463,6 @@ static void u4c_e5b0(void) {
   P12_WR(0x8F, 0x80);
   P12_WR(0x90, (uint8_t)(P12_RD(0x90) & 0xDF));
   P12_WR(0x8F, 0x20);
-  sb_notify_flag0 = 0; sb_notify_flag1 = 0; sb_notify_flag2 = 0; sb_notify_flag3 = 0;
 }
 
 static void u4c_ccb3(uint8_t width_byte) {
@@ -490,13 +490,13 @@ static void u4c_ccb3(uint8_t width_byte) {
   }
 }
 
-static volatile uint8_t __xdata bbc7_a5b;
+static volatile uint8_t __xdata sb_eng_nibble_acc;
 static uint8_t bbc7_bc70(uint16_t addr) {
   uint8_t code = XDATA_REG8(addr);
   uint8_t hi = (uint8_t)(code >> 4);
   u4lb_width_rate_code = (uint8_t)(((uint8_t)(hi | (uint8_t)(code << 4))) ^ hi);
-  bbc7_a5b = (uint8_t)((uint8_t)(bbc7_a5b << 4) | hi);
-  return bbc7_a5b;
+  sb_eng_nibble_acc = (uint8_t)((uint8_t)(sb_eng_nibble_acc << 4) | hi);
+  return sb_eng_nibble_acc;
 }
 static uint8_t bbc7_bcb8(uint16_t addr) {
   return (uint8_t)(u4lb_width_rate_code | (uint8_t)(XDATA_REG8(addr) >> 4));
@@ -504,16 +504,16 @@ static uint8_t bbc7_bcb8(uint16_t addr) {
 static void sb_eng_data_init_bbc7(void) {
   uint8_t i;
   for (i = 0; i < 9; i++) P12_WR((uint8_t)(0x12 + i), 0x00);
-  i = XDATA_REG8V(0x09F7);
-  XDATA_REG8(0x0B12) = (i == 0) ? 0x0C : (i == 1) ? 0x1C : 0x00;
+  i = u4_sb_desc_profile;
+  sb_eng_lane_profile = (i == 0) ? 0x0C : (i == 1) ? 0x1C : 0x00;
   sb_eng_data_hi = 0x17; sb_eng_data_lo = 0x4C;
-  bbc7_a5b = XDATA_REG8(0x0A41);
+  sb_eng_nibble_acc = XDATA_REG8(0x0A41);
   sb_eng_data3d_a = bbc7_bc70(0x0A40);
   sb_eng_data3c_a = bbc7_bcb8(0x0A3F);
-  bbc7_a5b = 0;
+  sb_eng_nibble_acc = 0;
   sb_eng_data3f_b = bbc7_bc70(0x0A3E);
   sb_eng_data3e_b = bbc7_bcb8(0x0A3D);
-  bbc7_a5b = 0;
+  sb_eng_nibble_acc = 0;
   sb_eng_data3d_b = bbc7_bc70(0x0A3C);
   sb_eng_data3c_b = u4lb_width_rate_code;
 }
@@ -570,8 +570,6 @@ static void u4c_bcd7_tail(void) {
   }
 }
 
-static volatile uint8_t __xdata __at(0x0B4B) sb_asserted;
-
 static void sb_assert(void) {
   u4c_edbd();
   P1_SET(0x0000, 0x02);
@@ -598,33 +596,38 @@ static void sb_assert(void) {
   uart_puts("[SBdone]\n");
 }
 
+static void phy_cc11_ack(void);
 static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
-static void phy_cc10_cmd(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
+#define phy_cc10_cmd(subcmd, cc12, cc13) do { \
+  phy_cc11_ack(); \
+  REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | ((subcmd) & 0x07); \
+  REG_TIMER0_THRESHOLD_HI = (cc12); \
+  REG_TIMER0_THRESHOLD_LO = (cc13); \
+  REG_TIMER0_CSR = 0x01; \
+} while (0)
 static void bank0_8a89(uint8_t mode);
 static void u4lb_b031_transport_reinit(uint8_t skip_lane);
 static void boot_phy_bceb_set0(uint16_t addr);
 static void sb_channel_connect_service(void);
-static void u4lb_eb62(uint8_t state_lo, u4_fsm_state_t state);
-static void u4lb_98ec(uint8_t hi, uint8_t lo);
+static void u4lb_eb62(u4_fsm_state_t state);
+static void u4lb_98ec(void);
 static void u4lb_d5da(uint8_t param);
 
 static void sb_write_c9_ack(uint8_t pos) {
   SB_WR(0xC9, (uint8_t)(1u << (pos & 7)));
 }
 
-#define SBP2_RD(base, off)   P1_REG8_rd((uint16_t)((base) + (off)))
+#define SBP2_BASE()          ((uint16_t)(0x2A00u + ((uint16_t)(sb_active_plane_port & 3) << 8)))
+#define SBP2_RD(off)         P1_REG8_rd((uint16_t)(SBP2_BASE() + (off)))
 
 #define SBTX_RD(off)         P1_REG8_rd((uint16_t)(0x2900u + (off)))
 #define SBTX_WR(off, v)      P1_REG8_wr((uint16_t)(0x2900u + (off)), (uint8_t)(v))
 
-static __code const uint16_t sb_rxplane_212d[4] = { 0x2a00u, 0x2b00u, 0x2c00u, 0x2d00u };
-
 static void sb_eaac_populate_0777(void) {
-  uint16_t rx_plane = sb_rxplane_212d[sb_active_plane_port & 3];
   uint8_t i;
   u4_route_query_response = 1;
   for (i = 0; i < 0x40; i++) {
-    u4_host_desc[i] = SBP2_RD(rx_plane, i);
+    u4_host_desc[i] = SBP2_RD(i);
   }
   REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02; REG_XFER2_DMA_STATUS = 0x01;
 }
@@ -633,18 +636,15 @@ static __code const uint8_t sb_af38_rom21a1[0x13] = {
   0x00,0x04,0xFF,0x08,0x0C,0xFF,0xFF,0xFF, 0x10,0x14,0x18,0xFF, 0x19,0x1C,0xFF,0x20, 0xFF,0xFF,0x24
 };
 
-static volatile uint8_t __xdata __at(0x0B44) pcie_ctrl_b402_bit1_save;
-
 static void sb_af38_descriptor_response(void) {
-  uint16_t rx_plane = sb_rxplane_212d[sb_active_plane_port & 3];
-  uint8_t  desc_type, desc_len, desc_dir, work_off = 0, raw_byte1, i, status5, width;
+  uint8_t  desc_type, desc_len, desc_dir, raw_byte1, i, status5, width;
   uint8_t  desc = sb_connect_descriptor;
   uint8_t  status_off = (sb_active_plane_port == 0) ? 0x0D : 0x0E;
 
   sb_tx_command_desc = (uint8_t)(desc & 0xDE);
 
-  desc_type = SBP2_RD(rx_plane, 0);
-  raw_byte1 = SBP2_RD(rx_plane, 1);
+  desc_type = SBP2_RD(0);
+  raw_byte1 = SBP2_RD(1);
   desc_len  = (uint8_t)(raw_byte1 & 0x7F);
   desc_dir  = (uint8_t)(raw_byte1 & 0x80);
 
@@ -654,7 +654,6 @@ static void sb_af38_descriptor_response(void) {
   if (desc_type < 0x12) {
     width = sb_width_lut[(uint16_t)(0x0 + desc_type)];
     SBTX_WR(1, (uint8_t)(SBTX_RD(1) | width));
-    work_off = sb_af38_rom21a1[desc_type];
   }
 
   status5 = (uint8_t)((SB_RD(status_off) & 0x7F) - 5);
@@ -667,7 +666,7 @@ static void sb_af38_descriptor_response(void) {
         sb_branchA_gate[(uint16_t)(0x0 + desc_type)] != 0 &&
         desc_len <= sb_width_lut[(uint16_t)(0x0 + desc_type)]) {
       for (i = 0; i < desc_len; i++)
-        u4_work_buf[(uint16_t)(0x0 + (uint8_t)(work_off + i))] = SBP2_RD(rx_plane, (uint8_t)(2 + i));
+        u4_work_buf[(uint16_t)(uint8_t)(sb_af38_rom21a1[desc_type] + i)] = SBP2_RD((uint8_t)(2 + i));
       if (desc_type == 8) { uart_puts("\r\n[af38-A:cm8]"); }
     } else {
       SBTX_WR(1, (uint8_t)(SBTX_RD(1) & 0x80));
@@ -680,7 +679,7 @@ static void sb_af38_descriptor_response(void) {
         status5 == 0) {
       if ((uint8_t)(width + 1) <= sb_af38_copy_len) sb_af38_copy_len = width;
       for (i = 0; i < sb_af38_copy_len; i++)
-        SBTX_WR((uint8_t)(2 + i), u4_work_buf[(uint16_t)(0x0 + (uint8_t)(work_off + i))]);
+        SBTX_WR((uint8_t)(2 + i), u4_work_buf[(uint16_t)(uint8_t)(sb_af38_rom21a1[desc_type] + i)]);
     } else {
       SBTX_WR(1, (uint8_t)(SBTX_RD(1) & 0x80));
       sb_af38_copy_len = 0;
@@ -712,8 +711,8 @@ static void sb_edd9_receive_ack(void) {
     SB_WR(0xD8, 0x02);
     REG_LINK_STATUS_E716 &= 0xFC;
     REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
-    u4lb_eb62(0, U4FSM_CONN_ROUT);
-    u4lb_98ec(0, 3);
+    u4lb_eb62(U4FSM_CONN_ROUT);
+    u4lb_98ec();
     uart_puts("\r\n[edd9]");
   }
 }
@@ -776,10 +775,6 @@ static void sb_d4cd_transport_edges(void) {
     }
   }
 }
-static void sb_chan_prelude(void) {
-  (void)SB_RD(0x09);
-}
-
 static void sb_db7a_route_arm(void) {
   if (u4_connect_route_latch == 0) {
     REG_CPU_CTRL_CA60 &= 0xF7;
@@ -795,8 +790,8 @@ static void sb_db7a_route_arm(void) {
     REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0x8F) | 0x60;
     REG_PHY_CTRL_C20F = 0x00;
   }
-  u4lb_eb62(0, U4FSM_CONN_ROUT);
-  u4lb_98ec(0, 3);
+  u4lb_eb62(U4FSM_CONN_ROUT);
+  u4lb_98ec();
 }
 
 static void sb_con_consequence(void) {
@@ -828,18 +823,6 @@ static void sb_lane_bonded_consequence(void) {
   SB_WR(0xC9, 0xFF);
   sb_active_port_rr = (uint8_t)((SB_RD(0x24) & 0x06) >> 1);
   u4lb_c593();
-}
-
-static void u4lb_e3b7(uint8_t r7) {
-  XDATA_REG8(0xCC17) = 0x04;
-  XDATA_REG8(0xCC17) = 0x02;
-  if (r7 & 0x01) {
-    REG_POWER_MISC_CTRL &= 0xFE;
-  }
-  if ((r7 >> 1) & 0x01) {
-    boot_phy_bceb_set0(0xB480);
-    (void)((REG_POWER_CTRL_B432 & 0x07) == 0x07 && (REG_SYS_CTRL_E765 & 0x02) != 0);
-  }
 }
 
 static void sb_phy_connect_config_c35b(void) {
@@ -904,7 +887,6 @@ static void sb_connect_service_reservice_d7cd(void) {
   sb_phy_connect_config_c35b();
 }
 
-static volatile uint8_t __xdata __at(0x0B57) tup_e52d_done;
 static void sb_lane_bond_complete_tunnel_up(void) {
   if (tup_e52d_done) return;
   tup_e52d_done = 1;
@@ -965,10 +947,6 @@ static void sb_channel_connect_service(void) {
   }
 }
 
-static __code const uint8_t lane_port_map_a[19] = {
-  0x00,0x04,0xFF,0x08,0x0C,0xFF,0xFF,0xFF,0x10,0x14,0x18,0xFF,0x19,0x1C,0xFF,0x20,0xFF,0xFF,0x24
-};
-
 static void sb_clear_cl0_width_latches(void) {
   lb_laneA_cl0_latch = 0;
   lb_laneB_cl0_latch = 0;
@@ -1008,7 +986,7 @@ static void sb_a5d8_pend_int(void) {
   u4_routerop_opcode = (uint8_t)(opcode_byte & 7);
   u4_routerop_svid_hi = (uint8_t)(opcode_byte >> 4);
   u4_routerop_flag = (uint8_t)(u4_routerop_desc3 & 1);
-  u4_routerop_port = lane_port_map_a[u4_routerop_op_lo];
+  u4_routerop_port = sb_af38_rom21a1[u4_routerop_op_lo];
 
   opcode = u4_routerop_opcode;
   if (opcode != 0) {

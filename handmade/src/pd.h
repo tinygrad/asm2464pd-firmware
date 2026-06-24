@@ -9,9 +9,6 @@
 
 #define PR(a) XDATA_REG8V(a)
 
-/* Set once the host engages PD (a PD message is received). */
-static volatile uint8_t __xdata __at(0x0B45) pd_seen;
-
 static void pd_rx_message_dispatch(void);
 
 #define PD_WAIT_LIMIT 0x4000u
@@ -89,10 +86,8 @@ static void cc_ctrl_enable_events(void) {
 /* Reset the PD policy-engine state block, set substate=init, seed timers, enable CC events. */
 static void pd_internal_state_init(void) {
   uart_puts("[InternalPD_StateInit]");
-  pd_tx_staged_pending = 0; pd_contract_state = 0;
+  pd_contract_state = 0;
   pd_tx_msgid_counter = 0; pd_tx_msg_len = 0;
-  pd_selected_pdo_idx = 0;
-  pd_pdo_selection_valid = 0;
   pd_rx_num_data_obj = 0;
   pd_rx_slot_idx = 0;
   pd_state_07e3 = 0;
@@ -281,17 +276,10 @@ static void pd_ctrl_goodcrc(void);
 static void vdm_tx_dispatch(void);
 static void pd_handle_enter_usb(void);
 
-/* Stash the 16-bit RX buffer pointer for the current RX slot and return it. */
+/* Return the 16-bit RX buffer pointer for the current RX slot. */
 static uint16_t pd_rx_ptr(void) {
   uint8_t slot = pd_rx_slot_idx;
-  uint16_t base = (uint16_t)(0xE440u + (uint16_t)(0x20u * slot));
-  pd_rx_ptr_hi = (uint8_t)(base >> 8);
-  pd_rx_ptr_lo = (uint8_t)(base & 0xFF);
-  return base;
-}
-/* Re-read the stowed RX buffer pointer. */
-static uint16_t pd_rx_ptr_get(void) {
-  return ((uint16_t)pd_rx_ptr_hi << 8) | pd_rx_ptr_lo;
+  return (uint16_t)(0xE440u + (uint16_t)(0x20u * slot));
 }
 
 /* Send the message staged in E420-E43F and bump the TX MessageID. */
@@ -301,7 +289,6 @@ static void pd_tx_commit_engine(void) {
   REG_CMD_BUSY_STATUS = (REG_CMD_BUSY_STATUS & 0xFE) | 0x01;
   { uint16_t guard; for (guard = 0; (REG_CMD_BUSY_STATUS & 0x01) && guard < 0x4000; guard++); }
   pd_tx_msgid_counter = (pd_tx_msgid_counter + 1) & 7;
-  pd_tx_staged_pending = 0;
 }
 
 /* W1C clear a CC event register (write 4 then 2). */
@@ -313,9 +300,9 @@ static void pd_cc_event_clear(uint16_t reg) {
 static void pd_e933_clear_cc81(void) { pd_cc_event_clear(0xCC81); }
 
 /* Arm the CC sender-response / PS-transition timer. */
-static void pd_arm_cc_timer(uint8_t threshold_hi, uint8_t threshold_lo) {
-  REG_CPU_CTRL_CC82 = threshold_hi;
-  REG_CPU_CTRL_CC83 = threshold_lo;
+static void pd_arm_cc_timer(uint16_t threshold) {
+  REG_CPU_CTRL_CC82 = (uint8_t)(threshold >> 8);
+  REG_CPU_CTRL_CC83 = (uint8_t)threshold;
   pd_cc_event_clear(0xCC81);
   REG_CPU_INT_CTRL = 0x01;
 }
@@ -335,19 +322,11 @@ static void pd_tx_buf_clear(void) {
   for (i = 0; i < 0x20; i++) PR(0xE420 + i) = 0;
 }
 
-/* Select PDO[0] (vSafe5V fixed supply) from the received Source_Cap. */
-static void pd_select_pdo_from_source_cap(void) {
-  uint16_t pdo0 = (uint16_t)(0xE442u + (uint16_t)(0x20u * pd_rx_slot_idx));
-  pd_op_current_lo = PR(pdo0 + 0);
-  pd_op_current_hi = PR(pdo0 + 1) & 0x03;
-  pd_selected_pdo_idx = 0;
-  pd_pdo_selection_valid = 1;
-}
-
 /* Build a Request (header + Fixed RDO) and send it, then arm SenderResponse. */
 static void pd_build_send_request_rdo(void) {
-  uint8_t cur_hi = pd_op_current_hi;
-  uint8_t cur_lo = pd_op_current_lo;
+  uint16_t pdo0 = (uint16_t)(0xE442u + (uint16_t)(0x20u * pd_rx_slot_idx));
+  uint8_t cur_lo = PR(pdo0 + 0);
+  uint8_t cur_hi = PR(pdo0 + 1) & 0x03;
 
   pd_tx_buf_clear();
   pd_tx_set_sop_header(1, 2);
@@ -358,7 +337,7 @@ static void pd_build_send_request_rdo(void) {
   REG_CMD_ISSUE = (uint8_t)((cur_hi << 2) & 0x0C);
   REG_CMD_ISSUE |= (uint8_t)(cur_lo >> 6);
   REG_CMD_TAG = 1;
-  REG_CMD_TAG |= (uint8_t)(((pd_selected_pdo_idx + 1) & 7) << 4);
+  REG_CMD_TAG |= 0x10;
   REG_CMD_TAG |= 2;
   REG_CMD_TAG &= 0xFE;
 
@@ -376,15 +355,14 @@ static void pd_build_send_request_rdo(void) {
   REG_TIMER0_CSR = 0x02;
 
   pd_tx_commit_engine();
-  pd_arm_cc_timer(2, 0x30);
+  pd_arm_cc_timer(0x0230);
 }
 
 /* ---------- CONTROL-message handlers (NumObj==0) ---------- */
 
-/* GoodCRC: advance the RX slot index; commit any staged pending TX. */
+/* GoodCRC: advance the RX slot index. */
 static void pd_ctrl_goodcrc(void) {
   pd_rx_slot_idx = (uint8_t)((pd_rx_slot_idx + 1) & (uint8_t)(pd_rx_slot_mask - 1));
-  if (pd_tx_staged_pending != 0) pd_tx_commit_engine();
 }
 
 /* Accept: on substate 3 advance to 4 and arm the PS_RDY timer. */
@@ -395,7 +373,7 @@ static void pd_ctrl_accept(void) {
   if (substate == 3) {
     pd_e933_clear_cc81();
     pd_msg_substate = 4;
-    pd_arm_cc_timer(0x10, 0x27);
+    pd_arm_cc_timer(0x1027);
     pd_ctrl_goodcrc();
     return;
   }
@@ -451,7 +429,7 @@ static void pd_ctrl_reject(void) {
     pd_e933_clear_cc81();
     if (pd_contract_state == 0) {
     }
-    pd_arm_cc_timer(0, 0);
+    pd_arm_cc_timer(0);
     pd_ctrl_goodcrc();
     return;
   }
@@ -468,7 +446,7 @@ static void pd_ctrl_wait(void) {
   if (pd_msg_substate != 3) { pd_ctrl_goodcrc(); return; }
   pd_e933_clear_cc81();
   if (pd_contract_state != 0) {
-    pd_arm_cc_timer(0xD0, 0x07);
+    pd_arm_cc_timer(0xD007);
     { uint16_t guard = 0; while (!(REG_CPU_INT_CTRL & 0x02) && ++guard < PD_WAIT_LIMIT); }
     REG_CPU_INT_CTRL = 0x02;
     pd_ctrl_goodcrc();
@@ -494,7 +472,6 @@ static void pd_ctrl_soft_reset(void) {
   uart_puts("[Soft_Reset]");
   pd_tx_msgid_counter = 0;
   pd_rx_slot_idx = 0;
-  pd_tx_staged_pending = 0;
   pd_e933_clear_cc81();
 
   pd_tx_buf_clear();
@@ -540,7 +517,6 @@ static void pd_dispatch_data(uint8_t msgtype) {
       }
     }
     pd_e933_clear_cc81();
-    pd_select_pdo_from_source_cap();
     pd_msg_substate = 2;
     pd_build_send_request_rdo();
     pd_ctrl_goodcrc();
@@ -630,11 +606,11 @@ static void pd_vdm_hdr_build(uint8_t cmdtype, uint8_t cmd) {
 }
 
 /* NAK echoing the received SVID. */
-static void vdm_nak(uint8_t cmd, uint8_t svid_lo, uint8_t svid_hi) {
+static void vdm_nak(void) {
   pd_tx_set_sop_header(1, 0x0F);
-  pd_vdm_hdr_build(2, cmd);
-  REG_CMD_ISSUE = svid_lo;
-  REG_CMD_TAG = svid_hi;
+  pd_vdm_hdr_build(2, u4_routerop_flag);
+  REG_CMD_ISSUE = u4_routerop_port;
+  REG_CMD_TAG = u4_routerop_svid_hi;
   pd_tx_msg_len = 6;
 }
 
@@ -676,8 +652,8 @@ static void vdm_build_discover_id(void) {
 }
 
 /* Discover_SVIDs responder: ACK with SVID 0x8087, else NAK. */
-static void vdm_build_discover_sids(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
-  if (((uint8_t)~rx_svid_hi | rx_svid_lo) == 0 && (u4_mode_flag & 0x80)) {
+static void vdm_build_discover_sids(void) {
+  if (((uint8_t)~u4_routerop_svid_hi | u4_routerop_port) == 0 && (u4_mode_flag & 0x80)) {
     pd_tx_set_sop_header(2, 0x0F);
     pd_vdm_hdr_build(1, 2);
     REG_CMD_LBA_0 = 0x00;
@@ -687,12 +663,12 @@ static void vdm_build_discover_sids(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
     pd_tx_msg_len = 0x0A;
     return;
   }
-  vdm_nak(2, rx_svid_lo, rx_svid_hi);
+  vdm_nak();
 }
 
 /* Discover_Modes responder: ACK TBT3 mode for SVID 0x8087, else NAK. */
-static void vdm_build_discover_modes(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
-  if (rx_svid_hi == 0x80 && rx_svid_lo == 0x87 && (u4_mode_flag & 0x80)) {
+static void vdm_build_discover_modes(void) {
+  if (u4_routerop_svid_hi == 0x80 && u4_routerop_port == 0x87 && (u4_mode_flag & 0x80)) {
     pd_tx_set_sop_header(2, 0x0F);
     pd_vdm_hdr_build(1, 3);
     REG_CMD_ISSUE = VDM_TBT_SVID_LO;
@@ -704,7 +680,7 @@ static void vdm_build_discover_modes(uint8_t rx_svid_lo, uint8_t rx_svid_hi) {
     pd_tx_msg_len = 0x0A;
     return;
   }
-  vdm_nak(3, rx_svid_lo, rx_svid_hi);
+  vdm_nak();
 }
 
 /* Device-side USB4 mode-entry latch. */
@@ -723,18 +699,18 @@ static uint8_t usb4_mode_entry_commit(void) {
 }
 
 /* EnterMode responder: enter TBT alt-mode for SVID 0x8087, else generic ACK. */
-static void vdm_handle_enter_mode(uint8_t objpos, uint8_t svid_lo, uint8_t svid_hi) {
-  uint16_t vdo0 = (uint16_t)(pd_rx_ptr_get() + 2);
+static void vdm_handle_enter_mode(void) {
+  uint16_t vdo0 = (uint16_t)(pd_rx_ptr() + 2);
   uint8_t enter_mode_flags = PR(vdo0 + 6);
 
-  sb_tx_cmd = svid_lo;
-  sb_tx_byte0 = svid_hi;
-  sb_tx_byte1 = objpos;
+  sb_tx_cmd = u4_routerop_port;
+  sb_tx_byte0 = u4_routerop_svid_hi;
+  sb_tx_byte1 = u4_routerop_op_len;
   u4_confirm_input_cd = (uint8_t)(enter_mode_flags >> 7);
   u4_confirm_input_ce = (uint8_t)((enter_mode_flags & 0x40) >> 6);
   u4_confirm_input_cf = (uint8_t)(enter_mode_flags & 0x07);
 
-  if (svid_lo == 0x87 && svid_hi == 0x80 && (u4_mode_flag & 0x80) && pd_role_state == 0) {
+  if (u4_routerop_port == 0x87 && u4_routerop_svid_hi == 0x80 && (u4_mode_flag & 0x80) && pd_role_state == 0) {
     pd_tx_set_sop_header(1, 0x0F);
     pd_vdm_hdr_build(1, 4);
     pd_tx_msg_len = 6;
@@ -746,8 +722,8 @@ static void vdm_handle_enter_mode(uint8_t objpos, uint8_t svid_lo, uint8_t svid_
   pd_tx_set_sop_header(1, 0x0F);
   pd_vdm_hdr_build(2, 4);
   REG_CMD_STATUS |= (sb_tx_byte1 & 0x07);
-  REG_CMD_ISSUE = svid_lo;
-  REG_CMD_TAG = svid_hi;
+  REG_CMD_ISSUE = u4_routerop_port;
+  REG_CMD_TAG = u4_routerop_svid_hi;
   pd_tx_msg_len = 6;
 }
 
@@ -832,7 +808,7 @@ static void vdm_tx_dispatch(void) {
   u4_routerop_svid_hi = svid_hi;
 
   if (pd_role_state != 0) {
-    vdm_nak(cmd, svid_lo, svid_hi);
+    vdm_nak();
     vdm_tx_strobe_commit();
     return;
   }
@@ -846,18 +822,18 @@ static void vdm_tx_dispatch(void) {
       break;
     case 0x02:
       uart_puts("[Disc_SVIDs]");
-      vdm_build_discover_sids(svid_lo, svid_hi);
+      vdm_build_discover_sids();
       break;
     case 0x03:
       uart_puts("[Disc_Modes]");
-      vdm_build_discover_modes(svid_lo, svid_hi);
+      vdm_build_discover_modes();
       break;
     case 0x04:
       uart_puts("[EnterMode]");
-      vdm_handle_enter_mode(objpos, svid_lo, svid_hi);
+      vdm_handle_enter_mode();
       break;
     default:
-      vdm_nak(cmd, svid_lo, svid_hi);
+      vdm_nak();
       break;
   }
 

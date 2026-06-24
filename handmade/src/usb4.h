@@ -6,14 +6,6 @@ static void phy_cc11_ack(void) {
   REG_TIMER0_CSR = 0x02;
 }
 
-static void phy_cc10_cmd(uint8_t subcmd, uint8_t cc12, uint8_t cc13) {
-  phy_cc11_ack();
-  REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | (subcmd & 0x07);
-  REG_TIMER0_THRESHOLD_HI = cc12;
-  REG_TIMER0_THRESHOLD_LO = cc13;
-  REG_TIMER0_CSR = 0x01;
-}
-
 static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13) {
   phy_cc10_cmd(subcmd, cc12, cc13);
   while (!((REG_TIMER0_CSR >> 1) & 1)) { }
@@ -213,10 +205,6 @@ static void usb4_connect_u4(void) {
 
 static void sb_router_event_handler(void);
 
-static volatile __xdata uint16_t u4rop_w16;
-static volatile __xdata uint16_t u4rop_g;
-static volatile __xdata uint8_t  u4rop_op;
-
 static uint8_t u4rop_underflow(void) {
   if (u4_rop_limit[3] != u4_rop_cfg_addr[3]) return u4_rop_limit[3] < u4_rop_cfg_addr[3];
   if (u4_rop_limit[2] != u4_rop_cfg_addr[2]) return u4_rop_limit[2] < u4_rop_cfg_addr[2];
@@ -226,60 +214,57 @@ static uint8_t u4rop_underflow(void) {
 }
 
 static void u4rop_send_read_resp(void) {
-  u4_rop_dir = 1;
-  if (u4rop_underflow()) u4_rop_xfer_len = 0x80;
-  else                   u4_rop_xfer_len = (uint8_t)(u4_rop_limit[3] - u4_rop_cfg_addr[3]);
+  uint8_t xfer_len, shadow_ptr0, shadow_ptr1, shadow_ptr2;
+  uint16_t w16, g;
+  if (u4rop_underflow()) xfer_len = 0x80;
+  else                   xfer_len = (uint8_t)(u4_rop_limit[3] - u4_rop_cfg_addr[3]);
   REG_I2C_DMA_ENABLE = (REG_I2C_DMA_ENABLE & 0xF9) | 0x02;
 
-  u4_rop_shadow_ptr[2] = u4_rop_limit[2];
-  u4_rop_shadow_ptr[3] = u4_rop_limit[3];
-  u4rop_w16 = (uint16_t)((((uint16_t)u4_rop_limit[1] << 8) | u4_rop_limit[0]) + (u4_rop_dir ? 3 : 1));
-  u4_rop_shadow_ptr[0] = (uint8_t)(u4rop_w16 & 0xFF);
-  u4_rop_shadow_ptr[1] = (uint8_t)(u4rop_w16 >> 8);
-
-  u4_rop_resp_hdr[0] = 0x00;
-  u4_rop_resp_hdr[1] = u4_rop_xfer_len;
+  shadow_ptr2 = u4_rop_limit[2];
+  w16 = (uint16_t)((((uint16_t)u4_rop_limit[1] << 8) | u4_rop_limit[0]) + 3);
+  shadow_ptr0 = (uint8_t)(w16 & 0xFF);
+  shadow_ptr1 = (uint8_t)(w16 >> 8);
 
   REG_FLASH_MODE = REG_FLASH_MODE & 0xFE;
   REG_FLASH_BUF_OFFSET_LO = 0;
   REG_FLASH_BUF_OFFSET_HI = (REG_FLASH_BUF_OFFSET_HI & 0xFC);
   REG_FLASH_CMD = 0x03;
-  REG_FLASH_ADDR_LO = u4_rop_shadow_ptr[0];
-  REG_FLASH_ADDR_MD = u4_rop_shadow_ptr[1];
-  REG_FLASH_ADDR_HI = u4_rop_shadow_ptr[2];
+  REG_FLASH_ADDR_LO = shadow_ptr0;
+  REG_FLASH_ADDR_MD = shadow_ptr1;
+  REG_FLASH_ADDR_HI = shadow_ptr2;
   REG_FLASH_DATA_PAGE_CNT = 0;
-  REG_FLASH_DATA_BYTE_OFS = u4_rop_resp_hdr[0];
+  REG_FLASH_DATA_BYTE_OFS = 0;
   REG_FLASH_CSR = 0x01;
-  for (u4rop_g = 0; (REG_FLASH_CSR & 0x01) && u4rop_g < 0x4000; u4rop_g++) { }
+  for (g = 0; (REG_FLASH_CSR & 0x01) && g < 0x4000; g++) { }
   REG_FLASH_MODE = REG_FLASH_MODE & 0xEF;
   REG_FLASH_MODE = REG_FLASH_MODE & 0xDF;
   REG_FLASH_MODE = REG_FLASH_MODE & 0xBF;
   REG_FLASH_MODE = REG_FLASH_MODE & 0x7F;
 
-  u4rop_w16 = (uint16_t)((((uint16_t)u4_rop_limit[1] << 8) | u4_rop_limit[0]) + u4_rop_xfer_len);
-  u4_rop_limit[0] = (uint8_t)(u4rop_w16 & 0xFF);
-  u4_rop_limit[1] = (uint8_t)(u4rop_w16 >> 8);
+  w16 = (uint16_t)((((uint16_t)u4_rop_limit[1] << 8) | u4_rop_limit[0]) + xfer_len);
+  u4_rop_limit[0] = (uint8_t)(w16 & 0xFF);
+  u4_rop_limit[1] = (uint8_t)(w16 >> 8);
 
   REG_DMA_MODE      = 0x70;
   XDATA_REG8(0xC8B1) = 0x00;
   REG_DMA_CHAN_AUX   = 0xEA;
   REG_DMA_CHAN_AUX1  = 0x00;
-  REG_DMA_XFER_CNT_HI = (uint8_t)(u4_rop_xfer_len ? 0xFE : 0xFF);
-  REG_DMA_XFER_CNT_LO = (uint8_t)(u4_rop_xfer_len - 1);
+  REG_DMA_XFER_CNT_HI = (uint8_t)(xfer_len ? 0xFE : 0xFF);
+  REG_DMA_XFER_CNT_LO = (uint8_t)(xfer_len - 1);
   XDATA_REG8(0xC8B6) = 0x10;
   REG_DMA_TRIGGER = 0x01;
-  for (u4rop_g = 0; (REG_DMA_TRIGGER & 0x01) && u4rop_g < 0x4000; u4rop_g++) { }
+  for (g = 0; (REG_DMA_TRIGGER & 0x01) && g < 0x4000; g++) { }
 }
 
 static void cm_routerop_mailbox(void) {
+  uint8_t op;
   if (REG_SYS_CTRL_EA90 != 0x5A) return;
 
   if (u4_routerop_mbox_state == RMBOX_IDLE) {
-    u4rop_op = REG_ROUTEROP_OPCODE_EA80;
-    u4_routerop_mbox_opcode = u4rop_op;
-    if (u4rop_op == 0xE2) {
+    op = REG_ROUTEROP_OPCODE_EA80;
+    u4_routerop_mbox_opcode = op;
+    if (op == 0xE2) {
       if (REG_ROUTEROP_CFG_EA81 == 0x50 || REG_ROUTEROP_CFG_EA81 == 0x51) {
-        u4_rop_dir = (uint8_t)(REG_ROUTEROP_CFG_EA81 & 0x01);
         u4_rop_cfg_addr[0] = XDATA_REG8V(0xEA82);
         u4_rop_cfg_addr[1] = XDATA_REG8V(0xEA83);
         u4_rop_cfg_addr[2] = XDATA_REG8V(0xEA84);
@@ -729,14 +714,11 @@ static void u4c_e7ae_bounded(void) {
   while (((REG_UART_STATUS & 0x07) != 0x00) && ++g < 0x0800);
 }
 
-static volatile uint8_t __xdata __at(0x0B51) bank0_8a89_entered;
-
 static void bank0_8a89(uint8_t mode) {
   uint8_t config;
   uint8_t link_mode;
   uint8_t descr_arg;
 
-  bank0_8a89_entered = 1;
   u4_routerop_desc0 = mode;
   uart_puts("[8a89:");
   uart_puthex(mode);

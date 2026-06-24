@@ -204,25 +204,6 @@ static void usb_pipe_engine_init(void) {
     REG_USB_PHY_CTRL_91C0 &= (uint8_t)~0x01;
 }
 
-/* Optional early PHY settle (two CC10 mailbox commands with bounded waits). */
-static void boot_phy_early_settle(void) {
-    REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
-    REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x02;
-    REG_TIMER0_THRESHOLD_HI = 0x00;
-    REG_TIMER0_THRESHOLD_LO = 0x14;
-    REG_TIMER0_CSR = 0x01;
-    { uint16_t spin = 0; while (!(REG_TIMER0_CSR & 0x02) && ++spin < 0xFFFF); }
-    REG_TIMER0_CSR = 0x02;
-    REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
-    REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x03;
-    REG_TIMER0_THRESHOLD_HI = 0x00;
-    REG_TIMER0_THRESHOLD_LO = 0x0A;
-    REG_TIMER0_CSR = 0x01;
-    { uint16_t spin = 0;
-      while (!((REG_LINK_STATUS_E712 & 0x03) || (REG_TIMER0_CSR & 0x02)) && ++spin < 0xFFFF); }
-    REG_TIMER0_CSR = 0x04; REG_TIMER0_CSR = 0x02;
-}
-
 /* Arm USB4 PHY link-up once at boot via the CC10 mailbox, with a bounded wait. */
 static void usb4_phy_arm(void) {
     REG_TIMER0_CSR = 0x04;

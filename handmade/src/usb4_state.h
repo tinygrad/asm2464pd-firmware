@@ -49,6 +49,13 @@ typedef enum {
 } rmbox_state_t;
 _Static_assert(sizeof(rmbox_state_t) == 1, "rmbox_state_t must be 1 byte");
 
+#define U4_XDATA_BYTES(sym) ((volatile __xdata uint8_t *)&(sym))
+#define U4_ROUTEROP_MBOX_CLEAR_LEN 0x10u
+#define U4_BOOT_SCRATCH_CLEAR_LEN 0x14u
+
+/* Fixed XDATA map shared with stock-style PD, sideband, and router-op flows. */
+
+/* Sideband descriptor tables and host work buffers. */
 volatile __xdata __at(0x0600) uint8_t sb_cfg06[0x10];
 volatile __xdata __at(0x06F2) uint8_t sb_width_lut[0x13];
 volatile __xdata __at(0x0705) uint8_t sb_branchA_gate[0x13];
@@ -71,6 +78,7 @@ volatile __xdata __at(0x0B28) uint8_t lb_eq_status[0x2];
 volatile __xdata __at(0x0B2A) uint8_t lb_loop2_scratch[0x2];
 volatile __xdata __at(0x0B2C) uint8_t lb_cl0_width[0x2];
 
+/* Sideband and lane-bond FSM state. */
 volatile __xdata __at(0x06E9) uint8_t phy_rxpll_train_busy;
 volatile __xdata __at(0x06EC) uint8_t u4_conn_consequence_done;
 volatile __xdata __at(0x06ED) u4_fsm_state_t u4_fsm_state;
@@ -104,7 +112,8 @@ volatile __xdata __at(0x076B) uint8_t lb_walk_throttle_snap_lo;
 volatile __xdata __at(0x0774) uint8_t u4_lane_train_trigger;
 volatile __xdata __at(0x0775) uint8_t u4_route_query_response;
 volatile __xdata __at(0x0776) uint8_t u4_coldboot_seed_gate;
-volatile __xdata __at(0x07B7) uint8_t pd_tx_staged_pending;
+
+/* USB-PD policy state and USB4 mode-entry latches. */
 volatile __xdata __at(0x07B8) uint8_t pd_contract_state;
 volatile __xdata __at(0x07B9) uint8_t u4_connect_route_latch;
 volatile __xdata __at(0x07BA) uint8_t u4_enter_usb_accepted;
@@ -112,14 +121,10 @@ volatile __xdata __at(0x07BB) uint8_t u4_connect_pending;
 volatile __xdata __at(0x07BC) uint8_t pd_role_state;
 volatile __xdata __at(0x07BD) uint8_t pd_msg_substate;
 volatile __xdata __at(0x07BE) uint8_t pd_usb3_fallback_flag;
-volatile __xdata __at(0x07BF) uint8_t pd_rx_ptr_hi;
-volatile __xdata __at(0x07C0) uint8_t pd_rx_ptr_lo;
 volatile __xdata __at(0x07C1) uint8_t pd_rx_slot_idx;
 volatile __xdata __at(0x07C2) uint8_t pd_rx_num_data_obj;
 volatile __xdata __at(0x07C3) uint8_t pd_tx_msgid_counter;
 volatile __xdata __at(0x07C4) uint8_t pd_tx_msg_len;
-volatile __xdata __at(0x07C5) uint8_t pd_pdo_selection_valid;
-volatile __xdata __at(0x07C7) uint8_t pd_selected_pdo_idx;
 volatile __xdata __at(0x07C8) uint8_t pd_bist_mode;
 volatile __xdata __at(0x07CA) uint8_t pd_sop_field;
 volatile __xdata __at(0x07CB) uint8_t pd_state_07cb;
@@ -127,8 +132,6 @@ volatile __xdata __at(0x07CC) uint8_t u4_route_confirm_07cc;
 volatile __xdata __at(0x07CD) uint8_t u4_confirm_input_cd;
 volatile __xdata __at(0x07CE) uint8_t u4_confirm_input_ce;
 volatile __xdata __at(0x07CF) uint8_t u4_confirm_input_cf;
-volatile __xdata __at(0x07D3) uint8_t pd_op_current_hi;
-volatile __xdata __at(0x07D4) uint8_t pd_op_current_lo;
 volatile __xdata __at(0x07D5) uint8_t pd_rx_slot_mask;
 volatile __xdata __at(0x07D6) uint8_t pd_decoded_voltage_hi;
 volatile __xdata __at(0x07D7) uint8_t pd_decoded_voltage_lo;
@@ -146,18 +149,20 @@ volatile __xdata __at(0x07E8) uint8_t u4_connect_gate_e8;
 volatile __xdata __at(0x07EB) uint8_t u4_connect_gate_eb;
 volatile __xdata __at(0x07ED) uint8_t u4_connect_oneshot_suppress;
 volatile __xdata __at(0x07FF) uint8_t pd_cm_dispatch_sel;
+
+/* Router-op and sideband mailbox state. */
 volatile __xdata __at(0x097A) uint8_t sb_descr_engine_scratch;
 volatile __xdata __at(0x0998) uint8_t sb_routerop_hdr0;
 volatile __xdata __at(0x0999) uint8_t sb_routerop_hdr1;
 volatile __xdata __at(0x099A) uint8_t sb_routerop_hdr2;
 volatile __xdata __at(0x099B) uint8_t sb_routerop_hdr3;
-volatile __xdata __at(0x09F0) uint8_t sb_notify_flag0;
-volatile __xdata __at(0x09F1) uint8_t sb_notify_flag1;
-volatile __xdata __at(0x09F2) uint8_t sb_notify_flag2;
-volatile __xdata __at(0x09F3) uint8_t sb_notify_flag3;
+
+/* Stock capability/config shadows seeded at boot. */
 volatile __xdata __at(0x09F4) uint8_t u4_dp_alt_mode;
 volatile __xdata __at(0x09F5) uint8_t u4_cap20g_gate0;
 volatile __xdata __at(0x09F6) uint8_t u4_cap20g_gate1;
+volatile __xdata __at(0x09F7) uint8_t u4_sb_desc_profile;
+volatile __xdata __at(0x09F8) uint8_t u4_capability_profile;
 volatile __xdata __at(0x09F9) uint8_t u4_mode_flag;
 volatile __xdata __at(0x09FA) uint8_t u4_route_mode;
 volatile __xdata __at(0x09FB) uint8_t u4_lane_gate_sel;
@@ -176,6 +181,7 @@ volatile __xdata __at(0x0A9F) uint8_t u4_routerop_desc2;
 volatile __xdata __at(0x0AA0) uint8_t u4_routerop_desc3;
 volatile __xdata __at(0x0AA1) uint8_t pd_msg_type;
 
+/* Lane-bond descriptor-engine scratch. */
 volatile __xdata __at(0x09DD) uint8_t u4lb_lane_active_flags;
 volatile __xdata __at(0x0B34) uint8_t u4lb_b34_lanemask;
 volatile __xdata __at(0x0B35) uint8_t u4lb_b35;
@@ -192,8 +198,6 @@ volatile __xdata __at(0x0AA8) uint8_t sb_tx_cmd;
 volatile __xdata __at(0x0AA9) uint8_t sb_tx_byte0;
 volatile __xdata __at(0x0AAA) uint8_t sb_tx_byte1;
 volatile __xdata __at(0x0AAB) uint8_t sb_tx_flag;
-volatile __xdata __at(0x0AAC) uint8_t sb_tx_go_param;
-volatile __xdata __at(0x0AAD) u4_fsm_state_t sb_fsm_state;
 volatile __xdata __at(0x0AB3) uint8_t phy_lane_gate;
 volatile __xdata __at(0x0AB6) uint8_t phy_cdr_arm_mask;
 volatile __xdata __at(0x0ACD) uint8_t u4_mode_entry_class;
@@ -203,19 +207,16 @@ volatile __xdata __at(0x0AE3) uint8_t u4_link_busy;
 volatile __xdata __at(0x0AEC) uint8_t u4_link_gen;
 volatile __xdata __at(0x0AED) uint8_t u4_link_lane;
 volatile __xdata __at(0x0AF1) uint8_t u4_connect_gate;
+
+/* Router-op response staging. */
 volatile __xdata __at(0x0B02) rmbox_state_t u4_routerop_mbox_state;
 volatile __xdata __at(0x0B03) uint8_t u4_routerop_mbox_opcode;
 
 volatile __xdata __at(0x0B04) uint8_t u4_rop_cfg_addr[4];
-volatile __xdata __at(0x0B08) uint8_t u4_rop_len_lo;
-volatile __xdata __at(0x0B09) uint8_t u4_rop_len_hi;
 volatile __xdata __at(0x0B0A) uint8_t u4_rop_limit[4];
-volatile __xdata __at(0x0B0E) uint8_t u4_rop_wr_cursor[4];
 
-static volatile __xdata uint8_t u4_rop_shadow_ptr[4];
-static volatile __xdata uint8_t u4_rop_resp_hdr[2];
-static volatile __xdata uint8_t u4_rop_dir;
-static volatile __xdata uint8_t u4_rop_xfer_len;
+/* P12 descriptor-engine temporaries. */
+volatile __xdata __at(0x0B12) uint8_t sb_eng_lane_profile;
 volatile __xdata __at(0x0B13) uint8_t sb_eng_data3c_b;
 volatile __xdata __at(0x0B14) uint8_t sb_eng_data3d_b;
 volatile __xdata __at(0x0B15) uint8_t sb_eng_data3e_b;
@@ -227,5 +228,10 @@ volatile __xdata __at(0x0B1A) uint8_t sb_eng_data_hi;
 volatile __xdata __at(0x0B1B) uint8_t cc_subdemux_src;
 volatile __xdata __at(0x0B1C) uint8_t sb_link_reinit_gate;
 volatile __xdata __at(0x0B2F) uint8_t u4_reinit_pending;
+
+volatile __xdata __at(0x0B44) uint8_t pcie_ctrl_b402_shadow;
+volatile __xdata __at(0x0B45) uint8_t pd_seen;
+volatile __xdata __at(0x0B4B) uint8_t sb_asserted;
+volatile __xdata __at(0x0B57) uint8_t tup_e52d_done;
 
 #endif
