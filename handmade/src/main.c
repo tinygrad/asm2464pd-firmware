@@ -555,7 +555,10 @@ void main(void) {
   sb_connect_descriptor = 0; sb_tx_command_desc = 0;
   u4_connect_oneshot_suppress = 0;
 
-  { uint8_t z; for (z = 0; z < U4_BOOT_SCRATCH_CLEAR_LEN; z++) U4_XDATA_BYTES(pd_seen)[z] = 0; }
+  pcie_ctrl_b402_shadow = 0;
+  pd_seen = 0;
+  sb_asserted = 0;
+  tup_e52d_done = 0;
 #endif
 
   // enable interrupts (EX1 = PD/USB4 INT1)
