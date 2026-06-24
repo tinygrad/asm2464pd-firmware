@@ -53,7 +53,6 @@ static volatile uint32_t __xdata dma_dwords;
 #include "pd.h"
 #include "sb.h"
 #include "usb4.h"
-#include "sb_router.h"
 #include "usb4_lanebond.h"
 
 /* Hardware status packet */

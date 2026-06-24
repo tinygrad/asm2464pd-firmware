@@ -2,7 +2,7 @@
 #define USB4_H
 /*
  * USB4 bring-up: boot PHY setup, mode entry, router-op/IRQ handling,
- * and lane-mode connect glue. Include after sb.h and before sb_router.h.
+ * and lane-mode connect glue. Include after sb.h.
  */
 
 /*=== Boot PHY / Tunnel Adapter Setup ===*/
@@ -823,7 +823,7 @@ static void usb4_routerop_init(void) {
 /*=== USB4 Lane-Mode Connect Engine ===*/
 
 /*
- * USB4 PHY / lane-mode bring-up engine. Include after usb4.h and before sb_router.h.
+ * USB4 PHY / lane-mode bring-up engine.
  */
 
 /* single-register read-modify-write bit helpers */
