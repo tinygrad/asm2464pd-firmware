@@ -51,14 +51,9 @@ static volatile uint32_t __xdata dma_dwords;
 #include "pcie_tuning.h"
 #include "i2c.h"
 #include "pd.h"
-#include "pd_dispatch.h"
-#include "vdm.h"
 #include "sb.h"
 #include "usb4.h"
 #include "sb_router.h"
-#include "usb4_irq.h"
-#include "boot_phy.h"
-#include "usb4_connect.h"
 #include "usb4_lanebond.h"
 
 /* Hardware status packet */
