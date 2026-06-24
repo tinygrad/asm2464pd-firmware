@@ -629,7 +629,6 @@
 #define REG_USB_SETUP_WLEN_L    XDATA_REG8(0x910A)  /* wLength low */
 #define REG_USB_SETUP_WLEN_H    XDATA_REG8(0x910B)  /* wLength high */
 
-
 /*
  * USB Bulk OUT Byte Count (0x910D-0x910E)
  *
@@ -748,7 +747,6 @@
 #define   USB_91D1_LINK_RESET     0x04  // Bit 2: Link reset ack (C6A8|=1, clears flags)
 #define   USB_91D1_POWER_MGMT     0x08  // Bit 3: Power management U1/U2 entry (CC3B&=~2, TLP_BASE_LO=1)
 #define   USB_91D1_ALL            0x0F  // All event bits (for init clear)
-
 
 // USB control registers (0x9200-0x92BF)
 #define REG_USB_CTRL_9200       XDATA_REG8(0x9200)  /* USB control base */
@@ -942,14 +940,6 @@
 /* Config Read/Write Type 1 (forwarded by bridges to downstream bus) */
 #define   PCIE_FMT_CFG_READ_1     0x05  /* CfgRd1: 3DW header, no data */
 #define   PCIE_FMT_CFG_WRITE_1    0x45  /* CfgWr1: 3DW header, with data */
-/*
- * PCIe TLP Control (0xB213)
- *
- * Stock's software TLP issuer writes 0x01 here before kicking the request
- * status/trigger registers. Keep this latched when issuing config or memory
- * TLPs through the firmware control path; otherwise config reads can return
- * stale data or Unsupported Request even when the PCIe tunnel itself is up.
- */
 #define REG_PCIE_TLP_CTRL       XDATA_REG8V(0xB213)
 #define REG_PCIE_TLP_LENGTH     XDATA_REG8V(0xB216)
 #define REG_PCIE_BYTE_EN        XDATA_REG8V(0xB217)
@@ -1138,12 +1128,6 @@
  *   0x10+ = Polling (TS1/TS2 exchange started)
  *   0x48 = L0 (link trained, normal operation) — observed on ASMedia 174C:2463 stock
  *   0x78 = L0 (link trained) — observed on tinygrad ADD1:0001 stock
- *
- * Important USB4 note:
- *   B450 is the local downstream PHY LTSSM. With the GPU tunneled over USB4,
- *   the host can enumerate the GPU in lspci while B450 still reads 0x00/0x01.
- *   Use host lspci/tbtunnels or the USB4 adapter state as the ground truth for
- *   the tunneled GPU path; do not require B450==0x78 for DEV=AMD over PCIe.
  *
  * B450 oscillating between 0x00 and 0x01 means the local PHY detects receiver
  * impedance (GPU present) but cannot advance to Polling. In non-USB4 direct
@@ -1708,17 +1692,7 @@
 #define REG_TIMER0_THRESHOLD    XDATA_REG16(0xCC12)
 #define REG_TIMER0_THRESHOLD_HI XDATA_REG8V(0xCC12)  /* Timer 0 threshold high byte */
 #define REG_TIMER0_THRESHOLD_LO XDATA_REG8V(0xCC13)  /* Timer 0 threshold low byte */
-/*
- * Timer 1 (0xCC16-0xCC19) — independent of the CC10-CC13 block.
- *
- * IMPORTANT: CC10-CC13 (Timer0 above) is NOT a plain timer — it is the PHY/PD command
- * mailbox shared with the USB4/PD link engine (CC10=(&0xF8)|4 is the same subcmd-4 link-up
- * arm usb4_phy_arm uses, CC11.1 is the PHY-done bit). Driving it from sleep() corrupts the
- * policy engine on the USB4 path. handmade's sleep() therefore targets Timer1 (this block),
- * which the stock fw uses as a standalone timer (stock d47f: CC16=(&0xF8)|4 DIV/mode,
- * CC18/CC19 threshold, CC17 CSR with clear/enable/expired bits — same bit layout as
- * TIMER_CSR_* below). Keep CSR volatile (sleep() polls the expired bit).
- */
+/* Timer1 is independent of the CC10-CC13 PHY/PD command mailbox. */
 #define REG_TIMER1_DIV          XDATA_REG8(0xCC16)
 #define REG_TIMER1_CSR          XDATA_REG8V(0xCC17)
 #define REG_TIMER1_THRESHOLD    XDATA_REG16(0xCC18)
@@ -2325,7 +2299,6 @@
 // Timer/CPU Control (0xCC00-0xCCFF)
 //=============================================================================
 
-
 //=============================================================================
 // Debug/Interrupt (0xE600-0xE6FF)
 //=============================================================================
@@ -2530,7 +2503,7 @@
 #define TIMEOUT_NVME            5000
 #define TIMEOUT_DMA             10000
 
-/* --- USB4 lane-train / PHY-orient / lane-rate discrete registers (handmade RE) --- */
+/* USB4 lane-train / PHY-orient / lane-rate registers. */
 #define REG_PHY_ORIENT_C2C3      XDATA_REG8V(0xC2C3)
 #define REG_LANE_RATE_C8FF       XDATA_REG8V(0xC8FF)
 #define REG_LANE_TRAIN_CTRL      XDATA_REG8V(0xCCE0)
@@ -2540,9 +2513,7 @@
 #define REG_LANE_WIDTH_CNT_HI    XDATA_REG8V(0xCCE4)
 #define REG_LANE_WIDTH_CNT_LO    XDATA_REG8V(0xCCE5)
 
-#endif /* __REGISTERS_H__ */
-
-/* ---- handmade USB4 refactor #2: PHY/PD/router-op register labels (volatile) ---- */
+/* USB4 PHY/PD/router-op register labels. */
 #define REG_PCIE_LINK_STATE_HI_B435        XDATA_REG8V(0xB435)  /* PCIe link-state adjacent byte (no label) */
 #define REG_PCIE_LANE_CONFIG_HI_B437       XDATA_REG8V(0xB437)  /* PCIe lane-config adjacent byte (no label) */
 #define REG_PHY_CDR_SEED_C210              XDATA_REG8V(0xC210)  /* PHY RXPLL/CDR descriptor seed (c306 trim) */
@@ -2640,3 +2611,5 @@
 #define REG_ROUTEROP_SPEED_HI_EA89         XDATA_REG8V(0xEA89)  /* router-op speed descriptor hi; seeded 0x24 */
 #define REG_ROUTEROP_ENGINE_CTRL_EC00      XDATA_REG8V(0xEC00)  /* USB4 router-op engine enable; bit0 = enable */
 #define REG_ROUTEROP_CFG_EC05              XDATA_REG8V(0xEC05)  /* router-op init config; bit0 cleared at e56f */
+
+#endif /* __REGISTERS_H__ */
