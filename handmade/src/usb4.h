@@ -162,12 +162,6 @@ static void pcie_tunnel_adapter_enable(void) {  /* b401 */
   P1_WR(0x6025, (uint8_t)((P1_RD(0x6025) & 0x7F) | 0x80));
 }
 
-static void u4c_phy_cdr_seed(uint8_t mode) {  /* e0d9 */
-  if (mode == 4) {
-    REG_PHY_RXPLL_RESET = 0x3E; REG_PHY_CTRL_C20F = 0x08; REG_PHY_CDR_SEED_C210 = 0x08; REG_PHY_CDR_SEED_C211 = 0x2E; REG_PHY_CDR_SEED_C212 = 0x3E;
-    REG_PHY_CDR_SEED_C214 = 0x00; REG_PHY_CDR_SEED_C215 = 0x20; REG_PHY_CDR_SEED_C216 = 0x00; REG_PHY_CDR_SEED_C217 = 0x3F;
-  }
-}
 
 static void u4c_lane_timer_gate(uint8_t mode) {  /* e7c1 */
   if (mode == 1) { REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0xFD; }
@@ -183,17 +177,13 @@ static void usb4_connect_u4(void) {
   }
   boot_phy_set_link_mode(0);
   u4c_lane_timer_gate(1);
-  u4c_phy_cdr_seed(0);
   if (u4_pd.enter_usb_accepted == 0) {
     if (u4_pd.connect_route_latch == 0) return;
     u4_cfg.route_mode = 0x81;
     u4_cfg.lane_gate_sel = 0x02;
   } else {
-    u4_cfg.route_mode = (u4_cfg.mode_flag & 0x03);
-    if (u4_cfg.dp_alt_mode == 0x03) {
-      if (u4_pd.usb3_fallback_flag == 0) { u4_cfg.route_mode = 2; u4_cfg.lane_gate_sel = 1; }
-      else                 { u4_cfg.route_mode = 1; u4_cfg.lane_gate_sel = 2; }
-    }
+    if (u4_pd.usb3_fallback_flag == 0) { u4_cfg.route_mode = 2; u4_cfg.lane_gate_sel = 1; }
+    else                               { u4_cfg.route_mode = 1; u4_cfg.lane_gate_sel = 2; }
     if (u4_cfg.route_mode & 0x02) {
       REG_LINK_STATUS_E716 &= 0xFC;
       REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
@@ -292,20 +282,13 @@ static void cm_routerop_mailbox(void) {
       return;
     }
     u4_routerop_mbox_state = RMBOX_IDLE;
-  } else if (u4_routerop_mbox_state == RMBOX_MULTIPKT_2) {
-    if (u4_routerop_mbox_opcode == 0xE3) {
-      u4_routerop_mbox_state = RMBOX_IDLE;
-      REG_SYS_CTRL_EA90 = 0xA5;
-      return;
-    }
-    u4_routerop_mbox_state = RMBOX_IDLE;
   }
 }
 
 static void u4lb_cpu_ext_kick(void);  /* e74e */
 static void u4lb_reg_set_bit7(uint8_t cur);  /* a310 */
 static void u4lb_desc_commit_noset(uint8_t ctrl_low6);  /* e890 */
-static void u4lb_tunnel_event_dispatch(uint8_t heavy);  /* d855 */
+static void u4lb_tunnel_event_dispatch(void);  /* d855 */
 static void u4lb_link_phy_reconfig(void);  /* d90e */
 
 static void usb4_sec_adapter_link_event(void) {  /* c105 */
@@ -328,13 +311,12 @@ static void usb4_sec_adapter_link_event(void) {  /* c105 */
   }
 
   if (p1407 & 0x08) {
-    u4lb_tunnel_event_dispatch(0);
+    u4lb_tunnel_event_dispatch();
   }
 
   if (p1603 & 0x01) {
     P1_WR(P1_USB4_BOOT_TAIL_EVENT_1603, 0x01);
     if (u4_cfg.route_mode & 0x02) {
-      if (REG_POWER_STATUS & 0x40) u4_entered_usb_mode = 1;
       u4lb_cpu_ext_kick();
       u4_pd.cm_dispatch_sel = 0x69;
     }
@@ -858,7 +840,7 @@ static void u4c_lane_reinit_gate(uint8_t mode) {  /* c9a8 */
   u4_cfg.lane_mode_arg = mode;
   if (u4_cfg.route_mode & 0x04) {
     if ((u4_connect_gate & 0x01) &&
-        (u4_pd.enter_usb_reinit_gate != 0 || u4_pd.connect_reinit_gate != 0)) {
+        u4_pd.enter_usb_reinit_gate != 0) {
       REG_PHY_CFG_C6A8 &= 0xFE;
       u4c_link_mode_apply(u4_cfg.lane_mode_arg);
     }

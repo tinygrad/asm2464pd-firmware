@@ -45,7 +45,6 @@ _Static_assert(sizeof(lp2_state_t) == 1, "lp2_state_t must be 1 byte");
 typedef enum {
     RMBOX_IDLE       = 0x00,
     RMBOX_MULTIPKT_1 = 0x01,
-    RMBOX_MULTIPKT_2 = 0x02,
 } rmbox_state_t;
 _Static_assert(sizeof(rmbox_state_t) == 1, "rmbox_state_t must be 1 byte");
 
@@ -108,7 +107,6 @@ typedef struct {
     uint8_t decoded_voltage_lo;
     uint8_t softreset_pending;
     uint8_t enter_usb_reinit_gate;  /* e8 */
-    uint8_t connect_reinit_gate;  /* eb */
     uint8_t connect_oneshot_suppress;
     uint8_t cm_dispatch_sel;
 } u4_pd_policy_t;
@@ -121,10 +119,6 @@ typedef struct {
 } u4_routerop_header_t;
 
 typedef struct {
-    uint8_t dp_alt_mode;
-    uint8_t cap20g_gate0;
-    uint8_t cap20g_gate1;
-    uint8_t sb_desc_profile;
     uint8_t mode_flag;
     uint8_t route_mode;
     uint8_t lane_gate_sel;
@@ -188,7 +182,6 @@ volatile __xdata __at(0x0800) uint8_t u4_work_buf[0x64];
 volatile __xdata __at(0x099C) uint8_t sb_routerop_body[0x40];
 volatile __xdata __at(0x0B26) uint8_t lb_cl_status[0x2];
 volatile __xdata __at(0x0B28) uint8_t lb_eq_status[0x2];
-volatile __xdata __at(0x0B2A) uint8_t lb_loop2_scratch[0x2];
 volatile __xdata __at(0x0B2C) uint8_t lb_cl0_width[0x2];
 
 /* Compiler-placed runtime state. */
@@ -218,9 +211,6 @@ volatile __xdata __at(0x0AA9) uint8_t sb_tx_byte0;
 volatile __xdata __at(0x0AAA) uint8_t sb_tx_byte1;
 volatile __xdata __at(0x0AAB) uint8_t sb_tx_flag;
 volatile __xdata __at(0x0AB3) uint8_t phy_lane_gate;
-volatile __xdata __at(0x0ACD) uint8_t u4_mode_entry_class;
-volatile __xdata __at(0x0ACE) uint8_t u4_mode_entry_param;
-volatile __xdata __at(0x0AE2) uint8_t u4_entered_usb_mode;
 volatile __xdata __at(0x0AE3) uint8_t u4_link_busy;
 volatile __xdata __at(0x0AEC) uint8_t u4_link_gen;
 volatile __xdata __at(0x0AED) uint8_t u4_link_lane;

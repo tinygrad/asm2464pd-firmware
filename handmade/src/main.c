@@ -385,14 +385,7 @@ void int0_isr(void) __interrupt(0) {
         u4c_lane_reinit_gate(1);
       }
       uint8_t ep = REG_BUF_CFG_9300;
-      /* On SS link failure, fall back to USB2 — but never in USB4 mode (that abandons lane training). */
-      if ((ep & BUF_CFG_9300_SS_FAIL) && !(u4_cfg.mode_flag & 0x83)) {
-        uart_puts("[USB2 fallback]\n");
-        is_usb2 = 1;
-        REG_CPU_MODE = CPU_MODE_USB2;          // without this, USB2 is flaky
-        REG_USB_PHY_CTRL_91C0 = 0x10;          // enable USB high speed mode
-      }
-      REG_BUF_CFG_9300 = ep;
+      REG_BUF_CFG_9300 = ep;   /* W1C ack; USB4 mode never drops to USB2 (would abandon lane training) */
     } else if (periph_status & USB_PERIPH_CBW_RECEIVED) {
       uint8_t mode = REG_USB_MODE; REG_USB_MODE = mode;   /* W1C ack */
       REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
@@ -421,8 +414,7 @@ void int1_isr(void) __interrupt(1) {
   if (REG_INT_SYSTEM & 0x01) cc_pd_timer_tick();
   if (REG_CPU_EXEC_STATUS_2 & 0x04) { REG_CPU_EXEC_STATUS_2 = 0x04; }
   if (REG_INT_PCIE_NVME & 0x40) pd_rx_isr();
-  if (u4_cfg.mode_flag & 0x83) usb4_int_demux();
-  if (REG_INT_SYSTEM & 0x10) { /* C806.4 ack-only (no-op) */ }
+  usb4_int_demux();
   DPX = saved_dpx;
 }
 
@@ -438,16 +430,13 @@ void main(void) {
 
   u4_cfg.mode_flag = HANDMADE_USB4_MODE_FLAGS;
 
-#if HANDMADE_USB4_MODE_FLAGS
   // Type-C SBU + PHY config + SB-block enable; powers the sideband transport.
   boot_phy_bringup_early();
 
   // Seed the lane-engine link width/mode and the USB4 tunnel state flags.
   u4_phy_state_seed();
 
-  u4_cfg.dp_alt_mode = 3;
-  u4_cfg.cap20g_gate0 = 1; u4_cfg.cap20g_gate1 = 1;
-  u4_cfg.sb_desc_profile = 3; u4_cfg.lane_gate_sel = 3;
+  u4_cfg.lane_gate_sel = 3;
   u4_cfg.product_pid_lo = 0x63;
   u4_cfg.product_pid_hi = 0x24;
 
@@ -460,22 +449,7 @@ void main(void) {
 
   // Stock seeds the sideband connect-service path at boot and then refreshes it in the main loop.
   u4lb_phy_connect_dma_kick();
-#endif
 
-  if (!(u4_cfg.mode_flag & 0x83)) {
-    usb_phy_tune();
-
-    // PCIe TLP engine values that don't change + tuning
-    REG_PCIE_TLP_CTRL   = 0x01;
-    REG_PCIE_TLP_LENGTH = 0x20;
-    pcie_apply_x2_rxphy_tuning();
-    pcie_power_off();
-
-    // Non-USB4 compatibility path: train the directly attached downstream PCIe link.
-    pcie_power_on();
-  }
-
-#if HANDMADE_USB4_MODE_FLAGS
   usb_pipe_engine_init();
   usb4_phy_arm();
   pd_keystone_init();
@@ -493,14 +467,7 @@ void main(void) {
   P1_WR(P1_USB4_CFG_ENABLE_121E, (uint8_t)(P1_RD(P1_USB4_CFG_ENABLE_121E) | 0x01));
 
   usb4_routerop_init();
-#endif
 
-  if (!(u4_cfg.mode_flag & 0x83)) {
-    // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
-    usb_init_controller(0);
-  }
-
-#if HANDMADE_USB4_MODE_FLAGS
   { uint8_t z; for (z = 0; z < U4_ROUTEROP_MBOX_CLEAR_LEN; z++) U4_XDATA_BYTES(u4_routerop_mbox_state)[z] = 0; }
   u4_sb.active_port_rr = 0;
   u4_sb.route_up_trigger = 0; u4_sb.lane_bonded_flag = 0;
@@ -516,22 +483,13 @@ void main(void) {
   u4_boot.pd_seen = 0;
   u4_boot.sb_asserted = 0;
   u4_boot.tunnel_up_done = 0;
-#endif
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
-  if (!(u4_cfg.mode_flag & 0x83)) {
-    i2c_init();
-    ina231_init();
-  }
-
-#if HANDMADE_USB4_MODE_FLAGS
   uint8_t kicks = 0;
-#endif
   while (1) {
-#if HANDMADE_USB4_MODE_FLAGS
-    if ((u4_cfg.mode_flag & 0x83) && u4_sb.conn_consequence_done) {
+    if (u4_sb.conn_consequence_done) {
       IE &= (uint8_t)~IE_EA;
       sb_lane_cl_track();
       if (u4_sb.state != U4FSM_IDLE) {
@@ -575,6 +533,5 @@ void main(void) {
         else if (kicks < 8) { pd_drive_hard_reset(); kicks++; pd_settle = 0; }
       }
     }
-#endif
   }
 }
