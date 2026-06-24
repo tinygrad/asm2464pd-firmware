@@ -1,17 +1,17 @@
 #ifndef USB4_LANEBOND_H
 #define USB4_LANEBOND_H
 
-#define U4LB_STATE   u4_fsm_state
+#define U4LB_STATE   u4_sb.state
 
 static void u4lb_eb62(u4_fsm_state_t state) {
   uart_puts("\r\n[SB P0");
   uart_puthex(state);
   uart_putc(']');
-  u4_fsm_state = state;
+  u4_sb.state = state;
 }
 
 static uint8_t u4lb_edf5_route_query(void) {
-  if (e461_inflight_token != 0) return 0;
+  if (u4_sb.e461_inflight_token != 0) return 0;
 
   sb_tx_flag = 0;
   sb_tx_cmd = 5;
@@ -98,17 +98,17 @@ static void u4lb_ce23(uint8_t ctrl_bits, uint8_t set_lanes) {
 }
 static void u4lb_c3ce(void) {
   uint8_t pass;
-  u4_routerop_desc1 = u4lb_b34_lanemask;
-  u4_routerop_desc2 = u4lb_b35;
-  u4_routerop_desc3 = u4lb_b36;
-  pd_msg_type       = u4lb_b37;
+  u4_cfg.routerop_desc1 = u4lb_b34_lanemask;
+  u4_cfg.routerop_desc2 = u4lb_b35;
+  u4_cfg.routerop_desc3 = u4lb_b36;
+  u4_cfg.msg_type       = u4lb_b37;
   for (pass = 1; pass <= 2; pass++) {
     (void)P12_RD(0x35);
     eng_a327(0x35, (uint8_t)((P12_RD(0x35) & 0xC0) | pass));
-    u4lb_b34_lanemask = u4_routerop_desc1; P12_WR(0x3C, u4_routerop_desc1);
-    u4lb_b35          = u4_routerop_desc2; P12_WR(0x3D, u4_routerop_desc2);
-    u4lb_b36          = u4_routerop_desc3; P12_WR(0x3E, u4_routerop_desc3);
-    u4lb_b37          = pd_msg_type;       P12_WR(0x3F, pd_msg_type);
+    u4lb_b34_lanemask = u4_cfg.routerop_desc1; P12_WR(0x3C, u4_cfg.routerop_desc1);
+    u4lb_b35          = u4_cfg.routerop_desc2; P12_WR(0x3D, u4_cfg.routerop_desc2);
+    u4lb_b36          = u4_cfg.routerop_desc3; P12_WR(0x3E, u4_cfg.routerop_desc3);
+    u4lb_b37          = u4_cfg.msg_type;       P12_WR(0x3F, u4_cfg.msg_type);
     if ((uint8_t)(u4lb_b38_setlanes ^ 2) == 0) u4lb_sb_desc_commit();
     else                                       u4lb_ce23((uint8_t)(u4lb_b38_setlanes ^ 2), u4lb_b38_setlanes);
   }
@@ -146,7 +146,7 @@ static void u4lb_c17f(void) {
   eng_a2df(0x35, 0x80);
   desc0 = 0x18;
   if (u4_work_buf[0x1A] & 0x20) desc0 |= 0x04;
-  if (u4_cap20g_gate1)          desc0 |= 0x20;
+  if (u4_cfg.cap20g_gate1)          desc0 |= 0x20;
   u4lb_b36 = desc0;
   u4lb_b37 = 0x00;
   u4lb_b38_setlanes = 0x02;
@@ -154,10 +154,10 @@ static void u4lb_c17f(void) {
 }
 
 static void u4lb_cm_conn_routing_setup(void) {
-  connrt_substate_t state = cm_conn_routing_substate;
+  connrt_substate_t state = u4_sb.conn_routing_substate;
   if (state == CONNRT_ARM_ROUTE_QUERY) {
     if (u4lb_edf5_route_query() != 1) return;
-    cm_conn_routing_substate = CONNRT_AWAIT_RESULT;
+    u4_sb.conn_routing_substate = CONNRT_AWAIT_RESULT;
     return;
   }
   if (state != CONNRT_AWAIT_RESULT) {
@@ -167,25 +167,25 @@ static void u4lb_cm_conn_routing_setup(void) {
   }
 
   { uint8_t selector;
-    if (u4_route_query_response != 0)      { u4_route_query_response = 0; e461_inflight_token = 0; selector = 0; }
-    else if (e461_inflight_token == 0x02) { e461_inflight_token = 0; selector = 2; }
+    if (u4_sb.route_query_response != 0)      { u4_sb.route_query_response = 0; u4_sb.e461_inflight_token = 0; selector = 0; }
+    else if (u4_sb.e461_inflight_token == 0x02) { u4_sb.e461_inflight_token = 0; selector = 2; }
     else                       { selector = 1; }
-    if (selector == 2) { cm_conn_routing_substate = CONNRT_ARM_ROUTE_QUERY; return; }
+    if (selector == 2) { u4_sb.conn_routing_substate = CONNRT_ARM_ROUTE_QUERY; return; }
     if (selector != 0) { return; }
   }
 
-  if (u4_host_desc[0x0] != 0x0C) { cm_conn_routing_substate = CONNRT_ARM_ROUTE_QUERY; return; }
+  if (u4_host_desc[0x0] != 0x0C) { u4_sb.conn_routing_substate = CONNRT_ARM_ROUTE_QUERY; return; }
 
-  if (u4_connect_route_latch != 0) {
+  if (u4_pd.connect_route_latch != 0) {
     uint8_t host_status = u4_host_desc[0x1];
     if (((host_status & 0x7F) == 2) || ((u4_work_buf[0x1B] & 1) == 0) ||
-        (u4_confirm_input_ce != 0 && u4_confirm_input_cd == 0)) {
-      u4_coldboot_seed_gate = 0;
+        (u4_pd.confirm_input_ce != 0 && u4_pd.confirm_input_cd == 0)) {
+      u4_sb.coldboot_seed_gate = 0;
     } else {
       SB_CLR(0xED, 0x80);
     }
   }
-  if (u4_coldboot_seed_gate == 0) {
+  if (u4_sb.coldboot_seed_gate == 0) {
     uint8_t i;
     for (i = 0; i < 0x13; i++) {
       sb_width_lut[(uint16_t)(0x0 + i)] = width_lut[i];
@@ -196,49 +196,49 @@ static void u4lb_cm_conn_routing_setup(void) {
     }
   }
 
-  if (u4_coldboot_seed_gate == 0 && u4_confirm_input_ce != 0) {
+  if (u4_sb.coldboot_seed_gate == 0 && u4_pd.confirm_input_ce != 0) {
     uart_puts("[ConnRtmr]");
-    u4_route_enable_latch = 0;
+    u4_sb.route_enable_latch = 0;
   } else {
     uart_puts("[ConnRout]");
-    u4_route_enable_latch = 4;
+    u4_sb.route_enable_latch = 4;
   }
 
   { uint8_t host_width = u4_host_desc[0x3];
     if ((host_width & 1) && (u4_work_buf[0x1A] & 1)) { u4_work_buf[0x19] = (u4_work_buf[0x19] & 0xFE) | 1; }
     if ((host_width & 0x02) && (u4_work_buf[0x1A] & 2)) { u4_work_buf[0x19] = (u4_work_buf[0x19] & 0xFD) | 2; }
-    if ((host_width & 0x10) && (u4_work_buf[0x1A] & 0x10) && (u4_work_buf[0x19] & 1) && (u4_work_buf[0x19] & 2)) lb_lane_width_latch1 = 1;
-    else lb_lane_width_latch1 = 0;
-    if ((host_width & 0x20) && (u4_work_buf[0x1A] & 0x20)) lb_lane_width_latch0 = 2;
+    if ((host_width & 0x10) && (u4_work_buf[0x1A] & 0x10) && (u4_work_buf[0x19] & 1) && (u4_work_buf[0x19] & 2)) u4_sb.lane_width_latch1 = 1;
+    else u4_sb.lane_width_latch1 = 0;
+    if ((host_width & 0x20) && (u4_work_buf[0x1A] & 0x20)) u4_sb.lane_width_latch0 = 2;
     uart_puts("[Lt77A="); uart_puthex(host_width); uart_puts(" 81A="); uart_puthex(u4_work_buf[0x1A]);
     uart_puts(" 819="); uart_puthex(u4_work_buf[0x19]); uart_puts("]");
 
-    u4_phy_gate_a = 0; u4_phy_gate_b = 0;
+    u4_sb.phy_gate_a = 0; u4_sb.phy_gate_b = 0;
 
-    if (lb_lane_width_latch0 == 2) {
-      if ((host_width & 0x80) && (u4_work_buf[0x1A] & 0x80)) u4_phy_gate_b = 1;
+    if (u4_sb.lane_width_latch0 == 2) {
+      if ((host_width & 0x80) && (u4_work_buf[0x1A] & 0x80)) u4_sb.phy_gate_b = 1;
     } else {
       uint8_t set_a = 0;
-      if (u4_enter_usb_accepted != 0 &&
+      if (u4_pd.enter_usb_accepted != 0 &&
           (host_width & 0x40) &&
           (u4_work_buf[0x1A] & 0x40)) {
         set_a = 1;
-      } else if (u4_connect_route_latch != 0) {
+      } else if (u4_pd.connect_route_latch != 0) {
         if ((host_width & 0x40) ||
             (u4_work_buf[0x1A] & 0x40)) {
           set_a = 1;
         }
       }
-      if (set_a) u4_phy_gate_a = 1;
+      if (set_a) u4_sb.phy_gate_a = 1;
     }
 
     {
-      uint8_t rate = u4_phy_gate_a;
+      uint8_t rate = u4_sb.phy_gate_a;
       uint8_t mask;
-      u4lb_width_rate_code = u4_phy_gate_a;
+      u4_cfg.lb_width_rate_code = u4_sb.phy_gate_a;
       mask = (uint8_t)(u4lb_lane_active_flags
-                       | (u4_phy_gate_b ? 0x10 : 0x00)
-                       | (u4_phy_gate_a ? 0x08 : 0x00));
+                       | (u4_sb.phy_gate_b ? 0x10 : 0x00)
+                       | (u4_sb.phy_gate_a ? 0x08 : 0x00));
       u4lb_lane_active_flags = mask; u4lb_a2c2();
       u4lb_b35 = 0x08;
       u4lb_ce23(rate, rate);
@@ -247,7 +247,7 @@ static void u4lb_cm_conn_routing_setup(void) {
       u4lb_ce23(rate, rate);
     }
 
-    if ((u4_phy_gate_a | u4_phy_gate_b) != 0) {
+    if ((u4_sb.phy_gate_a | u4_sb.phy_gate_b) != 0) {
       uint8_t rb = (uint8_t)((SB_RD(0x65) & 0xBF) | 0x40);
       SB_WR(0x65, rb); rb = SB_RD(0x65);
       SB_WR(0x65, (uint8_t)((rb & 0x7F) | 0x80));
@@ -257,7 +257,7 @@ static void u4lb_cm_conn_routing_setup(void) {
       SB_WR(0x65, (uint8_t)(rb & 0x7F));
     }
 
-    if ((u4_connect_gate & 0x01) && (u4_route_mode & 0x02)) {
+    if ((u4_connect_gate & 0x01) && (u4_cfg.route_mode & 0x02)) {
       REG_LINK_STATUS_E716 = (uint8_t)((REG_LINK_STATUS_E716 & 0xFC) | 0x03);
     }
   }
@@ -268,9 +268,9 @@ static void u4lb_cm_conn_routing_setup(void) {
     uint8_t rate_lo = (uint8_t)((rate & 0xFF) | lb_cap_field[0xB]);
     SB_WR(0x6A, rate_hi); SB_WR(0x6B, rate_lo);
     SB_WR(0x6C, rate_hi); SB_WR(0x6D, rate_lo);
-    SB_WR(0x74, 0x00); SB_WR(0x75, (uint8_t)((lb_lane_width_latch0 == 2) ? 0x1F : 0x0F));
+    SB_WR(0x74, 0x00); SB_WR(0x75, (uint8_t)((u4_sb.lane_width_latch0 == 2) ? 0x1F : 0x0F));
     if (REG_LANE_RATE_C8FF == 0x04) {
-      if (u4_enter_usb_accepted != 0) {
+      if (u4_pd.enter_usb_accepted != 0) {
         REG_PHY_LANEA_C294 = (uint8_t)((REG_PHY_LANEA_C294 & 0xF0) | 0x02);
         REG_PHY_LANEB_C314 = (uint8_t)((REG_PHY_LANEB_C314 & 0xF0) | 0x02);
       } else {
@@ -280,17 +280,17 @@ static void u4lb_cm_conn_routing_setup(void) {
         REG_PHY_LANEB_C313 = (uint8_t)((REG_PHY_LANEB_C313 & 0xFC) | 0x02);
       }
     }
-    if (u4_enter_usb_accepted == 0 && lb_lane_width_latch0 == 1) {
+    if (u4_pd.enter_usb_accepted == 0 && u4_sb.lane_width_latch0 == 1) {
       REG_PHY_LANEA_C2C5 = (uint8_t)((REG_PHY_LANEA_C2C5 & 0xF0) | 0x0F);
       REG_PHY_LANEB_C345 = (uint8_t)((REG_PHY_LANEB_C345 & 0xF0) | 0x0F);
     }
   }
 
-  u4lb_e175(lb_lane_width_latch1);
-  u4lb_e282(u4_connect_route_latch);
+  u4lb_e175(u4_sb.lane_width_latch1);
+  u4lb_e282(u4_pd.connect_route_latch);
   u4lb_c17f();
 
-  cm_conn_routing_substate = CONNRT_PRINT_STATUS;
+  u4_sb.conn_routing_substate = CONNRT_PRINT_STATUS;
 }
 
 #define SB2_RD(off)      P1_REG8_rd((uint16_t)(0x2900u + (off)))
@@ -324,11 +324,11 @@ static void u4lb_e07d(void) {
   uint8_t cfg;
   SB_WR(0x15, 0x61);
   SB2_WR(0x00, 0x09);
-  if ((u4_phy_gate_a | u4_phy_gate_b) != 0)
+  if ((u4_sb.phy_gate_a | u4_sb.phy_gate_b) != 0)
     SB2_WR(0x00, SB2_RD(0x00) | 0x04);
-  if (u4_connect_route_latch != 0)
+  if (u4_pd.connect_route_latch != 0)
     SB2_WR(0x00, SB2_RD(0x00) | 0x10);
-  cfg = (uint8_t)(((lb_lane_width_latch0 & 0x0F) << 4)
+  cfg = (uint8_t)(((u4_sb.lane_width_latch0 & 0x0F) << 4)
                   | ((u4_work_buf[0x19] & 0x02) ? 0x02 : 0x00)
                   | (u4_work_buf[0x19] & 0x01));
   SB2_WR(0x01, cfg);
@@ -354,13 +354,13 @@ static void u4lb_e764_rxpll_train(void) {
   if (REG_PHY_RXPLL_STATUS & 0x10) {
     REG_PHY_TIMER_CTRL_E764 = (uint8_t)((REG_PHY_TIMER_CTRL_E764 & 0xFE) | 0x01);
     REG_PHY_TIMER_CTRL_E764 &= 0xFD;
-    phy_rxpll_train_busy = 0;
+    u4_sb.rxpll_train_busy = 0;
   } else {
     REG_PHY_TIMER_CTRL_E764 &= 0xF7;
     REG_PHY_TIMER_CTRL_E764 &= 0xFB;
     REG_PHY_TIMER_CTRL_E764 &= 0xFE;
     REG_PHY_TIMER_CTRL_E764 &= 0xFD;
-    phy_rxpll_train_busy = 1;
+    u4_sb.rxpll_train_busy = 1;
   }
 }
 
@@ -387,8 +387,8 @@ static void u4lb_e980(void) {
 }
 
 static void u4lb_d3b0(uint8_t rate) {
-  u4lb_width_rate_code = rate;
-  if (lb_lane_width_latch0 == 1) {
+  u4_cfg.lb_width_rate_code = rate;
+  if (u4_sb.lane_width_latch0 == 1) {
     if (rate & 0x01) SB_WR(0x65, (SB_RD(0x65) & 0xEF) | 0x10);
     if (rate & 0x02) SB_WR(0x65, (SB_RD(0x65) & 0xDF) | 0x20);
     if (rate & 0x01) SB_WR(0x65, SB_RD(0x65) & 0xEF);
@@ -407,7 +407,7 @@ static void u4lb_ec51(void) {
   REG_LANE_TRAIN_CTRL = (REG_LANE_TRAIN_CTRL & 0xF8) | 0x04;
   REG_LANE_TRAIN_MASK_LO = 0xFF; REG_LANE_TRAIN_MASK_HI = 0xFF;
   REG_LANE_TRAIN_ARM = 0x01;
-  u4_lane_train_trigger ^= 0x01;
+  u4_sb.lane_train_trigger ^= 0x01;
 }
 
 static void u4lb_b226(void) { phy_cc10_cmd_wait(2, 0, 0xC8); }
@@ -418,10 +418,10 @@ static uint16_t u4lb_ee57(void) {
 }
 
 static void u4lb_98ec(void) {
-  cm_conn_routing_substate = CONNRT_ARM_ROUTE_QUERY;
+  u4_sb.conn_routing_substate = CONNRT_ARM_ROUTE_QUERY;
   u4lb_ee57();
-  lb_lane_width_cnt_hi = 0;
-  lb_lane_width_cnt_lo = 3;
+  u4_sb.lane_width_cnt_hi = 0;
+  u4_sb.lane_width_cnt_lo = 3;
 }
 
 static void u4lb_d195(void) {
@@ -460,18 +460,18 @@ static void u4lb_ed44(void) {
 }
 
 static void u4lb_e74e(void) {
-  cc_subdemux_src = 0;
+  u4_p12.cc_subdemux_src = 0;
   REG_CPU_EXT_CTRL &= 0xEF;
   REG_CPU_EXT_STATUS = 0x04;
   REG_CPU_EXT_STATUS = 0x02;
 }
 
 static void u4lb_e06b(uint8_t v) {
-  u4_routerop_desc2 = v;
+  u4_cfg.routerop_desc2 = v;
   P12_WR(0x35, (uint8_t)((P12_RD(0x35) & 0x3F) | 0x80));
   u4lb_b34_lanemask = 1;
   u4lb_ce23(v, v);
-  sb_link_reinit_gate = (uint8_t)(u4_routerop_desc2 != 0 ? 1 : 0);
+  u4_p12.link_reinit_gate = (uint8_t)(u4_cfg.routerop_desc2 != 0 ? 1 : 0);
 }
 
 static void u4lb_b031_transport_reinit(uint8_t skip_lane) {
@@ -548,11 +548,11 @@ static uint8_t u4lb_ee94(uint8_t arg) {
   return u4lb_d1dd();
 }
 static void u4lb_e84d(void) {
-  pcie_ctrl_b402_shadow = (uint8_t)(REG_PCIE_CTRL_B402 & 0x02);
-  pcie_ctrl_b402_shadow = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);
+  u4_boot.pcie_ctrl_b402_shadow = (uint8_t)(REG_PCIE_CTRL_B402 & 0x02);
+  u4_boot.pcie_ctrl_b402_shadow = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);
 }
 static void u4lb_e85c(void) {
-  if (pcie_ctrl_b402_shadow) pcie_ctrl_b402_shadow = (uint8_t)((REG_PCIE_CTRL_B402 & 0xFD) | 0x02);
+  if (u4_boot.pcie_ctrl_b402_shadow) u4_boot.pcie_ctrl_b402_shadow = (uint8_t)((REG_PCIE_CTRL_B402 & 0xFD) | 0x02);
 }
 
 static void u4lb_e76b(void) {
@@ -616,7 +616,7 @@ static void u4lb_d90e_link_phy_reconfig(void) {
   if (u4_connect_gate & 0x02) {
     u4lb_e0d9_mode3();
   }
-  if (u4_route_mode & 0x81) {
+  if (u4_cfg.route_mode & 0x81) {
     u4lb_e9b5();
     REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);
     REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);
@@ -631,9 +631,9 @@ static void u4lb_d90e_link_phy_reconfig(void) {
 static void u4lb_d855(uint8_t assert) {
   uint8_t p1508 = P1_RD(P1_USB4_TUNNEL_EVENT_STATUS_1508);
   if (p1508 & 0x10) {
-    if (u4_route_mode & 0x81) { P1_WR(P1_USB4_TUNNEL_EVENT_STATUS_1508, 0x10); u4lb_e4ea(); }
+    if (u4_cfg.route_mode & 0x81) { P1_WR(P1_USB4_TUNNEL_EVENT_STATUS_1508, 0x10); u4lb_e4ea(); }
   } else if (p1508 & 0x08) {
-    if (u4_route_mode & 0x81) { P1_WR(P1_USB4_TUNNEL_EVENT_STATUS_1508, 0x08); u4lb_ee29(); }
+    if (u4_cfg.route_mode & 0x81) { P1_WR(P1_USB4_TUNNEL_EVENT_STATUS_1508, 0x08); u4lb_ee29(); }
   } else if (p1508 & 0x04) {
     P1_WR(P1_USB4_TUNNEL_EVENT_STATUS_1508, 0x04);
     u4lb_e76b();
@@ -652,7 +652,7 @@ static void u4lb_d855(uint8_t assert) {
 }
 
 static void u4lb_e26a_pwr(void) {
-  if ((u4_route_mode & 0x81) != 0) {
+  if ((u4_cfg.route_mode & 0x81) != 0) {
     u4lb_e764_rxpll_train();
     REG_HDDPC_CTRL = (uint8_t)((REG_HDDPC_CTRL & 0xDF) | 0x20);
   }
@@ -715,20 +715,20 @@ static void u4lb_a840(uint8_t param) {
   uint8_t width_code;
   REG_CPU_CTRL_CA81 &= 0xFE;
   if (gen == 3 && lane == 3) {
-    if ((u4_route_mode & 0x81) != 0) {
+    if ((u4_cfg.route_mode & 0x81) != 0) {
       uint8_t idx;
-      u4lb_gen_index = gen; idx = (uint8_t)(u4lb_gen_index & 0x03);
+      u4_cfg.lb_gen_index = gen; idx = (uint8_t)(u4_cfg.lb_gen_index & 0x03);
       gen = u4lb_a840_speed_38cc[(uint8_t)(idx << 1)];
       lane = u4lb_a840_speed_38cc[(uint8_t)((idx << 1) + 1)];
-      if (u4_connect_route_latch != 0) lane = 1;
+      if (u4_pd.connect_route_latch != 0) lane = 1;
     } else {
       static __code const uint8_t t5d24[5] = { 0x00, 0x00, 0x02, 0x02, 0x02 };
       static __code const uint8_t t5d29[5] = { 0x01, 0x00, 0x00, 0x01, 0x02 };
-      u4lb_gen_index = gen;
-      gen = t5d24[u4lb_gen_index]; lane = t5d29[u4lb_gen_index];
+      u4_cfg.lb_gen_index = gen;
+      gen = t5d24[u4_cfg.lb_gen_index]; lane = t5d29[u4_cfg.lb_gen_index];
     }
   }
-  usb4 = (uint8_t)(u4_route_mode & 0x81);
+  usb4 = (uint8_t)(u4_cfg.route_mode & 0x81);
   if (usb4 == 0) {
     if (gen >= 3) {
       REG_CPU_MODE_NEXT &= 0x1F;
@@ -754,17 +754,17 @@ static void u4lb_a840(uint8_t param) {
     if (lane == 1) width_code = 0x0C;
     else if (lane == 0) width_code = 0x0E;
   }
-  u4lb_width_rate_code = width_code;
+  u4_cfg.lb_width_rate_code = width_code;
   REG_TUNNEL_LINK_STATUS = (uint8_t)((REG_TUNNEL_LINK_STATUS & 0xF0) | width_code);
   u4lb_d436(width_code);
-  if ((uint8_t)(u4_route_mode & 0x81) != 0) u4lb_ed44();
+  if ((uint8_t)(u4_cfg.route_mode & 0x81) != 0) u4lb_ed44();
   (void)param;
 }
 
 static void u4lb_e305(uint8_t param) {
-  if ((u4_route_mode & 0x81) == 0) return;
+  if ((u4_cfg.route_mode & 0x81) == 0) return;
   if ((u4_link_gen == 3) ||
-      (((lb_lane_width_latch0 != 2) || (lb_lane_width_latch1 != 0)) && (lb_lane_width_latch0 != 1))) {
+      (((u4_sb.lane_width_latch0 != 2) || (u4_sb.lane_width_latch1 != 0)) && (u4_sb.lane_width_latch0 != 1))) {
     REG_CPU_MODE_NEXT &= 0x1F;
   } else {
     REG_CPU_MODE_NEXT = (uint8_t)((REG_CPU_MODE_NEXT & 0x1F) | 0x20);
@@ -786,7 +786,7 @@ static void u4lb_c593(void) {
   P1_WR(0x1335, 0x02);
   v = u4lb_e916();
   P1_WR(0x1335, (uint8_t)((v & 0xFE) | 0x01));
-  if (lb_lane_bonded_flag == 0) {
+  if (u4_sb.lane_bonded_flag == 0) {
     v = u4lb_e916();
     P1_WR(0x1335, (uint8_t)(v & 0xFD));
   } else {
@@ -808,15 +808,15 @@ static void u4lb_b8db(void) {
     if ((PR(0x92F8) & 0x0C) == 0) return;
     eye_phase_min = 0x01; eye_phase_max = 0x28;
     eye_lo_min = 0x01; eye_lo_limit = 0x3D; eye_hi_min = 0x01; eye_hi_limit = 0x43;
-  } else if (lb_lane_width_latch0 == 1) {
+  } else if (u4_sb.lane_width_latch0 == 1) {
     if (REG_PHY_LANEA_LOCK_C297 & 0x20) return;
     eye_phase_min = 0x01; eye_phase_max = 0x28;
-    if (u4_enter_usb_accepted == 0) { eye_lo_min=0x01; eye_lo_limit=0x47; eye_hi_min=0x01; eye_hi_limit=0x4D; }
+    if (u4_pd.enter_usb_accepted == 0) { eye_lo_min=0x01; eye_lo_limit=0x47; eye_hi_min=0x01; eye_hi_limit=0x4D; }
     else { eye_lo_min=0x01; eye_lo_limit=0x3D; eye_hi_min=0x01; eye_hi_limit=0x43; }
   } else {
     if (REG_PHY_LANEA_LOCK_C2A7 & 0x20) return;
     eye_phase_min = 0x01; eye_phase_max = 0x20;
-    if (u4_enter_usb_accepted != 0) { eye_lo_min=0x01; eye_lo_limit=0x3E; eye_hi_min=0x01; eye_hi_limit=0x42; }
+    if (u4_pd.enter_usb_accepted != 0) { eye_lo_min=0x01; eye_lo_limit=0x3E; eye_hi_min=0x01; eye_hi_limit=0x42; }
     else { eye_lo_min=0x01; eye_lo_limit=0x48; eye_hi_min=0x01; eye_hi_limit=0x4C; }
   }
   for (iter = 0; iter < 10; iter++) {
@@ -834,30 +834,30 @@ static void u4lb_b8db(void) {
 }
 
 static void u4lb_state4_b0b4(void) {
-  if (u4_coldboot_seed_gate != 0) {
+  if (u4_sb.coldboot_seed_gate != 0) {
     uint8_t i;
     for (i = 0; i < 2; i++) { u4lb_e07d(); u4lb_b226(); }
   } else {
     if (u4_work_buf[0x19] & 0x01) {
-      uint8_t op = (lb_lane_width_latch0 == 2) ? 0x85 : 0x81;
+      uint8_t op = (u4_sb.lane_width_latch0 == 2) ? 0x85 : 0x81;
       SB_WR(0x15, op);
       SB_WR(0x0C, (SB_RD(0x0C) & 0x80) | 0x03);
       u4lb_d5da(1);
     }
     if (u4_work_buf[0x19] & 0x02) {
-      uint8_t op = (lb_lane_width_latch0 == 2) ? 0xA5 : 0xA1;
+      uint8_t op = (u4_sb.lane_width_latch0 == 2) ? 0xA5 : 0xA1;
       SB_WR(0x15, op);
       SB_WR(0x0C, (SB_RD(0x0C) & 0x80) | 0x03);
       u4lb_d5da(1);
     }
     u4lb_b226();
   }
-  { uint16_t width = ((uint16_t)lb_lane_width_cnt_hi << 8) | lb_lane_width_cnt_lo;
+  { uint16_t width = ((uint16_t)u4_sb.lane_width_cnt_hi << 8) | u4_sb.lane_width_cnt_lo;
     uint16_t neg   = ((uint16_t)REG_LANE_WIDTH_CNT_HI << 8) | REG_LANE_WIDTH_CNT_LO;
     if ((uint16_t)(width - neg) < 0x0038) { uart_puts("[b4:WIDGATE-abort]"); return; }
   }
 
-  if (sb_connect_present == 0 && sb_route_up_trigger == 0) { uart_puts("[b4:CONGATE-abort]"); return; }
+  if (u4_sb.connect_present == 0 && u4_sb.route_up_trigger == 0) { uart_puts("[b4:CONGATE-abort]"); return; }
 
   if (u4_connect_gate & 0x01) {
     REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
@@ -913,8 +913,8 @@ static void u4lb_state4_b0b4(void) {
 
   u4lb_ec51();
 
-  lb_laneA_cl0_latch = REG_LANE_WIDTH_CNT_HI;
-  lb_laneB_cl0_latch = REG_LANE_WIDTH_CNT_LO;
+  u4_sb.laneA_cl0_latch = REG_LANE_WIDTH_CNT_HI;
+  u4_sb.laneB_cl0_latch = REG_LANE_WIDTH_CNT_LO;
 
   u4lb_eb62(U4FSM_LANE_BOND);
 }
@@ -922,22 +922,22 @@ static void u4lb_state4_b0b4(void) {
 static uint8_t u4lb_ee6e(uint8_t lane) { return (uint8_t)(SB_RD(lane ? 0x60 : 0x56) & 0x01); }
 
 static uint8_t u4lb_eda0(void) {
-  if (u4_route_query_response != 0) { u4_route_query_response = 0; e461_inflight_token = 0; return 0; }
-  if (e461_inflight_token == 0x02) { e461_inflight_token = 0; return 2; }
+  if (u4_sb.route_query_response != 0) { u4_sb.route_query_response = 0; u4_sb.e461_inflight_token = 0; return 0; }
+  if (u4_sb.e461_inflight_token == 0x02) { u4_sb.e461_inflight_token = 0; return 2; }
   return 1;
 }
 
 static uint8_t u4lb_e461(void) {
-  if (e461_inflight_token != 0) return 0;
-  if (u4_route_enable_latch == 0) {
+  if (u4_sb.e461_inflight_token != 0) return 0;
+  if (u4_sb.route_enable_latch == 0) {
     sb_tx_flag = 0;
-    sb_tx_cmd  = (uint8_t)(u4_route_enable_latch | 0x01);
+    sb_tx_cmd  = (uint8_t)(u4_sb.route_enable_latch | 0x01);
     sb_tx_byte0 = 0x0D;
     sb_tx_byte1 = 0x04;
     sb_a5d8_tx(0);
     return 1;
   }
-  if (u4_coldboot_seed_gate != 0) {
+  if (u4_sb.coldboot_seed_gate != 0) {
     sb_tx_flag = 0;
     sb_tx_cmd  = 0x00;
     sb_tx_byte0 = 0x0D;
@@ -946,7 +946,7 @@ static uint8_t u4lb_e461(void) {
     return 1;
   }
   sb_tx_flag = 0;
-  sb_tx_cmd  = (uint8_t)(u4_route_enable_latch | 0x01);
+  sb_tx_cmd  = (uint8_t)(u4_sb.route_enable_latch | 0x01);
   sb_tx_byte0 = 0x0D;
   sb_tx_byte1 = 0x04;
   sb_a5d8_tx(0);
@@ -986,7 +986,7 @@ static void u4lb_lp1_width_settle(uint8_t lane) {
   widthA = (uint16_t)(((uint16_t)lb_width_pairA[2*lane] << 8) | lb_width_pairA[0x1 + 2*lane]);
   if (widthA == 0) { u4lb_lp1_finalize(lane); return; }
   neg = (uint16_t)(((uint16_t)REG_LANE_WIDTH_CNT_HI << 8) | REG_LANE_WIDTH_CNT_LO);
-  if (lb_width_pairB[2*lane] == 0 && lb_width_pairB[0x1 + 2*lane] == u4_lane_train_trigger) {
+  if (lb_width_pairB[2*lane] == 0 && lb_width_pairB[0x1 + 2*lane] == u4_sb.lane_train_trigger) {
     if ((uint16_t)(widthA - neg) >= 0x00C8) { u4lb_lp1_finalize(lane); return; }
     return;
   }
@@ -1064,7 +1064,7 @@ static void u4lb_walk_8000(void) {
             lb_width_pairA[2*lane] = (uint8_t)(w >> 8);
             lb_width_pairA[0x1 + 2*lane] = (uint8_t)w; }
           lb_width_pairB[2*lane] = 0x00;
-          lb_width_pairB[0x1 + 2*lane] = u4_lane_train_trigger;
+          lb_width_pairB[0x1 + 2*lane] = u4_sb.lane_train_trigger;
           lb_loop1_state[lane] = LP1_FINALIZE_A;
         } else {
           lb_loop1_state[lane] = LP1_BOND_WAIT_PUSH;
@@ -1127,7 +1127,7 @@ static void u4lb_walk_8000(void) {
           u4_work_buf[0x1E + lane] &= 0xF0;
           u4_work_buf[0x1E + lane] |= cl_idx;
           u4_work_buf[0x1E + lane] |= 0x40;
-          cap = phy_lane_cap[lane];
+          cap = u4_phy.lane_cap[lane];
           if ((cap >> 1) & 1) cl_cfg_lo = lb_cap_field[cl_idx];
           if (cap & 1) { __xdata uint16_t m = (uint16_t)(sb_lane_flip[cl_idx] * 0x20); cl_cfg_lo |= (uint8_t)m; cl_cfg_hi |= (uint8_t)(m >> 8); }
           SB_WR(0x6A + 2 * lane, cl_cfg_hi);
@@ -1173,7 +1173,7 @@ static void u4lb_walk_850b(void) {
         else lb_loop2_state[lane] = 0x30;
       }
     } else if (state == 0x40) {
-      __xdata uint8_t cap = phy_lane_cap[lane], cl_idx = lb_cl_value[lane], cl_cfg_hi = 0, cl_cfg_lo = 0;
+      __xdata uint8_t cap = u4_phy.lane_cap[lane], cl_idx = lb_cl_value[lane], cl_cfg_hi = 0, cl_cfg_lo = 0;
       if ((cap >> 1) & 1) cl_cfg_lo = lb_cap_field[cl_idx];
       if (cap & 1) { __xdata uint16_t m = (uint16_t)(sb_lane_flip[cl_idx] * 0x20); cl_cfg_lo |= (uint8_t)m; cl_cfg_hi |= (uint8_t)(m >> 8); }
       uart_puts(lane ? "\r\nL1:CL0 " : "\r\nL0:CL0 ");
@@ -1204,10 +1204,10 @@ static void u4lb_walk_850b(void) {
     }
   }
   if (lb_loop2_state[0x0] == 0 && lb_loop2_state[0x1] == 0) {
-    if (lb_walk_oneshot_flag == 0) {
+    if (u4_sb.walk_oneshot_flag == 0) {
       if (u4_work_buf[0x19] & 0x01) u4lb_8992(0x86);
       if ((u4_work_buf[0x19] >> 1) & 0x01) u4lb_8992(0xA6);
-      lb_walk_oneshot_flag = 1;
+      u4_sb.walk_oneshot_flag = 1;
     }
     for (lane = 0; lane < 2; lane++) {
       if (!u4lb_lane_gate(lane)) continue;
@@ -1277,13 +1277,13 @@ static void u4lb_walk_850b(void) {
 
 static void u4lb_state5(void) {
   DPX = 0x00;
-  if (u4_route_enable_latch == 0x04) u4lb_walk_8000();
+  if (u4_sb.route_enable_latch == 0x04) u4lb_walk_8000();
   else                    u4lb_walk_850b();
   DPX = 0x00;
 }
 
 static void u4lb_e672(void) {
-  u4_fsm_state_t state = u4_fsm_state;
+  u4_fsm_state_t state = u4_sb.state;
   if (state == U4FSM_LANE_TRAIN) {
     u4lb_state4_b0b4();
     return;

@@ -49,6 +49,140 @@ typedef enum {
 } rmbox_state_t;
 _Static_assert(sizeof(rmbox_state_t) == 1, "rmbox_state_t must be 1 byte");
 
+typedef struct {
+    uint8_t lane_cap[2];
+    uint8_t cdr_arm_mask;
+} u4_phy_runtime_t;
+
+typedef struct {
+    uint8_t rxpll_train_busy;
+    uint8_t conn_consequence_done;
+    u4_fsm_state_t state;
+    uint8_t transport_edge_toggle;
+    uint8_t link_edge_toggle;
+    uint8_t active_plane_port;
+    uint8_t active_port_rr;
+    uint8_t route_enable_latch;
+    uint8_t e461_inflight_token;
+    uint8_t cdf5_substate_arm;
+    uint8_t laneA_cl_latch;
+    uint8_t laneB_cl_latch;
+    uint8_t lane_bonded_flag;
+    uint8_t laneA_cl0_latch;
+    uint8_t laneB_cl0_latch;
+    uint8_t lane_width_latch0;
+    uint8_t lane_width_latch1;
+    uint8_t connect_descriptor;
+    uint8_t tx_command_desc;
+    uint8_t af38_copy_len;
+    connrt_substate_t conn_routing_substate;
+    uint8_t phy_gate_a;
+    uint8_t phy_gate_b;
+    uint8_t connect_present;
+    uint8_t route_up_trigger;
+    uint8_t walk_oneshot_flag;
+    uint8_t lane_width_cnt_hi;
+    uint8_t lane_width_cnt_lo;
+    uint8_t walk_throttle_snap_hi;
+    uint8_t walk_throttle_snap_lo;
+    uint8_t lane_train_trigger;
+    uint8_t route_query_response;
+    uint8_t coldboot_seed_gate;
+} u4_sb_fsm_t;
+
+typedef struct {
+    uint8_t contract_state;
+    uint8_t connect_route_latch;
+    uint8_t enter_usb_accepted;
+    uint8_t connect_pending;
+    uint8_t role_state;
+    uint8_t msg_substate;
+    uint8_t usb3_fallback_flag;
+    uint8_t rx_slot_idx;
+    uint8_t rx_num_data_obj;
+    uint8_t tx_msgid_counter;
+    uint8_t tx_msg_len;
+    uint8_t bist_mode;
+    uint8_t sop_field;
+    uint8_t state_07cb;
+    uint8_t route_confirm_07cc;
+    uint8_t confirm_input_cd;
+    uint8_t confirm_input_ce;
+    uint8_t confirm_input_cf;
+    uint8_t rx_slot_mask;
+    uint8_t decoded_voltage_hi;
+    uint8_t decoded_voltage_lo;
+    uint8_t timer_a;
+    uint8_t timer_b;
+    uint8_t timer_c;
+    uint8_t timer_d;
+    uint8_t softreset_pending;
+    uint8_t hardreset_done;
+    uint8_t timer_e;
+    uint8_t timer_f;
+    uint8_t timer_g;
+    uint8_t state_07e3;
+    uint8_t connect_gate_e8;
+    uint8_t connect_gate_eb;
+    uint8_t connect_oneshot_suppress;
+    uint8_t cm_dispatch_sel;
+} u4_pd_policy_t;
+
+typedef struct {
+    uint8_t descr_engine_scratch;
+    uint8_t hdr0;
+    uint8_t hdr1;
+    uint8_t hdr2;
+    uint8_t hdr3;
+} u4_routerop_header_t;
+
+typedef struct {
+    uint8_t dp_alt_mode;
+    uint8_t cap20g_gate0;
+    uint8_t cap20g_gate1;
+    uint8_t sb_desc_profile;
+    uint8_t capability_profile;
+    uint8_t mode_flag;
+    uint8_t route_mode;
+    uint8_t lane_gate_sel;
+    uint8_t tunnel_cfg_hi;
+    uint8_t tunnel_cfg_lo;
+    uint8_t tunnel_cfg_mode;
+    uint8_t tunnel_credits;
+    uint8_t product_pid_lo;
+    uint8_t product_pid_hi;
+    uint8_t lb_width_rate_code;
+    uint8_t lb_gen_index;
+    uint8_t lane_mode_arg;
+    uint8_t routerop_desc0;
+    uint8_t routerop_desc1;
+    uint8_t routerop_desc2;
+    uint8_t routerop_desc3;
+    uint8_t msg_type;
+} u4_cfg_shadow_t;
+
+typedef struct {
+    uint8_t lane_profile;
+    uint8_t data3c_b;
+    uint8_t data3d_b;
+    uint8_t data3e_b;
+    uint8_t data3f_b;
+    uint8_t data3c_a;
+    uint8_t data3d_a;
+    uint8_t data_lo;
+    uint8_t data_hi;
+    uint8_t cc_subdemux_src;
+    uint8_t link_reinit_gate;
+    uint8_t reinit_pending;
+} u4_p12_temp_t;
+
+typedef struct {
+    uint8_t pcie_ctrl_b402_shadow;
+    uint8_t pd_seen;
+    uint8_t sb_asserted;
+    uint8_t tup_e52d_done;
+} u4_boot_scratch_t;
+
 #define U4_XDATA_BYTES(sym) ((volatile __xdata uint8_t *)&(sym))
 #define U4_ROUTEROP_MBOX_CLEAR_LEN 0x10u
 
@@ -71,114 +205,19 @@ volatile __xdata __at(0x0770) uint8_t lb_width_pairB[0x4];
 volatile __xdata __at(0x0777) uint8_t u4_host_desc[0x40];
 volatile __xdata __at(0x0800) uint8_t u4_work_buf[0x64];
 volatile __xdata __at(0x099C) uint8_t sb_routerop_body[0x40];
-volatile __xdata uint8_t phy_lane_cap[0x2];
 volatile __xdata __at(0x0B26) uint8_t lb_cl_status[0x2];
 volatile __xdata __at(0x0B28) uint8_t lb_eq_status[0x2];
 volatile __xdata __at(0x0B2A) uint8_t lb_loop2_scratch[0x2];
 volatile __xdata __at(0x0B2C) uint8_t lb_cl0_width[0x2];
 
-/* Sideband and lane-bond FSM state. */
-volatile __xdata uint8_t phy_rxpll_train_busy;
-volatile __xdata uint8_t u4_conn_consequence_done;
-volatile __xdata u4_fsm_state_t u4_fsm_state;
-volatile __xdata uint8_t sb_transport_edge_toggle;
-volatile __xdata uint8_t sb_link_edge_toggle;
-volatile __xdata uint8_t sb_active_plane_port;
-volatile __xdata uint8_t sb_active_port_rr;
-volatile __xdata uint8_t u4_route_enable_latch;
-volatile __xdata uint8_t e461_inflight_token;
-volatile __xdata uint8_t sb_cdf5_substate_arm;
-volatile __xdata uint8_t lb_laneA_cl_latch;
-volatile __xdata uint8_t lb_laneB_cl_latch;
-volatile __xdata uint8_t lb_lane_bonded_flag;
-volatile __xdata uint8_t lb_laneA_cl0_latch;
-volatile __xdata uint8_t lb_laneB_cl0_latch;
-volatile __xdata uint8_t lb_lane_width_latch0;
-volatile __xdata uint8_t lb_lane_width_latch1;
-volatile __xdata uint8_t sb_connect_descriptor;
-volatile __xdata uint8_t sb_tx_command_desc;
-volatile __xdata uint8_t sb_af38_copy_len;
-volatile __xdata connrt_substate_t cm_conn_routing_substate;
-volatile __xdata uint8_t u4_phy_gate_a;
-volatile __xdata uint8_t u4_phy_gate_b;
-volatile __xdata uint8_t sb_connect_present;
-volatile __xdata uint8_t sb_route_up_trigger;
-volatile __xdata uint8_t lb_walk_oneshot_flag;
-volatile __xdata uint8_t lb_lane_width_cnt_hi;
-volatile __xdata uint8_t lb_lane_width_cnt_lo;
-volatile __xdata uint8_t lb_walk_throttle_snap_hi;
-volatile __xdata uint8_t lb_walk_throttle_snap_lo;
-volatile __xdata uint8_t u4_lane_train_trigger;
-volatile __xdata uint8_t u4_route_query_response;
-volatile __xdata uint8_t u4_coldboot_seed_gate;
-
-/* USB-PD policy state and USB4 mode-entry latches. */
-volatile __xdata uint8_t pd_contract_state;
-volatile __xdata uint8_t u4_connect_route_latch;
-volatile __xdata uint8_t u4_enter_usb_accepted;
-volatile __xdata uint8_t u4_connect_pending;
-volatile __xdata uint8_t pd_role_state;
-volatile __xdata uint8_t pd_msg_substate;
-volatile __xdata uint8_t pd_usb3_fallback_flag;
-volatile __xdata uint8_t pd_rx_slot_idx;
-volatile __xdata uint8_t pd_rx_num_data_obj;
-volatile __xdata uint8_t pd_tx_msgid_counter;
-volatile __xdata uint8_t pd_tx_msg_len;
-volatile __xdata uint8_t pd_bist_mode;
-volatile __xdata uint8_t pd_sop_field;
-volatile __xdata uint8_t pd_state_07cb;
-volatile __xdata uint8_t u4_route_confirm_07cc;
-volatile __xdata uint8_t u4_confirm_input_cd;
-volatile __xdata uint8_t u4_confirm_input_ce;
-volatile __xdata uint8_t u4_confirm_input_cf;
-volatile __xdata uint8_t pd_rx_slot_mask;
-volatile __xdata uint8_t pd_decoded_voltage_hi;
-volatile __xdata uint8_t pd_decoded_voltage_lo;
-volatile __xdata uint8_t pd_timer_a;
-volatile __xdata uint8_t pd_timer_b;
-volatile __xdata uint8_t pd_timer_c;
-volatile __xdata uint8_t pd_timer_d;
-volatile __xdata uint8_t pd_softreset_pending;
-volatile __xdata uint8_t pd_hardreset_done;
-volatile __xdata uint8_t pd_timer_e;
-volatile __xdata uint8_t pd_timer_f;
-volatile __xdata uint8_t pd_timer_g;
-volatile __xdata uint8_t pd_state_07e3;
-volatile __xdata uint8_t u4_connect_gate_e8;
-volatile __xdata uint8_t u4_connect_gate_eb;
-volatile __xdata uint8_t u4_connect_oneshot_suppress;
-volatile __xdata uint8_t pd_cm_dispatch_sel;
-
-/* Router-op and sideband mailbox state. */
-volatile __xdata uint8_t sb_descr_engine_scratch;
-volatile __xdata uint8_t sb_routerop_hdr0;
-volatile __xdata uint8_t sb_routerop_hdr1;
-volatile __xdata uint8_t sb_routerop_hdr2;
-volatile __xdata uint8_t sb_routerop_hdr3;
-
-/* Stock capability/config shadows seeded at boot. */
-volatile __xdata uint8_t u4_dp_alt_mode;
-volatile __xdata uint8_t u4_cap20g_gate0;
-volatile __xdata uint8_t u4_cap20g_gate1;
-volatile __xdata uint8_t u4_sb_desc_profile;
-volatile __xdata uint8_t u4_capability_profile;
-volatile __xdata uint8_t u4_mode_flag;
-volatile __xdata uint8_t u4_route_mode;
-volatile __xdata uint8_t u4_lane_gate_sel;
-volatile __xdata uint8_t u4_tunnel_cfg_hi;
-volatile __xdata uint8_t u4_tunnel_cfg_lo;
-volatile __xdata uint8_t u4_tunnel_cfg_mode;
-volatile __xdata uint8_t u4_tunnel_credits;
-volatile __xdata uint8_t pd_product_pid_lo;
-volatile __xdata uint8_t pd_product_pid_hi;
-volatile __xdata uint8_t u4lb_width_rate_code;
-volatile __xdata uint8_t u4lb_gen_index;
-volatile __xdata uint8_t u4_lane_mode_arg;
-volatile __xdata uint8_t u4_routerop_desc0;
-volatile __xdata uint8_t u4_routerop_desc1;
-volatile __xdata uint8_t u4_routerop_desc2;
-volatile __xdata uint8_t u4_routerop_desc3;
-volatile __xdata uint8_t pd_msg_type;
+/* Compiler-placed runtime state. */
+volatile __xdata u4_phy_runtime_t u4_phy;
+volatile __xdata u4_sb_fsm_t u4_sb;
+volatile __xdata u4_pd_policy_t u4_pd;
+volatile __xdata u4_routerop_header_t u4_rop_hdr;
+volatile __xdata u4_cfg_shadow_t u4_cfg;
+volatile __xdata u4_p12_temp_t u4_p12;
+volatile __xdata u4_boot_scratch_t u4_boot;
 
 /* Lane-bond descriptor-engine scratch. */
 volatile __xdata __at(0x09DD) uint8_t u4lb_lane_active_flags;
@@ -198,7 +237,6 @@ volatile __xdata __at(0x0AA9) uint8_t sb_tx_byte0;
 volatile __xdata __at(0x0AAA) uint8_t sb_tx_byte1;
 volatile __xdata __at(0x0AAB) uint8_t sb_tx_flag;
 volatile __xdata __at(0x0AB3) uint8_t phy_lane_gate;
-volatile __xdata uint8_t phy_cdr_arm_mask;
 volatile __xdata __at(0x0ACD) uint8_t u4_mode_entry_class;
 volatile __xdata __at(0x0ACE) uint8_t u4_mode_entry_param;
 volatile __xdata __at(0x0AE2) uint8_t u4_entered_usb_mode;
@@ -213,24 +251,5 @@ volatile __xdata __at(0x0B03) uint8_t u4_routerop_mbox_opcode;
 
 volatile __xdata __at(0x0B04) uint8_t u4_rop_cfg_addr[4];
 volatile __xdata __at(0x0B0A) uint8_t u4_rop_limit[4];
-
-/* P12 descriptor-engine temporaries. */
-volatile __xdata uint8_t sb_eng_lane_profile;
-volatile __xdata uint8_t sb_eng_data3c_b;
-volatile __xdata uint8_t sb_eng_data3d_b;
-volatile __xdata uint8_t sb_eng_data3e_b;
-volatile __xdata uint8_t sb_eng_data3f_b;
-volatile __xdata uint8_t sb_eng_data3c_a;
-volatile __xdata uint8_t sb_eng_data3d_a;
-volatile __xdata uint8_t sb_eng_data_lo;
-volatile __xdata uint8_t sb_eng_data_hi;
-volatile __xdata uint8_t cc_subdemux_src;
-volatile __xdata uint8_t sb_link_reinit_gate;
-volatile __xdata uint8_t u4_reinit_pending;
-
-volatile __xdata uint8_t pcie_ctrl_b402_shadow;
-volatile __xdata uint8_t pd_seen;
-volatile __xdata uint8_t sb_asserted;
-volatile __xdata uint8_t tup_e52d_done;
 
 #endif

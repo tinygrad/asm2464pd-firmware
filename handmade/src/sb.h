@@ -46,7 +46,7 @@ static void sb_lane_flip_init(void) {
   P1_CLR(0x0100, 0x40);
   P1_CLR(0x0100, 0x80);
 
-  if (u4_enter_usb_accepted != 0 || u4_connect_route_latch != 0) P1_CLR(0x0100, 0x01);
+  if (u4_pd.enter_usb_accepted != 0 || u4_pd.connect_route_latch != 0) P1_CLR(0x0100, 0x01);
   else                                    P1_SET(0x0100, 0x01);
 
   if (flip) {
@@ -57,7 +57,7 @@ static void sb_lane_flip_init(void) {
     P1_CLR(0x0101, 0x03);
   }
 
-  if (u4_enter_usb_accepted != 0 || u4_connect_route_latch != 0) {
+  if (u4_pd.enter_usb_accepted != 0 || u4_pd.connect_route_latch != 0) {
     P1_WR(0x0101, (P1_RD(0x0101) & 0xEF) | 0x10);
     P1_CLR(0x0101, 0x20);
     P1_SET(0x0101, 0x80);
@@ -70,7 +70,7 @@ static void sb_lane_flip_init(void) {
 
   SB_WR(0xD1, (SB_RD(0xD1) & 0xEF) | 0x10);
   SB_WR(0x49, 0xA0);
-  u4_conn_consequence_done = 0;
+  u4_sb.conn_consequence_done = 0;
 
   SB_WR(0x94, 0x02); SB_WR(0x95, 0x71); SB_WR(0x96, 0x00);
   SB_WR(0x98, 0x3E); SB_WR(0x99, 0x80);
@@ -88,7 +88,7 @@ static void sb_lane_flip_init(void) {
   SB_CLR(0x2C, 0x01);
   REG_INT_CTRL = (REG_INT_CTRL & 0xF7) | 0x08;
   SB_CLR(0x67, 0x40);
-  lb_laneA_cl_latch = 0x07; lb_laneB_cl_latch = 0x07;
+  u4_sb.laneA_cl_latch = 0x07; u4_sb.laneB_cl_latch = 0x07;
   { uint8_t k; for (k = 0; k < 0x10; k++) lb_cap_field[(uint16_t)(0x0 + k)] = 0; }
   if (REG_LANE_RATE_C8FF == 0x04) {
     uint8_t k;
@@ -121,26 +121,26 @@ static __code const uint8_t branchA_gate[0x13] = {
 static void sb_rom_descriptor_load(void) {
   uint8_t i;
   for (i = 0; i < 0x64; i++) u4_work_buf[i] = drom_identity[i];
-  u4_work_buf[0x4] = pd_product_pid_lo;
-  u4_work_buf[0x5] = pd_product_pid_hi;
-  if (!(u4_mode_flag & 0x80)) u4_work_buf[0x1B] &= ~0x02;
+  u4_work_buf[0x4] = u4_cfg.product_pid_lo;
+  u4_work_buf[0x5] = u4_cfg.product_pid_hi;
+  if (!(u4_cfg.mode_flag & 0x80)) u4_work_buf[0x1B] &= ~0x02;
   for (i = 0; i < 0x10; i++) sb_lane_desc[i] = lane_descriptor[i];
   for (i = 0; i < 0x13; i++) {
     sb_width_lut[(uint16_t)(0x0 + i)] = width_lut[i];
     sb_branchA_gate[(uint16_t)(0x0 + i)] = branchA_gate[i];
   }
-  if (u4_cap20g_gate0) {
+  if (u4_cfg.cap20g_gate0) {
     u4_work_buf[0x1A] = (uint8_t)((u4_work_buf[0x1A] & 0xDF) | 0x20);
-    if ((u4_enter_usb_accepted != 0 && u4_route_confirm_07cc < 3) ||
-        (u4_connect_route_latch != 0 && (u4_confirm_input_cf == 1 || u4_confirm_input_cf == 2))) {
+    if ((u4_pd.enter_usb_accepted != 0 && u4_pd.route_confirm_07cc < 3) ||
+        (u4_pd.connect_route_latch != 0 && (u4_pd.confirm_input_cf == 1 || u4_pd.confirm_input_cf == 2))) {
       u4_work_buf[0x1A] &= 0xDF;
     }
   }
-  if (u4_cap20g_gate1 == 0) u4_work_buf[0x1A] &= 0xED;
+  if (u4_cfg.cap20g_gate1 == 0) u4_work_buf[0x1A] &= 0xED;
 
-  lb_lane_width_latch0 = 1; u4_route_query_response = 0; sb_connect_present = 0; sb_route_up_trigger = 0; lb_walk_oneshot_flag = 0;
-  u4_fsm_state = U4FSM_IDLE; cm_conn_routing_substate = CONNRT_PRINT_STATUS; lb_lane_desc_idx[0x0] = 0x0F; lb_lane_desc_idx[0x1] = 0x0F; u4_coldboot_seed_gate = 1;
-  sb_cdf5_substate_arm = 0; lb_lane_bonded_flag = 0;
+  u4_sb.lane_width_latch0 = 1; u4_sb.route_query_response = 0; u4_sb.connect_present = 0; u4_sb.route_up_trigger = 0; u4_sb.walk_oneshot_flag = 0;
+  u4_sb.state = U4FSM_IDLE; u4_sb.conn_routing_substate = CONNRT_PRINT_STATUS; lb_lane_desc_idx[0x0] = 0x0F; lb_lane_desc_idx[0x1] = 0x0F; u4_sb.coldboot_seed_gate = 1;
+  u4_sb.cdf5_substate_arm = 0; u4_sb.lane_bonded_flag = 0;
   SB_WR(0x2C, 0x04);
   SB_WR(0x28, 0x08);
   SB_WR(0x2A, 0x08);
@@ -149,12 +149,12 @@ static void sb_rom_descriptor_load(void) {
   SB_WR(0xC9, 0x10); SB_WR(0xC9, 0x20);
   SB_WR(0xC9, 0x40); SB_WR(0xC9, 0x80);
   SB_WR(0x66, 0x08); SB_WR(0x66, 0x40);
-  sb_transport_edge_toggle = SB_RD(0x24) & 0x01;
-  sb_link_edge_toggle = SB_RD(0x80) & 0x01;
-  sb_active_port_rr = (uint8_t)((SB_RD(0x24) & 0x06) >> 1);
-  e461_inflight_token = 0;
+  u4_sb.transport_edge_toggle = SB_RD(0x24) & 0x01;
+  u4_sb.link_edge_toggle = SB_RD(0x80) & 0x01;
+  u4_sb.active_port_rr = (uint8_t)((SB_RD(0x24) & 0x06) >> 1);
+  u4_sb.e461_inflight_token = 0;
   REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02;
-  lb_laneA_cl0_latch = 0; lb_laneB_cl0_latch = 0;
+  u4_sb.laneA_cl0_latch = 0; u4_sb.laneB_cl0_latch = 0;
   SB_CLR(0xD4, 0x20);
   SB_WR(0x8F, (SB_RD(0x8F) & 0xEF) | 0x10);
 }
@@ -191,7 +191,7 @@ static void sb_block_init(void) {
   SB_CLR(0x67, 0x24);
   SB_WR(0x9E, 0x10); SB_WR(0x9E, 0x20);
   SB_CLR(0x9F, 0x30);
-  u4_conn_consequence_done = 0;
+  u4_sb.conn_consequence_done = 0;
 
   sb_rom_descriptor_load();
 
@@ -206,7 +206,7 @@ static void sb_block_init(void) {
   REG_PHY_LANEB_C344 = (REG_PHY_LANEB_C344 & 0xBF) | 0x40;
   REG_PHY_LANEB_C35C &= 0xC0;
 
-  phy_lane_gate = 0; phy_lane_cap[0x0] = 3; phy_lane_cap[0x1] = 3; phy_cdr_arm_mask = 0;
+  phy_lane_gate = 0; u4_phy.lane_cap[0x0] = 3; u4_phy.lane_cap[0x1] = 3; u4_phy.cdr_arm_mask = 0;
   REG_PHY_ORIENT_C2C3 &= 0xFE; REG_PHY_ORIENT_C2C3 &= 0xFD;
   REG_PHY_ORIENT_C2C3 = (REG_PHY_ORIENT_C2C3 & 0xC3) | 0x1C; REG_PHY_ORIENT_C2C3 &= 0xBF;
   REG_PHY_LANEA_CDR_C2CB &= 0xFB;
@@ -451,12 +451,12 @@ static void u4c_dcb4_transport_reg_reinit(void) {
 }
 
 static void u4c_edbd(void) {
-  if (u4_enter_usb_accepted == 0) SB_SET(0x1C, 0x01);
+  if (u4_pd.enter_usb_accepted == 0) SB_SET(0x1C, 0x01);
   else                 SB_CLR(0x1C, 0x01);
 }
 
 static void u4c_e5b0(void) {
-  sb_descr_engine_scratch = 0;
+  u4_rop_hdr.descr_engine_scratch = 0;
   P12_WR(0x4C, (uint8_t)(P12_RD(0x4C) & 0xFE));
   P12_WR(0x03, 0x80);
   P12_WR(0x90, (uint8_t)(P12_RD(0x90) & 0xFB));
@@ -473,14 +473,14 @@ static void u4c_ccb3(uint8_t width_byte) {
   P12_WR(0x3C, 0x00); P12_WR(0x3D, 0x01);
   P12_WR(0x3E, 0x01); P12_WR(0x3F, 0x00);
   u4c_sb_desc_commit();
-  gate = u4_lane_gate_sel;
+  gate = u4_cfg.lane_gate_sel;
   if (!(gate & 0x01)) {
     (void)P12_RD(0x34);
     eng_a31c(0x34, (uint8_t)((gate & 0xF0) | 0x07));
     eng_a2df(0x35, 0x02);
     u4c_sb_desc_commit();
   }
-  gate = u4_lane_gate_sel;
+  gate = u4_cfg.lane_gate_sel;
   if (!((gate >> 1) & 0x01)) {
     (void)P12_RD(0x34);
     eng_a348(0x34, (uint8_t)((gate & 0xF0) | 0x07));
@@ -494,68 +494,68 @@ static volatile uint8_t __xdata sb_eng_nibble_acc;
 static uint8_t bbc7_bc70(uint16_t addr) {
   uint8_t code = XDATA_REG8(addr);
   uint8_t hi = (uint8_t)(code >> 4);
-  u4lb_width_rate_code = (uint8_t)(((uint8_t)(hi | (uint8_t)(code << 4))) ^ hi);
+  u4_cfg.lb_width_rate_code = (uint8_t)(((uint8_t)(hi | (uint8_t)(code << 4))) ^ hi);
   sb_eng_nibble_acc = (uint8_t)((uint8_t)(sb_eng_nibble_acc << 4) | hi);
   return sb_eng_nibble_acc;
 }
 static uint8_t bbc7_bcb8(uint16_t addr) {
-  return (uint8_t)(u4lb_width_rate_code | (uint8_t)(XDATA_REG8(addr) >> 4));
+  return (uint8_t)(u4_cfg.lb_width_rate_code | (uint8_t)(XDATA_REG8(addr) >> 4));
 }
 static void sb_eng_data_init_bbc7(void) {
   uint8_t i;
   for (i = 0; i < 9; i++) P12_WR((uint8_t)(0x12 + i), 0x00);
-  i = u4_sb_desc_profile;
-  sb_eng_lane_profile = (i == 0) ? 0x0C : (i == 1) ? 0x1C : 0x00;
-  sb_eng_data_hi = 0x17; sb_eng_data_lo = 0x4C;
+  i = u4_cfg.sb_desc_profile;
+  u4_p12.lane_profile = (i == 0) ? 0x0C : (i == 1) ? 0x1C : 0x00;
+  u4_p12.data_hi = 0x17; u4_p12.data_lo = 0x4C;
   sb_eng_nibble_acc = XDATA_REG8(0x0A41);
-  sb_eng_data3d_a = bbc7_bc70(0x0A40);
-  sb_eng_data3c_a = bbc7_bcb8(0x0A3F);
+  u4_p12.data3d_a = bbc7_bc70(0x0A40);
+  u4_p12.data3c_a = bbc7_bcb8(0x0A3F);
   sb_eng_nibble_acc = 0;
-  sb_eng_data3f_b = bbc7_bc70(0x0A3E);
-  sb_eng_data3e_b = bbc7_bcb8(0x0A3D);
+  u4_p12.data3f_b = bbc7_bc70(0x0A3E);
+  u4_p12.data3e_b = bbc7_bcb8(0x0A3D);
   sb_eng_nibble_acc = 0;
-  sb_eng_data3d_b = bbc7_bc70(0x0A3C);
-  sb_eng_data3c_b = u4lb_width_rate_code;
+  u4_p12.data3d_b = bbc7_bc70(0x0A3C);
+  u4_p12.data3c_b = u4_cfg.lb_width_rate_code;
 }
 
 static void u4c_c270(uint8_t width_byte) {
   (void)P12_RD(0x34);
   eng_a308(0x34, width_byte);
   eng_a2df(0x35, 0x00);
-  P12_WR(0x3C, sb_eng_data_lo);
-  P12_WR(0x3D, sb_eng_data_hi);
-  P12_WR(0x3E, pd_product_pid_lo);
-  P12_WR(0x3F, pd_product_pid_hi);
+  P12_WR(0x3C, u4_p12.data_lo);
+  P12_WR(0x3D, u4_p12.data_hi);
+  P12_WR(0x3E, u4_cfg.product_pid_lo);
+  P12_WR(0x3F, u4_cfg.product_pid_hi);
   u4c_sb_desc_commit();
   (void)P12_RD(0x34);
-  eng_a308(0x34, pd_product_pid_hi);
+  eng_a308(0x34, u4_cfg.product_pid_hi);
   eng_a2df(0x35, 0x07);
-  P12_WR(0x3C, sb_eng_data3c_a);
-  P12_WR(0x3D, sb_eng_data3d_a);
-  P12_WR(0x3E, sb_eng_data_lo);
-  P12_WR(0x3F, sb_eng_data_hi);
+  P12_WR(0x3C, u4_p12.data3c_a);
+  P12_WR(0x3D, u4_p12.data3d_a);
+  P12_WR(0x3E, u4_p12.data_lo);
+  P12_WR(0x3F, u4_p12.data_hi);
   u4c_sb_desc_commit();
   (void)P12_RD(0x34);
-  eng_a308(0x34, sb_eng_data_hi);
+  eng_a308(0x34, u4_p12.data_hi);
   eng_a2df(0x35, 0x08);
-  P12_WR(0x3C, sb_eng_data3c_b);
-  P12_WR(0x3D, sb_eng_data3d_b);
-  P12_WR(0x3E, sb_eng_data3e_b);
-  P12_WR(0x3F, sb_eng_data3f_b);
+  P12_WR(0x3C, u4_p12.data3c_b);
+  P12_WR(0x3D, u4_p12.data3d_b);
+  P12_WR(0x3E, u4_p12.data3e_b);
+  P12_WR(0x3F, u4_p12.data3f_b);
   u4c_sb_desc_commit();
 }
 
 static void u4c_d556(void) {
-  if (u4_route_mode & 0x02) {
+  if (u4_cfg.route_mode & 0x02) {
     PR(0x0250) = 0x02; PR(0x0251) = 0xC3;
   }
-  if (u4_mode_flag & 0x80) {
-    PR(0x0247) = sb_eng_data_lo; PR(0x0248) = sb_eng_data_hi;
+  if (u4_cfg.mode_flag & 0x80) {
+    PR(0x0247) = u4_p12.data_lo; PR(0x0248) = u4_p12.data_hi;
   }
 }
 
 static void u4c_bcd7_tail(void) {
-  if (u4_route_mode & 0x81) {
+  if (u4_cfg.route_mode & 0x81) {
     REG_CPU_MODE_NEXT &= 0xEF;
     sb_pcie_width_ramp(0x0F);
     if (u4_connect_gate & 0x10) {
@@ -574,25 +574,25 @@ static void sb_assert(void) {
   u4c_edbd();
   P1_SET(0x0000, 0x02);
   u4c_e5b0();
-  boot_phy_dd42((u4_route_mode & 0x02) ? 2 : 1);
+  boot_phy_dd42((u4_cfg.route_mode & 0x02) ? 2 : 1);
 
   u4c_bcd7_tail();
 
-  { uint8_t route_flags = u4_route_mode;
+  { uint8_t route_flags = u4_cfg.route_mode;
     if (route_flags & 0x02) {
       PR(0x924C) = (PR(0x924C) & 0xF7) | 0x08;
     }
   }
 
-  u4_lane_gate_sel = 0x02;
+  u4_cfg.lane_gate_sel = 0x02;
   u4c_ccb3(0x81);
   sb_eng_data_init_bbc7();
   u4c_c270(0x81);
   u4c_d556();
-  pd_cm_dispatch_sel = 0;
+  u4_pd.cm_dispatch_sel = 0;
   sb_lane_flip_init();
   sb_block_init();
-  sb_asserted = 1;
+  u4_boot.sb_asserted = 1;
   uart_puts("[SBdone]\n");
 }
 
@@ -617,7 +617,7 @@ static void sb_write_c9_ack(uint8_t pos) {
   SB_WR(0xC9, (uint8_t)(1u << (pos & 7)));
 }
 
-#define SBP2_BASE()          ((uint16_t)(0x2A00u + ((uint16_t)(sb_active_plane_port & 3) << 8)))
+#define SBP2_BASE()          ((uint16_t)(0x2A00u + ((uint16_t)(u4_sb.active_plane_port & 3) << 8)))
 #define SBP2_RD(off)         P1_REG8_rd((uint16_t)(SBP2_BASE() + (off)))
 
 #define SBTX_RD(off)         P1_REG8_rd((uint16_t)(0x2900u + (off)))
@@ -625,7 +625,7 @@ static void sb_write_c9_ack(uint8_t pos) {
 
 static void sb_eaac_populate_0777(void) {
   uint8_t i;
-  u4_route_query_response = 1;
+  u4_sb.route_query_response = 1;
   for (i = 0; i < 0x40; i++) {
     u4_host_desc[i] = SBP2_RD(i);
   }
@@ -638,10 +638,10 @@ static __code const uint8_t sb_af38_rom21a1[0x13] = {
 
 static void sb_af38_descriptor_response(void) {
   uint8_t  desc_type, desc_len, desc_dir, raw_byte1, i, status5, width;
-  uint8_t  desc = sb_connect_descriptor;
-  uint8_t  status_off = (sb_active_plane_port == 0) ? 0x0D : 0x0E;
+  uint8_t  desc = u4_sb.connect_descriptor;
+  uint8_t  status_off = (u4_sb.active_plane_port == 0) ? 0x0D : 0x0E;
 
-  sb_tx_command_desc = (uint8_t)(desc & 0xDE);
+  u4_sb.tx_command_desc = (uint8_t)(desc & 0xDE);
 
   desc_type = SBP2_RD(0);
   raw_byte1 = SBP2_RD(1);
@@ -658,7 +658,7 @@ static void sb_af38_descriptor_response(void) {
 
   status5 = (uint8_t)((SB_RD(status_off) & 0x7F) - 5);
   if (desc_dir != 0) {
-    sb_af38_copy_len = 1;
+    u4_sb.af38_copy_len = 1;
     SBTX_WR(2, 0);
     if (desc_type < 0x12 &&
         sb_width_lut[(uint16_t)(0x0 + desc_type)] != 0 &&
@@ -673,36 +673,36 @@ static void sb_af38_descriptor_response(void) {
       SBTX_WR(2, 1);
     }
   } else {
-    sb_af38_copy_len = desc_len;
+    u4_sb.af38_copy_len = desc_len;
     if (desc_type < 0x12 &&
         (width = sb_width_lut[(uint16_t)(0x0 + desc_type)]) != 0 &&
         status5 == 0) {
-      if ((uint8_t)(width + 1) <= sb_af38_copy_len) sb_af38_copy_len = width;
-      for (i = 0; i < sb_af38_copy_len; i++)
+      if ((uint8_t)(width + 1) <= u4_sb.af38_copy_len) u4_sb.af38_copy_len = width;
+      for (i = 0; i < u4_sb.af38_copy_len; i++)
         SBTX_WR((uint8_t)(2 + i), u4_work_buf[(uint16_t)(uint8_t)(sb_af38_rom21a1[desc_type] + i)]);
     } else {
       SBTX_WR(1, (uint8_t)(SBTX_RD(1) & 0x80));
-      sb_af38_copy_len = 0;
+      u4_sb.af38_copy_len = 0;
     }
   }
 
   {
     uint8_t status;
     (void)SB_RD(0x0C);
-    status = (uint8_t)((sb_af38_copy_len + 8) | (SB_RD(0x0C) & 0x80));
+    status = (uint8_t)((u4_sb.af38_copy_len + 8) | (SB_RD(0x0C) & 0x80));
     SB_WR(0x0C, status);
-    SB_WR(0x15, sb_tx_command_desc);
+    SB_WR(0x15, u4_sb.tx_command_desc);
   }
 
   u4lb_d5da(0);
 }
 
 static void sb_set_connect_present_ebb5(void) {
-  if (((sb_connect_descriptor >> 1) & 0x0F) != 0) {
+  if (((u4_sb.connect_descriptor >> 1) & 0x0F) != 0) {
     SB_SET(0x57, 0x08);
     SB_SET(0x61, 0x08);
   }
-  sb_connect_present = 1;
+  u4_sb.connect_present = 1;
 }
 
 static void sb_edd9_receive_ack(void) {
@@ -720,12 +720,12 @@ static void sb_d4cd_transport_edges(void);
 static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
   uint8_t desc4e;
   uint8_t desc752;
-  uint8_t port = sb_active_plane_port;
+  uint8_t port = u4_sb.active_plane_port;
   sb_edd9_receive_ack();
   desc4e = SB_RD(desc4e_off);
-  sb_connect_descriptor = SB_RD(desc752_off);
-  desc752 = sb_connect_descriptor;
-  if (sb_connect_present != 0 && (desc752 & 0x60) == 0x60) return;
+  u4_sb.connect_descriptor = SB_RD(desc752_off);
+  desc752 = u4_sb.connect_descriptor;
+  if (u4_sb.connect_present != 0 && (desc752 & 0x60) == 0x60) return;
   if (!(desc4e & 0x10)) return;
   if ((desc752 & 0xC0) != 0x40) {
     if (!(desc752 & 0x04)) return;
@@ -747,36 +747,36 @@ static void sb_cd3f_dispatch(uint8_t desc4e_off, uint8_t desc752_off) {
 }
 static void sb_d4cd_transport_edges(void) {
   if (SB_RD(0x28) & 0x08) {
-    if (sb_transport_edge_toggle == 0) {
-      sb_active_plane_port = 0; sb_cd3f_dispatch(0x28, 0x18);
+    if (u4_sb.transport_edge_toggle == 0) {
+      u4_sb.active_plane_port = 0; sb_cd3f_dispatch(0x28, 0x18);
       SB_WR(0x28, 0x10); SB_WR(0x28, 0x20); SB_WR(0x28, 0x40); SB_WR(0x28, 0x08);
-      sb_transport_edge_toggle = 1;
+      u4_sb.transport_edge_toggle = 1;
     }
   }
   if (SB_RD(0x2A) & 0x08) {
-    if (sb_transport_edge_toggle == 1) {
-      sb_active_plane_port = 1; sb_cd3f_dispatch(0x2A, 0x19);
+    if (u4_sb.transport_edge_toggle == 1) {
+      u4_sb.active_plane_port = 1; sb_cd3f_dispatch(0x2A, 0x19);
       SB_WR(0x2A, 0x10); SB_WR(0x2A, 0x20); SB_WR(0x2A, 0x40); SB_WR(0x2A, 0x08);
-      sb_transport_edge_toggle = 0;
+      u4_sb.transport_edge_toggle = 0;
     }
   }
   if (SB_RD(0x81) & 0x08) {
-    if (sb_link_edge_toggle == 0) {
-      sb_active_plane_port = 2; sb_cd3f_dispatch(0x81, 0x08);
+    if (u4_sb.link_edge_toggle == 0) {
+      u4_sb.active_plane_port = 2; sb_cd3f_dispatch(0x81, 0x08);
       SB_WR(0x81, 0x10); SB_WR(0x81, 0x20); SB_WR(0x81, 0x40); SB_WR(0x81, 0x08);
-      sb_link_edge_toggle = 1;
+      u4_sb.link_edge_toggle = 1;
     }
   }
   if (SB_RD(0x83) & 0x08) {
-    if (sb_link_edge_toggle == 1) {
-      sb_active_plane_port = 3; sb_cd3f_dispatch(0x83, 0x09);
+    if (u4_sb.link_edge_toggle == 1) {
+      u4_sb.active_plane_port = 3; sb_cd3f_dispatch(0x83, 0x09);
       SB_WR(0x83, 0x10); SB_WR(0x83, 0x20); SB_WR(0x83, 0x40); SB_WR(0x83, 0x08);
-      sb_link_edge_toggle = 0;
+      u4_sb.link_edge_toggle = 0;
     }
   }
 }
 static void sb_db7a_route_arm(void) {
-  if (u4_connect_route_latch == 0) {
+  if (u4_pd.connect_route_latch == 0) {
     REG_CPU_CTRL_CA60 &= 0xF7;
     REG_CPU_CTRL_CA60 = REG_CPU_CTRL_CA60;
     REG_PHY_LINK_TRIGGER &= 0xEF;
@@ -795,7 +795,7 @@ static void sb_db7a_route_arm(void) {
 }
 
 static void sb_con_consequence(void) {
-  if (u4_conn_consequence_done) return;
+  if (u4_sb.conn_consequence_done) return;
 
   if (P1_RD(0x0109) & 0x01) {
     P1_WR(0x0109, P1_RD(0x0109) & 0xFE);
@@ -813,15 +813,15 @@ static void sb_con_consequence(void) {
   REG_TIMER0_CSR = 0x02;
   P1_WR(0x0100, (P1_RD(0x0100) & 0xBF) | 0x40);
   P1_WR(0x0100, (P1_RD(0x0100) & 0x7F) | 0x80);
-  u4_conn_consequence_done = 1;
+  u4_sb.conn_consequence_done = 1;
   sb_db7a_route_arm();
 }
 
 static void u4lb_c593(void);
 static void sb_lane_bonded_consequence(void) {
-  lb_lane_bonded_flag = 1;
+  u4_sb.lane_bonded_flag = 1;
   SB_WR(0xC9, 0xFF);
-  sb_active_port_rr = (uint8_t)((SB_RD(0x24) & 0x06) >> 1);
+  u4_sb.active_port_rr = (uint8_t)((SB_RD(0x24) & 0x06) >> 1);
   u4lb_c593();
 }
 
@@ -869,12 +869,12 @@ static void sb_connect_service_reservice_d7cd(void) {
   if ((REG_CPU_CTRL_CA81 & 0x01) == 0x01) return;
   r7 = REG_PCIE_LINK_CTRL_B481;
   REG_PCIE_LINK_CTRL_B481 = 0xFF;
-  if (u4_reinit_pending == 0) {
+  if (u4_p12.reinit_pending == 0) {
     uint8_t lc = (uint8_t)(r7 & 0x03);
     if (lc != 0) {
       REG_CPU_TIMER_CTRL_CD31 = 0x04;
       REG_CPU_TIMER_CTRL_CD31 = 0x02;
-      u4_reinit_pending = (uint8_t)(lc - 1);
+      u4_p12.reinit_pending = (uint8_t)(lc - 1);
     }
     { uint8_t cd31 = REG_CPU_TIMER_CTRL_CD31;
       if (((cd31 & 0x01) == 0) || ((cd31 >> 1) & 0x01))
@@ -888,8 +888,8 @@ static void sb_connect_service_reservice_d7cd(void) {
 }
 
 static void sb_lane_bond_complete_tunnel_up(void) {
-  if (tup_e52d_done) return;
-  tup_e52d_done = 1;
+  if (u4_boot.tup_e52d_done) return;
+  u4_boot.tup_e52d_done = 1;
 
   sb_rom_descriptor_load();
   REG_CPU_CTRL_CA60 &= 0xF7;
@@ -899,7 +899,7 @@ static void sb_lane_bond_complete_tunnel_up(void) {
 }
 
 static void sb_channel_connect_service(void) {
-  uint8_t port = sb_active_port_rr;
+  uint8_t port = u4_sb.active_port_rr;
   uint8_t lo, hi, n;
 
   sb_edd9_receive_ack();
@@ -916,11 +916,11 @@ static void sb_channel_connect_service(void) {
 
   n = lo & 0x0F;
   if (n == 1 || n == 5) {
-    sb_route_up_trigger = 1;
+    u4_sb.route_up_trigger = 1;
     return;
   }
   if (n == 3) {
-    if (sb_link_reinit_gate != 0) {
+    if (u4_p12.link_reinit_gate != 0) {
       SB_WR(0x50, 0x40);
       SB_WR(0x5A, 0x40);
       P1_WR(0x0109, (uint8_t)(P1_RD(0x0109) | 0x01));
@@ -931,15 +931,15 @@ static void sb_channel_connect_service(void) {
     return;
   }
   if (n == 0) {
-    if (u4_fsm_state == 3) {
-      if (pd_cm_dispatch_sel == 0x69) return;
+    if (u4_sb.state == 3) {
+      if (u4_pd.cm_dispatch_sel == 0x69) return;
       return;
     }
     if ((((lo & 0x20) >> 5) & 7) == 0) return;
     SB_WR(0x5A, 0x40);
     u4_work_buf[0x19] &= 0xFD;
     if (!(u4_work_buf[0x19] & 0x01)) {
-      lb_laneA_cl0_latch = 0; lb_laneB_cl0_latch = 0;
+      u4_sb.laneA_cl0_latch = 0; u4_sb.laneB_cl0_latch = 0;
     } else {
       (void)SB_RD(0xA0);
     }
@@ -948,8 +948,8 @@ static void sb_channel_connect_service(void) {
 }
 
 static void sb_clear_cl0_width_latches(void) {
-  lb_laneA_cl0_latch = 0;
-  lb_laneB_cl0_latch = 0;
+  u4_sb.laneA_cl0_latch = 0;
+  u4_sb.laneB_cl0_latch = 0;
 }
 
 static void sb_set_d4_peer_cl0(void) {
@@ -967,45 +967,45 @@ static void sb_a5d8_tx(uint8_t is_e1cb) {
   SB_WR(0x15, is_e1cb ? (uint8_t)((sb_tx_cmd << 1) | 0x41) : (uint8_t)sb_tx_cmd);
   u4lb_d5da(0);
   REG_XFER2_DMA_STATUS = 0x04; REG_XFER2_DMA_STATUS = 0x02; REG_XFER2_DMA_STATUS = 0x01;
-  e461_inflight_token = 0x01;
+  u4_sb.e461_inflight_token = 0x01;
 }
 
 static void sb_a5d8_pend_int(void) {
   static __xdata uint8_t opcode_byte, opcode, i, op_idx, len;
 
-  u4_routerop_desc0 = sb_routerop_hdr0;
-  u4_routerop_desc1 = sb_routerop_hdr1;
-  u4_routerop_desc2 = sb_routerop_hdr2;
-  u4_routerop_desc3 = sb_routerop_hdr3;
+  u4_cfg.routerop_desc0 = u4_rop_hdr.hdr0;
+  u4_cfg.routerop_desc1 = u4_rop_hdr.hdr1;
+  u4_cfg.routerop_desc2 = u4_rop_hdr.hdr2;
+  u4_cfg.routerop_desc3 = u4_rop_hdr.hdr3;
 
-  if (!(u4_routerop_desc3 & 0x80)) return;
+  if (!(u4_cfg.routerop_desc3 & 0x80)) return;
 
-  u4_routerop_op_lo = u4_routerop_desc0;
-  u4_routerop_op_len = u4_routerop_desc1;
-  opcode_byte = u4_routerop_desc2;
+  u4_routerop_op_lo = u4_cfg.routerop_desc0;
+  u4_routerop_op_len = u4_cfg.routerop_desc1;
+  opcode_byte = u4_cfg.routerop_desc2;
   u4_routerop_opcode = (uint8_t)(opcode_byte & 7);
   u4_routerop_svid_hi = (uint8_t)(opcode_byte >> 4);
-  u4_routerop_flag = (uint8_t)(u4_routerop_desc3 & 1);
+  u4_routerop_flag = (uint8_t)(u4_cfg.routerop_desc3 & 1);
   u4_routerop_port = sb_af38_rom21a1[u4_routerop_op_lo];
 
   opcode = u4_routerop_opcode;
   if (opcode != 0) {
     if (opcode != 1 && opcode != 2) return;
-    sb_cdf5_substate_arm = 1;
+    u4_sb.cdf5_substate_arm = 1;
     if (u4_routerop_flag != 0) {
-      pd_msg_type = 0;
-      while (pd_msg_type < u4_routerop_op_len && pd_msg_type != 0x40) {
-        i = pd_msg_type;
+      u4_cfg.msg_type = 0;
+      while (u4_cfg.msg_type < u4_routerop_op_len && u4_cfg.msg_type != 0x40) {
+        i = u4_cfg.msg_type;
         SBTX_WR(i + 2, sb_routerop_body[i]);
         SBTX_WR(i + 3, sb_routerop_body[0x1 + i]);
         SBTX_WR(i + 4, sb_routerop_body[0x2 + i]);
         SBTX_WR(i + 5, sb_routerop_body[0x3 + i]);
-        pd_msg_type = (uint8_t)(i + 4);
+        u4_cfg.msg_type = (uint8_t)(i + 4);
       }
     }
     if (u4_routerop_opcode == 1) {
       sb_tx_flag = u4_routerop_flag;
-      sb_tx_cmd = (uint8_t)(u4_route_enable_latch | 0x01);
+      sb_tx_cmd = (uint8_t)(u4_sb.route_enable_latch | 0x01);
       sb_tx_byte0 = u4_routerop_op_lo;
       sb_tx_byte1 = u4_routerop_op_len;
       sb_a5d8_tx(0);
@@ -1025,54 +1025,54 @@ static void sb_a5d8_pend_int(void) {
         (len = sb_width_lut[(uint16_t)op_idx]) != 0 &&
         sb_branchA_gate[(uint16_t)op_idx] != 0 &&
         u4_routerop_op_len <= len) {
-      pd_msg_type = 0;
-      while (pd_msg_type < u4_routerop_op_len) {
-        i = pd_msg_type;
+      u4_cfg.msg_type = 0;
+      while (u4_cfg.msg_type < u4_routerop_op_len) {
+        i = u4_cfg.msg_type;
         u4_work_buf[(uint8_t)(u4_routerop_port + i)] = sb_routerop_body[i];
-        pd_msg_type = (uint8_t)(i + 1);
+        u4_cfg.msg_type = (uint8_t)(i + 1);
       }
-      u4_routerop_desc1 = len;
+      u4_cfg.routerop_desc1 = len;
       if (op_idx == 8) {
         uart_puts("[a5d8:cm8]");
       }
     } else {
       uart_puts("\r\n[RdCmdErr]");
-      u4_routerop_desc1 = 0;
-      u4_routerop_desc3 = (uint8_t)(u4_routerop_desc3 | 0x04);
+      u4_cfg.routerop_desc1 = 0;
+      u4_cfg.routerop_desc3 = (uint8_t)(u4_cfg.routerop_desc3 | 0x04);
     }
   } else {
     op_idx = u4_routerop_op_lo;
     if (op_idx < 0x12 &&
         (len = sb_width_lut[(uint16_t)op_idx]) != 0) {
       if (u4_routerop_op_len > len) u4_routerop_op_len = len;
-      pd_msg_type = 0;
-      while (pd_msg_type < u4_routerop_op_len) {
-        i = pd_msg_type;
+      u4_cfg.msg_type = 0;
+      while (u4_cfg.msg_type < u4_routerop_op_len) {
+        i = u4_cfg.msg_type;
         sb_routerop_body[i] = u4_work_buf[(uint8_t)(u4_routerop_port + i)];
-        pd_msg_type = (uint8_t)(i + 1);
+        u4_cfg.msg_type = (uint8_t)(i + 1);
       }
-      u4_routerop_desc1 = len;
+      u4_cfg.routerop_desc1 = len;
     } else {
       uart_puts("\r\n[WrCmdErr]");
-      u4_routerop_desc1 = 0;
-      u4_routerop_desc3 = (uint8_t)(u4_routerop_desc3 | 0x04);
+      u4_cfg.routerop_desc1 = 0;
+      u4_cfg.routerop_desc3 = (uint8_t)(u4_cfg.routerop_desc3 | 0x04);
     }
   }
 
-  u4_routerop_desc3 = (uint8_t)(u4_routerop_desc3 & 0x7F);
-  sb_routerop_hdr0 = u4_routerop_desc0;
-  sb_routerop_hdr1 = u4_routerop_desc1;
-  sb_routerop_hdr2 = u4_routerop_desc2;
-  sb_routerop_hdr3 = u4_routerop_desc3;
+  u4_cfg.routerop_desc3 = (uint8_t)(u4_cfg.routerop_desc3 & 0x7F);
+  u4_rop_hdr.hdr0 = u4_cfg.routerop_desc0;
+  u4_rop_hdr.hdr1 = u4_cfg.routerop_desc1;
+  u4_rop_hdr.hdr2 = u4_cfg.routerop_desc2;
+  u4_rop_hdr.hdr3 = u4_cfg.routerop_desc3;
   SB_WR(0x06, 0x01);
 }
 
 static void sb_cdf5_routerop_response(uint8_t r) {
   uint8_t hdr1_new, hdr3_orig, w3, i, len;
   if (r == 1) return;
-  sb_cdf5_substate_arm = 0;
+  u4_sb.cdf5_substate_arm = 0;
   hdr1_new  = (uint8_t)(u4_host_desc[0x1] & 0x7F);
-  hdr3_orig = sb_routerop_hdr3;
+  hdr3_orig = u4_rop_hdr.hdr3;
   if (r == 2) {
     w3 = (uint8_t)(hdr3_orig | 0x02);
   } else {
@@ -1087,8 +1087,8 @@ static void sb_cdf5_routerop_response(uint8_t r) {
     }
   }
   w3 = (uint8_t)(w3 & 0x7F);
-  sb_routerop_hdr1 = hdr1_new;
-  sb_routerop_hdr3 = w3;
+  u4_rop_hdr.hdr1 = hdr1_new;
+  u4_rop_hdr.hdr3 = w3;
   SB_WR(0x06, 0x01);
 }
 
@@ -1097,11 +1097,11 @@ static void sb_router_event_handler(void) {
 
   for (idx = 0; idx < 4; idx++) {
     bm = SB_RD(0xC9);
-    if ((bm & (uint8_t)(1u << (4 + idx))) && sb_active_port_rr == idx) {
+    if ((bm & (uint8_t)(1u << (4 + idx))) && u4_sb.active_port_rr == idx) {
       sb_channel_connect_service();
       sb_write_c9_ack(idx);
       sb_write_c9_ack((uint8_t)(idx + 4));
-      sb_active_port_rr = (uint8_t)((sb_active_port_rr + 1) & 3);
+      u4_sb.active_port_rr = (uint8_t)((u4_sb.active_port_rr + 1) & 3);
       if (P1_RD(0x0109) & 0x01)
         sb_lane_bond_complete_tunnel_up();
     }
@@ -1209,14 +1209,14 @@ static void sb_router_event_handler(void) {
 static void sb_cb10_lane_advance(void) {
   uint8_t nibble, lat;
   nibble = SB_RD(0xA0) & 0x0F;
-  lat = lb_laneA_cl_latch;
+  lat = u4_sb.laneA_cl_latch;
   if (nibble != lat) {
-    lb_laneA_cl_latch = nibble;
+    u4_sb.laneA_cl_latch = nibble;
   }
   nibble = SB_RD(0xA1) & 0x0F;
-  lat = lb_laneB_cl_latch;
+  lat = u4_sb.laneB_cl_latch;
   if (nibble != lat) {
-    lb_laneB_cl_latch = nibble;
+    u4_sb.laneB_cl_latch = nibble;
   }
 }
 

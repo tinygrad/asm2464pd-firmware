@@ -413,7 +413,7 @@ void int0_isr(void) __interrupt(0) {
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
         /* In USB4 mode do not drop to USB2 (that abandons lane training); only ack. */
-        if (!(u4_mode_flag & 0x83)) {
+        if (!(u4_cfg.mode_flag & 0x83)) {
           uart_puts("[USB2 fallback]\n");
           // fallback to USB2
           is_usb2 = 1;
@@ -463,7 +463,7 @@ void int1_isr(void) __interrupt(1) {
   if (REG_INT_SYSTEM & 0x01) cc_pd_timer_tick();
   if (REG_CPU_EXEC_STATUS_2 & 0x04) { REG_CPU_EXEC_STATUS_2 = 0x04; }
   if (REG_INT_PCIE_NVME & 0x40) pd_rx_isr();
-  if (u4_mode_flag & 0x83) usb4_int_demux();
+  if (u4_cfg.mode_flag & 0x83) usb4_int_demux();
   if (REG_INT_SYSTEM & 0x10) { /* C806.4 ack-only (no-op) */ }
   DPX = saved_dpx;
 }
@@ -478,7 +478,7 @@ void main(void) {
   // Flash controller for the USB serial OTP read.
   flash_init();
 
-  u4_mode_flag = HANDMADE_USB4_MODE_FLAGS;
+  u4_cfg.mode_flag = HANDMADE_USB4_MODE_FLAGS;
 
 #if HANDMADE_USB4_MODE_FLAGS
   // Type-C SBU + PHY config + SB-block enable; powers the sideband transport.
@@ -487,16 +487,16 @@ void main(void) {
   // Seed the lane-engine link width/mode and the USB4 tunnel state flags.
   bank0_92c5_seed();
 
-  u4_dp_alt_mode = 3;
-  u4_cap20g_gate0 = 1; u4_cap20g_gate1 = 1;
-  u4_sb_desc_profile = 3; u4_capability_profile = 1; u4_lane_gate_sel = 3;
-  pd_product_pid_lo = 0x63;
-  pd_product_pid_hi = 0x24;
+  u4_cfg.dp_alt_mode = 3;
+  u4_cfg.cap20g_gate0 = 1; u4_cfg.cap20g_gate1 = 1;
+  u4_cfg.sb_desc_profile = 3; u4_cfg.capability_profile = 1; u4_cfg.lane_gate_sel = 3;
+  u4_cfg.product_pid_lo = 0x63;
+  u4_cfg.product_pid_hi = 0x24;
 
-  u4_tunnel_cfg_hi = 0x21;
-  u4_tunnel_cfg_lo = 0x1B;
-  u4_tunnel_cfg_mode = 0x63;
-  u4_tunnel_credits = 0x24;
+  u4_cfg.tunnel_cfg_hi = 0x21;
+  u4_cfg.tunnel_cfg_lo = 0x1B;
+  u4_cfg.tunnel_cfg_mode = 0x63;
+  u4_cfg.tunnel_credits = 0x24;
 
   pcie_tunnel_adapter_enable_b401();
 
@@ -504,7 +504,7 @@ void main(void) {
   u4lb_e96c();
 #endif
 
-  if (!(u4_mode_flag & 0x83)) {
+  if (!(u4_cfg.mode_flag & 0x83)) {
     usb_phy_tune();
 
     // PCIe TLP engine values that don't change + tuning
@@ -537,34 +537,34 @@ void main(void) {
   usb4_routerop_init();
 #endif
 
-  if (!(u4_mode_flag & 0x83)) {
+  if (!(u4_cfg.mode_flag & 0x83)) {
     // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
     usb_init_controller(0);
   }
 
 #if HANDMADE_USB4_MODE_FLAGS
   { uint8_t z; for (z = 0; z < U4_ROUTEROP_MBOX_CLEAR_LEN; z++) U4_XDATA_BYTES(u4_routerop_mbox_state)[z] = 0; }
-  sb_active_port_rr = 0;
-  sb_route_up_trigger = 0; lb_lane_bonded_flag = 0;
-  lb_laneA_cl0_latch = 0; lb_laneB_cl0_latch = 0;
-  sb_transport_edge_toggle = 0; sb_link_edge_toggle = 0; sb_active_plane_port = 0;
-  u4_conn_consequence_done = 0; u4_fsm_state = U4FSM_IDLE;
-  cm_conn_routing_substate = CONNRT_PRINT_STATUS; lb_loop1_state[0] = LP1_PARKED; lb_loop1_state[1] = LP1_PARKED;
-  lb_loop2_state[0] = LP2_CL_IDLE; lb_loop2_state[1] = LP2_CL_IDLE; u4_route_enable_latch = 0;
-  sb_connect_present = 0; lb_lane_width_cnt_hi = 0; lb_lane_width_cnt_lo = 0;
-  sb_connect_descriptor = 0; sb_tx_command_desc = 0;
-  u4_connect_oneshot_suppress = 0;
+  u4_sb.active_port_rr = 0;
+  u4_sb.route_up_trigger = 0; u4_sb.lane_bonded_flag = 0;
+  u4_sb.laneA_cl0_latch = 0; u4_sb.laneB_cl0_latch = 0;
+  u4_sb.transport_edge_toggle = 0; u4_sb.link_edge_toggle = 0; u4_sb.active_plane_port = 0;
+  u4_sb.conn_consequence_done = 0; u4_sb.state = U4FSM_IDLE;
+  u4_sb.conn_routing_substate = CONNRT_PRINT_STATUS; lb_loop1_state[0] = LP1_PARKED; lb_loop1_state[1] = LP1_PARKED;
+  lb_loop2_state[0] = LP2_CL_IDLE; lb_loop2_state[1] = LP2_CL_IDLE; u4_sb.route_enable_latch = 0;
+  u4_sb.connect_present = 0; u4_sb.lane_width_cnt_hi = 0; u4_sb.lane_width_cnt_lo = 0;
+  u4_sb.connect_descriptor = 0; u4_sb.tx_command_desc = 0;
+  u4_pd.connect_oneshot_suppress = 0;
 
-  pcie_ctrl_b402_shadow = 0;
-  pd_seen = 0;
-  sb_asserted = 0;
-  tup_e52d_done = 0;
+  u4_boot.pcie_ctrl_b402_shadow = 0;
+  u4_boot.pd_seen = 0;
+  u4_boot.sb_asserted = 0;
+  u4_boot.tup_e52d_done = 0;
 #endif
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
-  if (!(u4_mode_flag & 0x83)) {
+  if (!(u4_cfg.mode_flag & 0x83)) {
     i2c_init();
     ina231_init();
   }
@@ -574,23 +574,23 @@ void main(void) {
 #endif
   while (1) {
 #if HANDMADE_USB4_MODE_FLAGS
-    if ((u4_mode_flag & 0x83) && u4_conn_consequence_done) {
+    if ((u4_cfg.mode_flag & 0x83) && u4_sb.conn_consequence_done) {
       IE &= (uint8_t)~IE_EA;
       sb_cb10_lane_advance();
-      if (u4_fsm_state != U4FSM_IDLE) {
+      if (u4_sb.state != U4FSM_IDLE) {
         uint16_t cur = u4lb_ee57();
         uint8_t cur_hi = (uint8_t)(cur >> 8), cur_lo = (uint8_t)cur;
-        uint8_t snap_hi = lb_walk_throttle_snap_hi, snap_lo = lb_walk_throttle_snap_lo;  /* 0x076A:0x076B */
+        uint8_t snap_hi = u4_sb.walk_throttle_snap_hi, snap_lo = u4_sb.walk_throttle_snap_lo;  /* 0x076A:0x076B */
         uint8_t d_lo = (uint8_t)(snap_lo - cur_lo);
         uint8_t d_hi = (uint8_t)(snap_hi - cur_hi - (uint8_t)((snap_lo < cur_lo) ? 1 : 0));
         if (d_hi >= (uint8_t)((d_lo < 3) ? 1 : 0)) {
           u4lb_e672();
           cur = u4lb_ee57();
-          lb_walk_throttle_snap_hi = (uint8_t)(cur >> 8);
-          lb_walk_throttle_snap_lo = (uint8_t)cur;
+          u4_sb.walk_throttle_snap_hi = (uint8_t)(cur >> 8);
+          u4_sb.walk_throttle_snap_lo = (uint8_t)cur;
         }
       }
-      if (sb_cdf5_substate_arm != 0) sb_cdf5_routerop_response(u4lb_eda0());
+      if (u4_sb.cdf5_substate_arm != 0) sb_cdf5_routerop_response(u4lb_eda0());
       IE |= IE_EA;
     }
 
@@ -605,15 +605,15 @@ void main(void) {
       IE |= IE_EA;
     }
 
-    if (u4_conn_consequence_done) {
+    if (u4_sb.conn_consequence_done) {
       continue;
     }
-    if (sb_asserted) { uint32_t b; for (b = 0; b < 60000UL; b++) { __asm nop __endasm; } }
+    if (u4_boot.sb_asserted) { uint32_t b; for (b = 0; b < 60000UL; b++) { __asm nop __endasm; } }
     else             { sleep(500); }
     /* Give the host a settle window before each Hard Reset kick. Repeated immediate kicks can keep
      * power-cycling the device before the PD contract completes. */
     { static __xdata uint8_t pd_settle = 0;
-      if (!pd_seen) {
+      if (!u4_boot.pd_seen) {
         if (pd_settle < 12) { pd_settle++; }
         else if (kicks < 8) { pd_drive_hard_reset(); kicks++; pd_settle = 0; }
       }
