@@ -238,6 +238,7 @@ static void cc_pd_timer_tick(void) {
     REG_CPU_DMA_INT = 0x02;
     uart_puts("[1 sec time out]\n");
     u4_cfg.route_mode = 0x04;
+    u4_entered_usb_mode = usb4_mode_entry_commit();
   }
   if (REG_XFER_DMA_CFG & 0x02) {                 /* CC99.1: role-dependent reset */
     uint8_t role = u4_pd.role_state;
@@ -667,6 +668,21 @@ static void vdm_build_discover_modes(void) {
   vdm_nak();
 }
 
+/* Device-side USB4 mode-entry latch. */
+static uint8_t usb4_mode_entry_commit(void) {
+  uint8_t mode_flags = u4_cfg.mode_flag;
+  if (mode_flags & 0x40) {
+    u4_mode_entry_class = 3;
+    u4_mode_entry_param = 1;
+    PR(0x92E1) = 0x10;
+    REG_USB_INT_MASK_9090 &= 0x7F;
+    return 4;
+  }
+  u4_mode_entry_class = 1;
+  u4_mode_entry_param = ((mode_flags & 0x81) == 0) ? 0x0D : 0x05;
+  return 1;
+}
+
 /* EnterMode responder: enter TBT alt-mode for SVID 0x8087, else generic ACK. */
 static void vdm_handle_enter_mode(void) {
   uint16_t vdo0 = (uint16_t)(pd_rx_ptr() + 2);
@@ -704,6 +720,7 @@ static void pd_handle_enter_usb(void) {
   uint8_t eudo3 = PR(vdo0 + 3);
   uint8_t cable_cur = (uint8_t)((eudo1 & 0x20) >> 5);
   uint8_t mode = (uint8_t)((eudo3 & 0x70) >> 4);
+  uint8_t mode_flags;
 
   u4_routerop_flag = (uint8_t)((eudo1 & 0x40) >> 6);
   u4_routerop_opcode = (uint8_t)(eudo1 >> 7);
@@ -713,7 +730,13 @@ static void pd_handle_enter_usb(void) {
   u4_routerop_port = mode;
   pd_tx_buf_clear();
 
-  if (mode == 2 && u4_pd.role_state == 0) {
+  mode_flags = u4_cfg.mode_flag;
+  if ((mode_flags & 0x03) == 0) {
+    REG_CMD_CFG_E405 &= 0xF8;
+    u4_cfg.route_mode = 4;
+    usb4_mode_entry_commit();
+    u4_entered_usb_mode = mode;
+  } else if (mode == 2 && u4_pd.role_state == 0) {
     pd_tx_set_sop_header(0, 3);
     if (cable_cur) {
       uart_puts("[Enter_USB 4]");
