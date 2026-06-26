@@ -2409,6 +2409,11 @@
 #define REG_BANK_0200           XDATA_REG8(0x0200)  /* Bank register at 0x0200 */
 #define REG_BANK_1200           XDATA_REG8(0x1200)  /* Bank register at 0x1200 */
 #define REG_BANK_1235           XDATA_REG8(0x1235)  /* Bank register at 0x1235 */
+/* Direct page-1 accessors used by the src/ firmware (handmade uses the P1_USB4_* addresses below). */
+#define REG_BANK_1407           XDATA_REG8(0x1407)  /* Bank register at 0x1407 (= P1_USB4_ADP_EVENT_STATUS_1407) */
+#define REG_BANK_1504           XDATA_REG8(0x1504)  /* Bank register at 0x1504 */
+#define REG_BANK_1507           XDATA_REG8(0x1507)  /* Bank register at 0x1507 (= P1_USB4_TUNNEL_EVENT_MASK_1507) */
+#define REG_BANK_1603           XDATA_REG8(0x1603)  /* Bank register at 0x1603 (= P1_USB4_BOOT_TAIL_EVENT_1603) */
 /* USB4 page-1 config-space and event registers. Use P1_RD/P1_WR, not direct XDATA_REG8. */
 #define P1_USB4_LANE_ADP_CURRENT_WIDTH  0x1201u  /* c251 current-width leaf. HW-write-locked. */
 #define P1_USB4_LANE_ADP_CFG_1202       0x1202u  /* c8c7 config-space byte. HW-write-locked. */
