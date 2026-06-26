@@ -521,10 +521,10 @@ void main(void) {
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
-  if (!(u4_cfg.mode_flag & 0x83)) {
-    i2c_init();
-    ina231_init();
-  }
+  // INA231 power monitor: init in both modes so the 0xC0 hw_status vendor
+  // request works over USB3 and over the USB4-tunneled USB function.
+  i2c_init();
+  ina231_init();
 
 #if HANDMADE_USB4_MODE_FLAGS
   uint8_t kicks = 0;
