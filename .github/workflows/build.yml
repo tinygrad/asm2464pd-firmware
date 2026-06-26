@@ -18,14 +18,14 @@ jobs:
 
       - name: Build firmware
         run: |
-          make clean
-          make
-          make wrapped
+          make -C handmade clean
+          make -C handmade
+          make -C handmade wrapped
 
       - name: Archive firmware artifacts
         uses: actions/upload-artifact@v4
         with:
           name: asm2464pd-firmware
           path: |
-            build/firmware.bin
-            build/firmware_wrapped.bin
+            handmade/build/firmware.bin
+            handmade/build/firmware_wrapped.bin
