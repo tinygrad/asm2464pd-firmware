@@ -19,8 +19,10 @@ static uint8_t gpio_read(uint8_t gpio_num) {
 }
 
 #define GPIO_LED_R      0
+#define GPIO_BOB_FLT_N  1
 #define GPIO_LED_G      8
 #define GPIO_LED_B      14
+#define GPIO_ATX_EN     15
 
 static void led_set_rgb(bool r, bool g, bool b) {
     gpio_set(GPIO_LED_R, r ? GPIO_LOW : GPIO_HIGH);
