@@ -35,7 +35,7 @@ SUPPORTED_DEVICES = [
 ]
 
 # =============================================================================
-# ASM2464PD XDATA Register Map (from src/include/registers.h)
+# ASM2464PD XDATA Register Map (from handmade/src/registers.h)
 # =============================================================================
 
 # --- CPU Control / LTSSM Controller (CC3x) ---
@@ -1199,7 +1199,6 @@ def full_bringup(dev, skip_hw=False):
     if not skip_hw:
         # NOTE: hw_init() is NOT replicated here because the firmware
         # (handmade/src/main.c) already runs minimal hardware init at boot.
-        # The clean/src/main.c firmware also runs its own hw_init().
         # If needed, hw_init() register writes can be done here, but most
         # of them configure USB/interrupt state which is already active.
         print("\n[Skipping hw_init — firmware handles this at boot]")

@@ -121,3 +121,10 @@ flash: $(BUILD_DIR)/firmware_wrapped.bin
 	@python3 ../flash.py $<
 	@echo "Resetting device..."
 	@python3 ../ftdi_debug.py -rt 2
+
+# Clean build artifacts
+clean:
+	rm -rf $(BUILD_DIR)
+	rm -f $(SRC_DIR)/*.asm $(SRC_DIR)/*.lst $(SRC_DIR)/*.sym
+	rm -f $(SRC_DIR)/*.rel $(SRC_DIR)/*.rst $(SRC_DIR)/*.map
+	rm -f *.lk *.mem *.map

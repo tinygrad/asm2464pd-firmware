@@ -111,7 +111,7 @@ patches = [(0x2a0d + 1 + 4, b'\x0a', b'\x05')]
 At code address 0x2a0d, there's a SCSI write completion status check:
 
 ```c
-// From src/app/protocol.c lines 2250-2267
+// Decompiled from firmware code address 0x2a0d
 if (*ptr != 0) {
     goto return_0x0a;  // Return error code 10
 }
