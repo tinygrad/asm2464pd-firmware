@@ -28,6 +28,8 @@ static void P1_REG8_wr(uint16_t off, uint8_t v) {
 #define P12_RD(off)     P1_REG8_rd((uint16_t)(0x1200u + (off)))
 #define P12_WR(off, v)  P1_REG8_wr((uint16_t)(0x1200u + (off)), (uint8_t)(v))
 
+static void u4lb_desc_emit_lanes(uint8_t ctrl_bits, uint8_t set_lanes);  /* ce23 */
+
 static __code const uint8_t sb_lane_rate_desc[0x10] = {
   0x00,0x06,0x0B,0x0E,0x13,0x00,0x05,0x0A, 0x0E,0x11,0x00,0x05,0x08,0x0D,0x00,0x04
 };
@@ -105,6 +107,37 @@ static __code const uint8_t drom_identity[0x64] = {
   0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
   0x00,0x00,0x00,0x00
 };
+static __code const uint8_t usb4_drom_window[0x7A] = {
+  0x38,0xC0,0xF8,0x0B,0x03,0x03,0x03,0x4C, 0x17,0xC3,0x47,0xD5,0xF1,0x01,0x6D,0x00,
+  0xD1,0xAD,0x01,0x00,0x01,0x01,0x02,0xC4, 0x08,0x81,0x80,0x02,0x00,0x00,0x00,0x00,
+  0x08,0x82,0x90,0x01,0x00,0x00,0x00,0x00, 0x0B,0x83,0x20,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x17,0x01,0x74,0x69,0x6E, 0x79,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00, 0x00,0x00,0x1E,0x02,0x63,0x75,0x73,0x74,
+  0x6F,0x6D,0x20,0x76,0x30,0x2E,0x31,0x00, 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00, 0x03,0x08,0x00,0x0F,0x09,0x10,0x04,0xD1,
+  0xAD,0x01,0x00,0x01,0x00,0x66,0x06,0x00, 0xC0,0x5A
+};
+static __code const uint8_t usb4_router_cfg_seed[] = {
+  0x06, 0x00,0x00,0x00,0x03,
+  0x09, 0x00,0x00,0x00,0x00,
+  0x0A, 0x00,0x00,0x00,0x00,
+  0x0B, 0x00,0x00,0x1E,0x02,
+  0x0C, 0x63,0x75,0x73,0x74,
+  0x0D, 0x6F,0x6D,0x20,0x76,
+  0x0E, 0x30,0x2E,0x31,0x00,
+  0x0F, 0x00,0x00,0x00,0x00,
+  0x10, 0x00,0x00,0x00,0x00,
+  0x11, 0x00,0x00,0x00,0x00,
+  0x12, 0x00,0x00,0x00,0x00,
+  0x13, 0x03,0x08,0x00,0x0F,
+  0x14, 0x09,0x10,0x04,0xD1,
+  0x15, 0xAD,0x01,0x00,0x01,
+  0x16, 0x00,0x66,0x06,0x00,
+  0x17, 0xC0,0x5A,0x00,0x00,
+  0x18, 0x00,0x00,0x00,0x00,
+  0x19, 0x00,0x00,0x00,0x00,
+  0x1A, 0x25,0x00,0x00,0x02
+};
 static __code const uint8_t lane_descriptor[0x10] = {
   0x0B,0x0B,0x0B,0x0B,0x0B,0x0B,0x0C,0x0C, 0x0C,0x0C,0x0C,0x07,0x07,0x07,0x07,0x07
 };
@@ -115,8 +148,16 @@ static __code const uint8_t branchA_gate[0x13] = {
   0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00, 0x01,0x01,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x01
 };
 
+static void u4c_drom_window_load(void) {
+  uint8_t i;
+  for (i = 0; i < sizeof(usb4_drom_window); i++) {
+    PR((uint16_t)(P1_USB4_DROM_SHADOW_0240 + i)) = usb4_drom_window[i];
+  }
+}
+
 static void sb_rom_descriptor_load(void) {
   uint8_t i;
+  u4c_drom_window_load();
   for (i = 0; i < 0x64; i++) u4_work_buf[i] = drom_identity[i];
   u4_work_buf[0x4] = u4_cfg.product_pid_lo;
   u4_work_buf[0x5] = u4_cfg.product_pid_hi;
@@ -499,16 +540,25 @@ static uint8_t sb_eng_nibble_merge(uint16_t addr) {  /* bbc7/bcb8 */
 static void sb_eng_data_init(void) {  /* bbc7 */
   uint8_t i;
   for (i = 0; i < 9; i++) P12_WR((uint8_t)(0x12 + i), 0x00);
+
+  XDATA_REG8V(0x09F9) = 0x87;
+  XDATA_REG8V(0x09FB) = 0x03;  /* stock lane-gate status: both optional ccb3 descriptors disabled */
+  XDATA_REG8V(0x0A57) = u4_cfg.product_pid_lo;
+  XDATA_REG8V(0x0A58) = u4_cfg.product_pid_hi;
+
   u4_p12.data_hi = 0x17; u4_p12.data_lo = 0x4C;
-  sb_eng_nibble_acc = XDATA_REG8(0x0A41);
-  u4_p12.p12_desc_a1 = sb_eng_nibble_swap(0x0A40);
-  u4_p12.p12_desc_a0 = sb_eng_nibble_merge(0x0A3F);
-  sb_eng_nibble_acc = 0;
-  u4_p12.p12_desc_b3 = sb_eng_nibble_swap(0x0A3E);
-  u4_p12.p12_desc_b2 = sb_eng_nibble_merge(0x0A3D);
-  sb_eng_nibble_acc = 0;
-  u4_p12.p12_desc_b1 = sb_eng_nibble_swap(0x0A3C);
-  u4_p12.p12_desc_b0 = u4_cfg.lb_width_rate_code;
+  u4_p12.p12_desc_a0 = 0x03; u4_p12.p12_desc_a1 = 0x03;
+  u4_p12.p12_desc_b0 = 0xC0; u4_p12.p12_desc_b1 = 0xF8;
+  u4_p12.p12_desc_b2 = 0x0B; u4_p12.p12_desc_b3 = 0x03;
+
+  XDATA_REG8V(0x0B13) = u4_p12.p12_desc_b0;
+  XDATA_REG8V(0x0B14) = u4_p12.p12_desc_b1;
+  XDATA_REG8V(0x0B15) = u4_p12.p12_desc_b2;
+  XDATA_REG8V(0x0B16) = u4_p12.p12_desc_b3;
+  XDATA_REG8V(0x0B17) = u4_p12.p12_desc_a0;
+  XDATA_REG8V(0x0B18) = u4_p12.p12_desc_a1;
+  XDATA_REG8V(0x0B19) = u4_p12.data_lo;
+  XDATA_REG8V(0x0B1A) = u4_p12.data_hi;
 }
 
 static void u4c_identity_desc_emit(uint8_t width_byte) {  /* c270 */
@@ -538,10 +588,366 @@ static void u4c_identity_desc_emit(uint8_t width_byte) {  /* c270 */
   u4c_sb_desc_commit();
 }
 
-static void u4c_route_mode_regs(void) {  /* d556 */
-  if (u4_cfg.route_mode & 0x02) {
-    PR(0x0250) = 0x02; PR(0x0251) = 0xC3;
+static volatile uint8_t __xdata u4c_stock_r1;
+
+static uint8_t u4c_stock_read34(void) {
+  u4c_stock_r1 = 0x34;
+  return P12_RD(0x34);
+}
+static uint8_t u4c_stock_read35(void) {
+  u4c_stock_r1 = 0x35;
+  return P12_RD(0x35);
+}
+static void u4c_stock_wr(uint8_t v) {
+  P12_WR(u4c_stock_r1, v);
+}
+static uint8_t u4c_stock_rd(void) {
+  return P12_RD(u4c_stock_r1);
+}
+static uint8_t u4c_stock_a308(uint8_t a) {
+  a = (uint8_t)((a & 0xF0) | 0x0F);
+  u4c_stock_wr(a);
+  u4c_stock_r1++;
+  a = (uint8_t)((u4c_stock_rd() & 0x3F) | 0x80);
+  u4c_stock_wr(a);
+  u4c_stock_r1++;
+  return a;
+}
+static uint8_t u4c_stock_a30c(uint8_t a) {
+  u4c_stock_wr(a);
+  u4c_stock_r1++;
+  a = (uint8_t)((u4c_stock_rd() & 0x3F) | 0x80);
+  u4c_stock_wr(a);
+  u4c_stock_r1++;
+  return a;
+}
+static uint8_t u4c_stock_a2df(uint8_t a) {
+  u4c_stock_wr(a);
+  u4c_stock_r1++;
+  a = (uint8_t)(u4c_stock_rd() & 0xE0);
+  u4c_stock_wr(a);
+  return a;
+}
+static uint8_t u4c_stock_a2de(uint8_t a) {
+  u4c_stock_r1++;
+  return u4c_stock_a2df(a);
+}
+static uint8_t u4c_stock_commit_read34(void) {
+  u4c_sb_desc_commit();
+  return u4c_stock_read34();
+}
+static uint8_t u4c_stock_a2f9(uint8_t a) {
+  u4c_stock_wr(a);
+  return u4c_stock_commit_read34();
+}
+static uint8_t u4c_stock_a2f8(uint8_t a) {
+  u4c_stock_r1++;
+  return u4c_stock_a2f9(a);
+}
+static uint8_t u4c_stock_a31c(uint8_t a) {
+  u4c_stock_wr(a);
+  u4c_stock_r1++;
+  a = (uint8_t)((u4c_stock_rd() & 0xC0) | 0x04);
+  u4c_stock_wr(a);
+  a = (uint8_t)((u4c_stock_rd() & 0x3F) | 0x40);
+  u4c_stock_wr(a);
+  return a;
+}
+static uint8_t u4c_stock_a327(uint8_t a) {
+  u4c_stock_wr(a);
+  a = (uint8_t)((u4c_stock_rd() & 0x3F) | 0x40);
+  u4c_stock_wr(a);
+  return a;
+}
+static uint8_t u4c_stock_a348(uint8_t a) {
+  u4c_stock_wr(a);
+  u4c_stock_r1++;
+  return u4c_stock_rd();
+}
+static uint8_t u4c_stock_a369(uint8_t a) {
+  u4c_stock_wr(a);
+  u4c_stock_r1++;
+  u4c_stock_wr(a);
+  u4c_stock_r1++;
+  return a;
+}
+static uint8_t u4c_stock_a3cb(void) {
+  uint8_t a = XDATA_REG8V(0x0B19);
+  u4c_stock_wr(a);
+  return a;
+}
+static uint8_t u4c_stock_a3d4(uint8_t a) {
+  u4c_stock_wr(a);
+  u4c_stock_r1++;
+  return 0x01;
+}
+static void u4c_stock_e7f8(uint8_t a) {
+  u4c_stock_wr(a);
+  u4c_sb_desc_commit();
+}
+static void u4c_router_cfg_dword_write(uint8_t idx, uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3) {
+  uint8_t a;
+  a = u4c_stock_read34();
+  a = u4c_stock_a308(a);
+  (void)a;
+  u4c_stock_a2df(idx);
+  u4c_stock_r1 = 0x3C;
+  u4c_stock_wr(b0);
+  u4c_stock_r1++;
+  u4c_stock_wr(b1);
+  u4c_stock_r1++;
+  u4c_stock_wr(b2);
+  u4c_stock_r1++;
+  u4c_stock_wr(b3);
+  u4c_sb_desc_commit();
+}
+static uint32_t u4c_router_cfg_dword_read(uint8_t idx) {
+  uint8_t a, b0, b1, b2, b3;
+  uint16_t g;
+  a = u4c_stock_read34();
+  a = u4c_stock_a308(a);
+  (void)a;
+  u4c_stock_a2df(idx);
+  P12_WR(0x37, (uint8_t)(P12_RD(0x37) & 0x7F));
+  P12_WR(0x38, 0x01);
+  for (g = 0; (P12_RD(0x38) & 0x01) && g < 0x2000; g++) { }
+  b0 = P12_RD(0x40);
+  b1 = P12_RD(0x41);
+  b2 = P12_RD(0x42);
+  b3 = P12_RD(0x43);
+  P12_WR(0x35, (uint8_t)(P12_RD(0x35) & 0xC0));
+  P12_WR(0x3C, 0x00); P12_WR(0x3D, 0x00); P12_WR(0x3E, 0x00); P12_WR(0x3F, 0x00);
+  return ((uint32_t)b0) | ((uint32_t)b1 << 8) | ((uint32_t)b2 << 16) | ((uint32_t)b3 << 24);
+}
+static void u4c_router_cfg_u32_write(uint8_t idx, uint32_t v) {
+  u4c_router_cfg_dword_write(idx,
+                             (uint8_t)v,
+                             (uint8_t)(v >> 8),
+                             (uint8_t)(v >> 16),
+                             (uint8_t)(v >> 24));
+}
+static uint8_t u4c_drom_byte(uint16_t off) {
+  if (off >= sizeof(usb4_drom_window)) return 0x00;
+  return usb4_drom_window[off];
+}
+static void u4c_native_drom_read(uint32_t metadata) {
+  uint8_t i, dwords;
+  uint16_t byte_off;
+
+  dwords = (uint8_t)((metadata >> 15) & 0x1F);
+  if (dwords == 0 || dwords > 16) dwords = 16;
+  byte_off = (uint16_t)(((metadata >> 2) & 0x1FFF) << 2);
+  for (i = 0; i < dwords; i++) {
+    uint16_t off = (uint16_t)(byte_off + ((uint16_t)i << 2));
+    u4c_router_cfg_dword_write((uint8_t)(0x09 + i),
+                               u4c_drom_byte(off),
+                               u4c_drom_byte((uint16_t)(off + 1)),
+                               u4c_drom_byte((uint16_t)(off + 2)),
+                               u4c_drom_byte((uint16_t)(off + 3)));
   }
+  u4c_router_cfg_u32_write(USB4_ROUTER_CS_OPCODE, USB4_ROUTER_OP_DROM_READ);
+}
+static void u4c_native_buffer_alloc(void) {
+  u4c_router_cfg_u32_write(USB4_ROUTER_CS_DATA0, ((uint32_t)32 << 16) | 0x0001UL);
+  u4c_router_cfg_u32_write((uint8_t)(USB4_ROUTER_CS_DATA0 + 1), ((uint32_t)1 << 16) | 0x0002UL);
+  u4c_router_cfg_u32_write((uint8_t)(USB4_ROUTER_CS_DATA0 + 2), ((uint32_t)1 << 16) | 0x0003UL);
+  u4c_router_cfg_u32_write((uint8_t)(USB4_ROUTER_CS_DATA0 + 3), ((uint32_t)32 << 16) | 0x0004UL);
+  u4c_router_cfg_u32_write((uint8_t)(USB4_ROUTER_CS_DATA0 + 4), ((uint32_t)32 << 16) | 0x0005UL);
+  u4c_router_cfg_u32_write(USB4_ROUTER_CS_METADATA, 0x00000005UL);
+  u4c_router_cfg_u32_write(USB4_ROUTER_CS_OPCODE, USB4_ROUTER_OP_BUFFER_ALLOC);
+}
+static void u4c_native_hw_status(void) {
+  static __xdata uint16_t shunt_raw, bus_raw;
+  uint16_t voltage_mv;
+  int16_t current_ma;
+
+  shunt_raw = 0;
+  bus_raw = 0;
+  (void)ina231_read_u16(INA231_REG_SHUNT, &shunt_raw);
+  (void)ina231_read_u16(INA231_REG_BUS, &bus_raw);
+  voltage_mv = (uint16_t)(((uint32_t)bus_raw * 125) / 100);
+  current_ma = (int16_t)(((int32_t)(int16_t)shunt_raw * 2500) / INA231_SHUNT_UOHM);
+
+  u4c_router_cfg_u32_write(USB4_ROUTER_CS_DATA0,
+                           ((uint32_t)(uint16_t)current_ma << 16) | voltage_mv);
+  u4c_router_cfg_u32_write(USB4_ROUTER_CS_METADATA, 0x00000001UL);
+  u4c_router_cfg_u32_write(USB4_ROUTER_CS_OPCODE, USB4_ROUTER_OP_TINY_HW_STATUS);
+}
+static void u4c_native_routerop_service(void) {
+  uint32_t op, metadata;
+  if (!u4_boot.sb_asserted) return;
+  op = u4c_router_cfg_dword_read(USB4_ROUTER_CS_OPCODE);
+  if (!(op & USB4_ROUTER_OP_OV)) return;
+
+  metadata = u4c_router_cfg_dword_read(USB4_ROUTER_CS_METADATA);
+  switch ((uint8_t)op) {
+  case USB4_ROUTER_OP_DROM_READ:
+    u4c_native_drom_read(metadata);
+    break;
+  case USB4_ROUTER_OP_NVM_SECTOR_SIZE:
+    u4c_router_cfg_u32_write(USB4_ROUTER_CS_METADATA, 0x00000000UL);
+    u4c_router_cfg_u32_write(USB4_ROUTER_CS_OPCODE, 0x02000000UL | USB4_ROUTER_OP_NVM_SECTOR_SIZE);
+    break;
+  case USB4_ROUTER_OP_BUFFER_ALLOC:
+    u4c_native_buffer_alloc();
+    break;
+  case USB4_ROUTER_OP_TINY_HW_STATUS:
+    u4c_native_hw_status();
+    break;
+  default:
+    u4c_router_cfg_u32_write(USB4_ROUTER_CS_OPCODE, (op & 0x0000FFFFUL) | USB4_ROUTER_OP_UNSUPPORTED);
+    break;
+  }
+}
+static void u4c_router_cfg_seed_usb4(void) {
+  uint8_t base;
+  for (base = 0; base < sizeof(usb4_router_cfg_seed); base = (uint8_t)(base + 5)) {
+    u4c_router_cfg_dword_write(usb4_router_cfg_seed[base],
+                               usb4_router_cfg_seed[(uint8_t)(base + 1)],
+                               usb4_router_cfg_seed[(uint8_t)(base + 2)],
+                               usb4_router_cfg_seed[(uint8_t)(base + 3)],
+                               usb4_router_cfg_seed[(uint8_t)(base + 4)]);
+  }
+}
+static void u4c_stock_ce20(uint16_t desc_addr, uint8_t val) {
+  XDATA_REG8V(desc_addr) = val;
+  u4lb_desc0_lanemask = XDATA_REG8V(0x0B34);
+  u4lb_desc1 = XDATA_REG8V(0x0B35);
+  u4lb_desc2 = XDATA_REG8V(0x0B36);
+  u4lb_desc3 = XDATA_REG8V(0x0B37);
+  u4lb_desc_emit_lanes((uint8_t)(P12_RD(0x35) & 0x3F), 1);
+  XDATA_REG8V(0x0B34) = 0;
+  XDATA_REG8V(0x0B35) = 0;
+  XDATA_REG8V(0x0B36) = 0;
+  XDATA_REG8V(0x0B37) = 0;
+}
+
+static void u4c_identity_desc_emit_stock(void) {  /* c270 */
+  uint8_t a;
+  a = u4c_stock_read34();
+  a = u4c_stock_a308(a);
+  (void)a;
+  u4c_stock_a2df(0x00);
+  u4c_stock_r1 = 0x3C;
+  u4c_stock_a3cb();
+  a = XDATA_REG8V(0x0B1A); u4c_stock_r1++; u4c_stock_wr(a);
+  a = XDATA_REG8V(0x0A57); u4c_stock_r1++; u4c_stock_wr(a);
+  a = XDATA_REG8V(0x0A58); a = u4c_stock_a2f8(a);
+
+  a = u4c_stock_a308(a);
+  (void)a;
+  u4c_stock_a2df(0x07);
+  a = XDATA_REG8V(0x0B17); u4c_stock_r1 = 0x3C; u4c_stock_wr(a);
+  a = XDATA_REG8V(0x0B18); u4c_stock_r1++; u4c_stock_wr(a);
+  u4c_stock_r1++;
+  u4c_stock_a3cb();
+  a = XDATA_REG8V(0x0B1A); a = u4c_stock_a2f8(a);
+
+  a = u4c_stock_a308(a);
+  (void)a;
+  u4c_stock_a2df(0x08);
+  a = XDATA_REG8V(0x0B13); u4c_stock_r1 = 0x3C; u4c_stock_wr(a);
+  a = XDATA_REG8V(0x0B14); u4c_stock_r1++; u4c_stock_wr(a);
+  a = XDATA_REG8V(0x0B15); u4c_stock_r1++; u4c_stock_wr(a);
+  a = XDATA_REG8V(0x0B16); u4c_stock_r1++; u4c_stock_wr(a);
+  u4c_sb_desc_commit();
+}
+
+static void u4c_lane_width_desc_stock(void) {  /* ccb3 */
+  uint8_t a;
+  a = u4c_stock_read34();
+  a = (uint8_t)((a & 0xF0) | 0x0E);
+  u4c_stock_a30c(a);
+  u4c_stock_a2df(0x01);
+  u4c_stock_r1 = 0x3C;
+  a = 0x00; u4c_stock_wr(a);
+  u4c_stock_r1++;
+  a = 0x01; u4c_stock_a369(a);
+  a = 0x00; u4c_stock_wr(a);
+  u4c_sb_desc_commit();
+
+  a = XDATA_REG8V(0x09FB);
+  if (!(a & 0x01)) {
+    a = u4c_stock_read34();
+    a = (uint8_t)((a & 0xF0) | 0x07);
+    u4c_stock_a31c(a);
+    u4c_stock_r1++;
+    u4c_stock_a2df(0x02);
+    u4c_sb_desc_commit();
+  }
+  a = XDATA_REG8V(0x09FB);
+  if (!(a & 0x02)) {
+    a = u4c_stock_read34();
+    a = (uint8_t)((a & 0xF0) | 0x07);
+    a = u4c_stock_a348(a);
+    a = (uint8_t)((a & 0xC0) | 0x03);
+    u4c_stock_a327(a);
+    u4c_stock_r1++;
+    u4c_stock_a2df(0x02);
+    u4c_sb_desc_commit();
+  }
+}
+
+static void u4c_descriptor_load_stock(void) {  /* b779 */
+  uint8_t a;
+  u4c_identity_desc_emit_stock();
+  u4c_lane_width_desc_stock();
+
+  if (!(XDATA_REG8V(0x09F9) & 0x80)) {
+    a = u4c_stock_read35();
+    u4c_stock_wr((uint8_t)((a & 0x3F) | 0x80));
+    u4c_stock_a2de(0x06);
+    u4c_stock_ce20(0x0B34, 0x02);
+  }
+
+  u4c_stock_r1 = 0x35;
+  a = u4c_stock_rd();
+  u4c_stock_wr((uint8_t)((a & 0x3F) | 0x80));
+  u4c_stock_r1++;
+  u4c_stock_a2df(0x20);
+  u4c_stock_ce20(0x0B37, 0x40);
+
+  a = u4c_stock_read34();
+  a = u4c_stock_a308(a);
+  (void)a;
+  u4c_stock_a2df(0x41);
+  u4c_stock_r1 = 0x3C;
+  u4c_stock_wr(0x01);
+  a = u4c_stock_a2f8(0x40);
+
+  a = u4c_stock_a308(a);
+  (void)a;
+  u4c_stock_a2df(0x44);
+  u4c_stock_r1 = 0x3C;
+  u4c_stock_wr(0x8A);
+  u4c_stock_r1 = 0x3E;
+  a = u4c_stock_a2f9(0x03);
+
+  a = u4c_stock_a308(a);
+  (void)a;
+  u4c_stock_a2df(0x4C);
+  u4c_stock_r1 = 0x3C;
+  u4c_stock_wr(0x00);
+  u4c_stock_r1++;
+  u4c_stock_wr(0x03);
+  u4c_stock_r1++;
+  u4c_stock_wr(0x00);
+  a = u4c_stock_a2f8(0x00);
+  a = (uint8_t)((a & 0xF0) | 0x04);
+  u4c_stock_a30c(a);
+  a = u4c_stock_a348(0x97);
+  a = (uint8_t)((a & 0xE0) | 0x01);
+  u4c_stock_wr(a);
+  u4c_stock_r1 = 0x3E;
+  u4c_stock_e7f8(0x04);
+  u4c_stock_r1 = 0x06;
+  a = u4c_stock_rd();
+  a = (uint8_t)(a & 0xDF);
+  u4c_stock_a3d4(a);
+  u4c_stock_wr(0x01);
+}
+
+static void u4c_route_mode_regs(void) {  /* d556 */
   if (u4_cfg.mode_flag & 0x80) {
     PR(0x0247) = u4_p12.data_lo; PR(0x0248) = u4_p12.data_hi;
   }
@@ -566,7 +972,6 @@ static void u4c_pcie_tunnel_ramp_tail(void) {  /* bcd7 */
 static void sb_assert(void) {
   u4c_set_sb1c_usb_mode();
   P1_SET(0x0000, 0x02);
-  u4c_desc_engine_reset();
   boot_phy_set_link_mode((u4_cfg.route_mode & 0x02) ? 2 : 1);
 
   u4c_pcie_tunnel_ramp_tail();

@@ -220,7 +220,7 @@ static void usb4_phy_arm(void) {
 
 /* EP0 IN: send `len` bytes of DESC_BUF, or a zero-length ack. */
 static void usb_send_data(uint16_t len) {
-    REG_USB_EP0_LEN_H = (uint8_t)(len >> 8);
+    REG_USB_EP0_STATUS = 0x00;
     REG_USB_EP0_LEN_L = (uint8_t)(len & 0xFF);
     REG_USB_DMA_TRIGGER = USB_DMA_SEND;
     REG_USB_CTRL_PHASE  = USB_CTRL_PHASE_DATA_IN;
@@ -232,7 +232,7 @@ static void usb_desc_copy(__code const uint8_t *src, uint8_t len) {
 }
 
 static void usb_handle_set_address(uint8_t wValL) {
-    REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
+    REG_USB_INT_MASK_9090 = (REG_USB_INT_MASK_9090 & USB_INT_MASK_GLOBAL) | (wValL & 0x7F);
     REG_USB_EP_CTRL_91D0  = 0x02;
     usb_send_zlp();
 }

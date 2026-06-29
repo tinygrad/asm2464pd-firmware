@@ -86,6 +86,21 @@
  */
 #define REG_FLASH_BUF_BYTE(off) XDATA_REG8(FLASH_BUFFER_BASE + (off))
 #define FLASH_BUF               ((__xdata uint8_t *)FLASH_BUFFER_BASE)
+/*
+ * Stock overlays a validated 128-byte config record onto 0x7000. Bytes below
+ * only have this meaning after the stock flash-config read/validation state has
+ * populated the buffer; otherwise 0x7000 is just the shared flash/USB landing
+ * buffer.
+ */
+#define FLASH_CFG_PD_MODE_OFF          0x59u  /* 0x7059: bits 5:4 select stock event/USB4 policy */
+#define FLASH_CFG_PD_SRC_CAP_OFF       0x5Au  /* 0x705A: source-cap policy bits */
+#define FLASH_CFG_USB_MODE_OFF         0x5Cu  /* 0x705C: parsed to stock G_FLASH_CFG_0A42 */
+#define FLASH_CFG_LANE_CFG_OFF         0x5Du  /* 0x705D: parsed to stock G_FLASH_CFG_0A43 */
+#define FLASH_CFG_LINK_SPEED_OFF       0x5Eu  /* 0x705E: parsed to stock G_FLASH_CFG_0A44 */
+#define FLASH_CFG_TUNNEL_FLAGS_OFF     0x5Fu  /* 0x705F: parsed to stock G_FLASH_CFG_0A45 */
+#define FLASH_CFG_MARKER_OFF           0x7Eu  /* 0x707E: 0xA5 means config record is valid */
+#define FLASH_CFG_CHECKSUM_OFF         0x7Fu  /* 0x707F: additive checksum over 0x7004..0x707E */
+#define FLASH_CFG_MARKER_VALID         0xA5u
 
 // Flash buffer control registers (0x7041, 0x78AF-0x78B2)
 #define REG_FLASH_BUF_CTRL_7041 XDATA_REG8(0x7041)  /* Flash buffer control */
@@ -244,7 +259,8 @@
 #define   USB_CONFIG_MASK        0x0F  // Bits 0-3: USB configuration value
 #define   USB_CONFIG_BIT1        0x02  // Bit 1: Must be CLEAR to reach 0x9091 check at 0xCDF5
 #define   USB_CONFIG_MSC_INIT    0xE0  // MSC engine init value (stock 0xB203; partially volatile)
-#define REG_USB_EP0_LEN_H       XDATA_REG8(0x9003)  /* EP0 transfer length high byte */
+#define REG_USB_EP0_STATUS      XDATA_REG8(0x9003)  /* EP0 descriptor-DMA status/length high clear */
+#define REG_USB_EP0_LEN_H       REG_USB_EP0_STATUS  /* Legacy alias: stock writes 0 before 0x9004=len */
 #define REG_USB_EP0_LEN_L       XDATA_REG8(0x9004)  /* EP0 transfer length low byte */
 #define REG_USB_EP0_CFG         XDATA_REG8(0x9005)  /* EP0 config / bulk interrupt enable (not length) */
 /*
@@ -2378,6 +2394,7 @@
 #define REG_SYS_CTRL_E77C       XDATA_REG8V(0xE77C)  /* System control */
 #define REG_SYS_CTRL_E780       XDATA_REG8V(0xE780)  /* System control */
 #define REG_FLASH_READY_STATUS  XDATA_REG8(0xE795)
+#define   FLASH_READY_USB4_MODE   0x20  /* Stock prerequisite for PD/USB4 config; not sufficient by itself. */
 #define REG_PHY_LINK_CTRL       XDATA_REG8V(0xE7E3)
 #define   PHY_LINK_CTRL_BIT6      0x40  // Bit 6: PHY link control flag
 #define   PHY_LINK_CTRL_BIT7      0x80  // Bit 7: PHY link ready
@@ -2425,6 +2442,33 @@
 #define P1_USB4_TUNNEL_EVENT_STATUS_1508 0x1508u /* tunnel event bits: enable/dispath/reset */
 #define P1_USB4_BOOT_TAIL_CTRL_1602     0x1602u  /* d894 boot-tail event control */
 #define P1_USB4_BOOT_TAIL_EVENT_1603    0x1603u  /* d894 boot-tail W1C event register */
+#define P1_USB4_DROM_SHADOW_0240        0x0240u  /* router DROM shadow base; bytes served by native DROM_READ */
+#define P1_USB4_ROUTER_CFG_SEL_1234     0x1234u  /* router config descriptor engine selector byte */
+#define P1_USB4_ROUTER_CFG_CTRL_1235    0x1235u  /* router config descriptor engine selector/control byte */
+#define P1_USB4_ROUTER_CFG_INDEX_1236   0x1236u  /* router config-space dword index, e.g. CS_26 = 0x1a */
+#define P1_USB4_ROUTER_CFG_COMMIT_1237  0x1237u  /* descriptor commit direction; bit7 write, clear for read */
+#define P1_USB4_ROUTER_CFG_GO_1238      0x1238u  /* descriptor transfer trigger; bit0 busy/start */
+#define P1_USB4_ROUTER_CFG_WDATA_123C   0x123Cu  /* write-data window for selected router config dword */
+#define P1_USB4_ROUTER_CFG_RDATA_1240   0x1240u  /* readback window for selected router config dword */
+/*
+ * USB4 router native operation config-space dwords. The host writes CS_25
+ * metadata and CS_26 with the OV bit set, then polls for firmware to clear OV.
+ * Responses are returned in CS_9+ with CS_25 holding the response dword count.
+ */
+#define USB4_ROUTER_CS_DATA0             0x09u
+#define USB4_ROUTER_CS_METADATA          0x19u
+#define USB4_ROUTER_CS_OPCODE            0x1Au
+#define USB4_ROUTER_OP_OV                0x80000000UL
+#define USB4_ROUTER_OP_UNSUPPORTED       0x40000000UL
+#define USB4_ROUTER_OP_DROM_READ         0x24u
+#define USB4_ROUTER_OP_NVM_SECTOR_SIZE   0x25u
+#define USB4_ROUTER_OP_BUFFER_ALLOC      0x33u
+/*
+ * Custom tiny native op. Returns one dword in CS_9:
+ *   bits 15:0  = INA231 bus voltage in mV
+ *   bits 31:16 = INA231 shunt current in signed mA
+ */
+#define USB4_ROUTER_OP_TINY_HW_STATUS    0xC0u
 #define REG_BANK_2269           XDATA_REG8(0x2269)  /* Bank register at 0x2269 */
 
 //=============================================================================
@@ -2601,6 +2645,8 @@
 #define REG_ROUTEROP_SPEED_LO_EA88         XDATA_REG8V(0xEA88)  /* router-op speed descriptor lo; seeded 100 */
 #define REG_ROUTEROP_SPEED_HI_EA89         XDATA_REG8V(0xEA89)  /* router-op speed descriptor hi; seeded 0x24 */
 #define REG_ROUTEROP_ENGINE_CTRL_EC00      XDATA_REG8V(0xEC00)  /* USB4 router-op engine enable; bit0 = enable */
+#define REG_ROUTEROP_EVENT_ACK_EC04        XDATA_REG8V(0xEC04)  /* router-op event W1C/ack byte, shared with NVMe event window */
 #define REG_ROUTEROP_CFG_EC05              XDATA_REG8V(0xEC05)  /* router-op init config; bit0 cleared at e56f */
+#define REG_ROUTEROP_EVENT_STATUS_EC06     XDATA_REG8V(0xEC06)  /* router-op/NVMe event aggregate status byte */
 
 #endif /* __REGISTERS_H__ */

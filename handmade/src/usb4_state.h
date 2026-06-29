@@ -195,7 +195,7 @@ volatile __xdata __at(0x0B2C) uint8_t lb_cl0_width[0x2];
 volatile __xdata u4_phy_runtime_t u4_phy;
 volatile __xdata u4_sb_fsm_t u4_sb;
 volatile __xdata u4_pd_policy_t u4_pd;
-volatile __xdata u4_routerop_header_t u4_rop_hdr;
+volatile __xdata __at(0x0A9E) u4_routerop_header_t u4_rop_hdr;
 volatile __xdata u4_cfg_shadow_t u4_cfg;
 volatile __xdata u4_p12_temp_t u4_p12;
 volatile __xdata u4_boot_scratch_t u4_boot;

@@ -509,6 +509,9 @@ static void u4lb_transport_reinit(uint8_t skip_lane) {  /* b031 */
   u4c_desc_engine_reset();
   u4c_seed_workbuf();
   sb_rom_descriptor_load();
+  sb_eng_data_init();
+  u4c_descriptor_load_stock();
+  u4c_router_cfg_seed_usb4();
   u4lb_emit_route_desc();
   u4c_desc_edge_engine();
   u4c_desc_edge_clear();
