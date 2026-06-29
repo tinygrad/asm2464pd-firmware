@@ -656,7 +656,7 @@ Examples:
   python emu.py --log-hw --trace-pc 0x0322
 
   # Run with UART proxy to real hardware (requires proxy firmware)
-  # First: cd clean && make flash-proxy
+  # First: make -C proxy flash-proxy
   python emu.py --proxy fw.bin
 
   # Proxy mode with debug levels: 1=interrupts, 2=+xdata, 3=+sfr
