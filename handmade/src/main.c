@@ -541,6 +541,7 @@ void main(void) {
   REG_UART_LCR &= ~LCR_PARITY_MASK;
 
   uart_puts("\n[BOOT]\n");
+  led_set_rgb(false, false, true);
 
   // Flash controller for the USB serial OTP read.
   flash_init();
