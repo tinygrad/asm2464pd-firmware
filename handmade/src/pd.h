@@ -12,6 +12,28 @@
 static void pd_rx_message_dispatch(void);
 
 #define PD_WAIT_LIMIT 0x4000u
+
+/* USB-PD Control-Message types (header NumDataObjects == 0). */
+#define PD_CTRL_GOODCRC      0x01
+#define PD_CTRL_ACCEPT       0x03
+#define PD_CTRL_REJECT       0x04
+#define PD_CTRL_PS_RDY       0x06
+#define PD_CTRL_WAIT         0x0C
+#define PD_CTRL_SOFT_RESET   0x0D
+
+/* USB-PD Data-Message types (header NumDataObjects > 0). */
+#define PD_DATA_SOURCE_CAP   0x01
+#define PD_DATA_BIST         0x03
+#define PD_DATA_ENTER_USB    0x08
+#define PD_DATA_VENDOR       0x0F   /* Vendor_Defined (Structured VDM) */
+
+/* Structured VDM command codes and header Command Type field. */
+#define VDM_CMD_DISCOVER_ID     0x01
+#define VDM_CMD_DISCOVER_SVIDS  0x02
+#define VDM_CMD_DISCOVER_MODES  0x03
+#define VDM_CMD_ENTER_MODE      0x04
+#define VDM_CMDT_ACK  1
+#define VDM_CMDT_NAK  2
 /* Bounded poll until (*reg & mask) matches set (1=wait-for-set, 0=wait-for-clear). */
 static void pd_wait(volatile __xdata uint8_t *reg, uint8_t mask, uint8_t set) {
   uint16_t iters = 0;
@@ -474,13 +496,13 @@ static void pd_ctrl_soft_reset(void) {
 /* Dispatch a CONTROL message by MessageType. */
 static void pd_dispatch_control(uint8_t msgtype) {
   switch (msgtype) {
-    case 0x01: pd_ctrl_goodcrc();    break;
-    case 0x03: pd_ctrl_accept();     break;
-    case 0x04: pd_ctrl_reject();     break;
-    case 0x06: pd_ctrl_ps_rdy();     break;
-    case 0x0C: pd_ctrl_wait();       break;
-    case 0x0D: pd_ctrl_soft_reset(); break;
-    default:   pd_rx_nak_send();  break;
+    case PD_CTRL_GOODCRC:    pd_ctrl_goodcrc();    break;
+    case PD_CTRL_ACCEPT:     pd_ctrl_accept();     break;
+    case PD_CTRL_REJECT:     pd_ctrl_reject();     break;
+    case PD_CTRL_PS_RDY:     pd_ctrl_ps_rdy();     break;
+    case PD_CTRL_WAIT:       pd_ctrl_wait();       break;
+    case PD_CTRL_SOFT_RESET: pd_ctrl_soft_reset(); break;
+    default:                 pd_rx_nak_send();     break;
   }
 }
 
@@ -488,7 +510,7 @@ static void pd_dispatch_control(uint8_t msgtype) {
 
 /* Dispatch a DATA message by MessageType. */
 static void pd_dispatch_data(uint8_t msgtype) {
-  if (msgtype == 0x01) {
+  if (msgtype == PD_DATA_SOURCE_CAP) {
     uint8_t sop;
     uart_puts("[Source_Cap]");
     sop = u4_pd.sop_field;
@@ -508,21 +530,21 @@ static void pd_dispatch_data(uint8_t msgtype) {
     pd_ctrl_goodcrc();
     return;
   }
-  if (msgtype == 0x03) {
+  if (msgtype == PD_DATA_BIST) {
     pd_ctrl_goodcrc();
     return;
   }
-  if (msgtype >= 2 && msgtype < 8) {
+  if (msgtype >= 2 && msgtype < 8) {   /* Request/Sink_Cap/… data messages we NAK */
     pd_rx_nak_send();
     return;
   }
-  if (msgtype == 0x08) {
+  if (msgtype == PD_DATA_ENTER_USB) {
     uart_puts("[Enter_USB]");
     pd_handle_enter_usb();
     pd_ctrl_goodcrc();
     return;
   }
-  if (msgtype == 0x0F) {
+  if (msgtype == PD_DATA_VENDOR) {
     uart_puts("[VDM]");
     vdm_tx_dispatch();
     pd_ctrl_goodcrc();
@@ -633,7 +655,7 @@ static void vdm_build_discover_id(void) {
 }
 
 /* Discover_SVIDs responder: ACK with SVID 0x8087, else NAK. */
-static void vdm_build_discover_sids(void) {
+static void vdm_build_discover_svids(void) {
   if (((uint8_t)~u4_routerop_svid_hi | u4_routerop_port) == 0 && (u4_cfg.mode_flag & 0x80)) {
     pd_tx_set_sop_header(2, 0x0F);
     pd_vdm_hdr_build(1, 2);
@@ -794,20 +816,20 @@ static void vdm_tx_dispatch(void) {
   pd_tx_buf_clear();
 
   switch (cmd) {
-    case 0x01:
+    case VDM_CMD_DISCOVER_ID:
       uart_puts("[Disc_ID]");
       vdm_build_discover_id();
       break;
-    case 0x02:
+    case VDM_CMD_DISCOVER_SVIDS:
       uart_puts("[Disc_SVIDs]");
-      vdm_build_discover_sids();
+      vdm_build_discover_svids();
       break;
-    case 0x03:
+    case VDM_CMD_DISCOVER_MODES:
       uart_puts("[Disc_Modes]");
       u4_pd.usb3_fallback_flag = 1;
       vdm_build_discover_modes();
       break;
-    case 0x04:
+    case VDM_CMD_ENTER_MODE:
       uart_puts("[EnterMode]");
       vdm_handle_enter_mode();
       break;
