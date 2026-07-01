@@ -42,7 +42,7 @@ static void sleep(uint16_t milliseconds) {
   { uint32_t g = 0; while (!(REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && ++g < 4000000UL); }
 }
 
-static volatile uint8_t __xdata is_usb2;
+static volatile uint8_t is_usb2;
 static volatile uint8_t __xdata usb4_skip_magic0;
 static volatile uint8_t __xdata usb4_skip_magic1;
 
