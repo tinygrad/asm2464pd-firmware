@@ -50,6 +50,12 @@
 #define SB_ROUTE_ACK        0xD8u   /* write 0x02 to ack a route */
 #define SB_ROUTE_GATE       0xEDu   /* .7 route gate (inferred) */
 #define SB_EVENT_CLEAR_F6   0xF6u   /* read-to-clear (inferred) */
+#define SB_LANESEL          0x40u   /* lane-descriptor select (inferred) */
+#define SB_RATE_STROBE      0x65u   /* lane-rate strobe: .6 arm, .7 go (inferred) */
+#define SB_RATE_HI(l)       (0x6Au + 2u*(l)) /* per-lane rate hi (0x6A/0x6C, inferred) */
+#define SB_RATE_LO(l)       (0x6Bu + 2u*(l)) /* per-lane rate lo (0x6B/0x6D, inferred) */
+#define SB_WIDTH_LO         0x74u   /* lane-width cfg lo (inferred) */
+#define SB_WIDTH_HI         0x75u   /* lane-width cfg hi (inferred) */
 
 /* SB_BOND_EVENT (0x66) bits */
 #define BOND_EVT_BONDED     0x01u
@@ -89,8 +95,28 @@
 #define DE_ENG_RESET_90     0x90u   /* inferred */
 
 /* ---- Raw page-1 tunnel/link/event regs: P1_RD/P1_WR (arbitrary DPX=1 addr) ---- */
+#define P1_PORT_CTRL_0000   0x0000u          /* .1 SB assert (inferred) */
 #define P1_LANE_FLIP(i)     (0x0100u + (i))  /* lane orient/flip + link ctrl 0x0100..0x0102 */
 #define P1_ROUTE_ACK        0x0109u          /* .0 in-band route ack */
+#define P1_LANE_EN_010B     0x010Bu          /* lane enable (inferred) */
+/* USB4 tunnel / link / descriptor-engine mirror regs (inferred; hex-suffixed). */
+#define P1_ADP_LINK_CFG_1206   0x1206u       /* adapter link cfg (.5 lane-width) */
+#define P1_DESC_CTRL_1235      0x1235u       /* page-1 descriptor-engine ctrl (mirrors DE_CTRL) */
+#define P1_DESC_CMD_1236       0x1236u       /* page-1 descriptor-engine command */
+#define P1_DESC_COMMIT_1237    0x1237u       /* page-1 descriptor-engine commit (mirrors DE_COMMIT) */
+#define P1_DESC_RESULT_1243    0x1243u       /* page-1 descriptor result; .7 = width gate */
+#define P1_LINK_PHY_CFG_1267   0x1267u       /* link-PHY reconfig */
+#define P1_TUNNEL_PHY_1285     0x1285u       /* tunnel-PHY finalize (hi-nibble 0x30) */
+#define P1_TUNNEL_PHY_CTRL_1334 0x1334u      /* tunnel-PHY finalize control */
+#define P1_TUNNEL_PHY_CFG_1335  0x1335u      /* tunnel-PHY finalize config */
+#define P1_TUNNEL_PHY_134D     0x134Du       /* tunnel-PHY finalize (write 0x04) */
+#define P1_XPORT_LANE_EVT_1404 0x1404u       /* transport lane event (lane-gated) */
+#define P1_XPORT_LANE_EVT_1405 0x1405u       /* transport lane event (skip-lane path) */
+#define P1_XPORT_TRIG_1511     0x1511u       /* transport reinit trigger (write 0x01) */
+#define P1_XPORT_RESET_1802    0x1802u       /* transport-layer reset strobe (bits 1-4) */
+#define P1_RXPLL_CFG_1808      0x1808u       /* RXPLL cfg-trigger context */
+#define P1_PCIE_LINK_1835      0x1835u       /* PCIe link bring-up */
+#define P1_PCIE_LANE_SLOT(l)   (0x78AFu + 0x100u*(l)) /* per-lane PCIe slot-enable .7 (0x78AF..0x7BAF) */
 /* 0x1203/0x121E/0x1406/0x1407/0x1507/0x1508/0x1602/0x1603 are already named
  * P1_USB4_* in registers.h — reuse those. */
 
