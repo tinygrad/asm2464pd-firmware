@@ -289,9 +289,6 @@ static void u4lb_cm_conn_routing_setup(void) {
   u4_sb.conn_routing_substate = CONNRT_PRINT_STATUS;
 }
 
-#define SB2_RD(off)      P1_REG8_rd((uint16_t)(0x2900u + (off)))
-#define SB2_WR(off, v)   P1_REG8_wr((uint16_t)(0x2900u + (off)), (uint8_t)(v))
-
 static void u4lb_sb_op_kick(uint8_t op) {  /* 96fe */
   SB_WR(0x15, op);
   SB_WR(0x0C, (SB_RD(0x0C) & 0x80) | 0x03);
@@ -312,22 +309,22 @@ static void u4lb_sb_op_run_drain(uint8_t param) {  /* d5da */
   { uint8_t count = SB_RD(0x0C);
     if (count <= 6) return;
     { uint8_t limit = (uint8_t)(count - 6), i;
-      for (i = 0; i < limit; i++) SB2_WR(i, 0x00); }
+      for (i = 0; i < limit; i++) SBTX_WR(i, 0x00); }
   }
 }
 
 static void u4lb_sb_send_lane_cfg(void) {  /* e07d */
   uint8_t cfg;
   SB_WR(0x15, 0x61);
-  SB2_WR(0x00, 0x09);
+  SBTX_WR(0x00, 0x09);
   if ((u4_sb.phy_gate_a | u4_sb.phy_gate_b) != 0)
-    SB2_WR(0x00, SB2_RD(0x00) | 0x04);
+    SBTX_WR(0x00, SBTX_RD(0x00) | 0x04);
   if (u4_pd.connect_route_latch != 0)
-    SB2_WR(0x00, SB2_RD(0x00) | 0x10);
+    SBTX_WR(0x00, SBTX_RD(0x00) | 0x10);
   cfg = (uint8_t)(((u4_sb.lane_width_latch0 & 0x0F) << 4)
                   | ((u4_work_buf[0x19] & 0x02) ? 0x02 : 0x00)
                   | (u4_work_buf[0x19] & 0x01));
-  SB2_WR(0x01, cfg);
+  SBTX_WR(0x01, cfg);
   SB_WR(0x0C, (SB_RD(0x0C) & 0x80) | 0x08);
   u4lb_sb_op_run_drain(0);
 }
