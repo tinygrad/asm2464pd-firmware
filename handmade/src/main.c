@@ -426,17 +426,14 @@ void int1_isr(void) __interrupt(1) {
   DPX = saved_dpx;
 }
 
-static uint8_t boot_mode_flags_initial(void) {
+static uint8_t boot_mode_flags_usb3(void) {
   return HANDMADE_USB3_MODE_FLAGS;
 }
 
 #if HANDMADE_USB4_MODE_FLAGS
-static uint8_t __xdata boot_probe_link;
-static uint8_t __xdata boot_probe_phy_mode;
-
-static void boot_record_link_probe(void) {
-  boot_probe_link = (uint8_t)(REG_USB_LINK_STATUS & USB_LINK_STATUS_MASK);
-  boot_probe_phy_mode = (uint8_t)((REG_USB_PHY_CTRL_91C0 & 0x18) >> 3);
+static uint8_t boot_mode_flags_usb4_policy(void) {
+  if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return HANDMADE_USB3_MODE_FLAGS;
+  return HANDMADE_USB4_MODE_FLAGS;
 }
 
 static void usb4_state_prepare(void) {
@@ -526,12 +523,10 @@ void main(void) {
     if (usb4_skip_magic0 == 0xA5 && usb4_skip_magic1 == 0x5A) {
       usb4_skip_magic0 = 0;
       usb4_skip_magic1 = 0;
-      boot_record_link_probe();
-      u4_cfg.mode_flag = boot_mode_flags_initial();
+      u4_cfg.mode_flag = boot_mode_flags_usb3();
       usb4_reset_fallback = 1;
     } else {
-      boot_record_link_probe();
-      u4_cfg.mode_flag = HANDMADE_USB4_MODE_FLAGS;
+      u4_cfg.mode_flag = boot_mode_flags_usb4_policy();
     }
     uart_puts("[Mode ");
     uart_puthex(u4_cfg.mode_flag);
@@ -539,14 +534,10 @@ void main(void) {
     uart_puthex(REG_FLASH_READY_STATUS);
     uart_puts(" C");
     uart_puthex(REG_FLASH_BUF_BYTE(0));
-    uart_puts(" L");
-    uart_puthex(boot_probe_link);
-    uart_puts(" P");
-    uart_puthex(boot_probe_phy_mode);
     uart_puts("]\n");
   }
 #else
-  u4_cfg.mode_flag = boot_mode_flags_initial();
+  u4_cfg.mode_flag = boot_mode_flags_usb3();
   uart_puts("[Mode ");
   uart_puthex(u4_cfg.mode_flag);
   uart_puts(" S");
