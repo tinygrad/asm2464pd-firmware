@@ -60,7 +60,7 @@ static void boot_phy_sb_keystone_arm(void) {  /* ed02 */
 }
 
 static void boot_phy_set_link_mode(uint8_t mode) {  /* dd42 */
-  if (!(XDATA_REG8V(0x0AF1) & 0x20) || mode == 0 || mode == 2) {
+  if (!(u4_connect_gate & 0x20) || mode == 0 || mode == 2) {
     REG_PHY_LINK_CTRL = 0x00;
   } else if (mode == 4) {
     REG_PHY_LINK_CTRL = 0x30;
@@ -120,10 +120,10 @@ static void boot_phy_bringup_early(void) {
 }
 
 static void u4_phy_state_seed(void) {  /* 92c5 */
-  XDATA_REG8(0x0AE3) = 1;
-  XDATA_REG8(0x0AEC) = 3;
-  XDATA_REG8(0x0AED) = 3;
-  XDATA_REG8(0x0AF1) = 0x00;
+  u4_link_busy = 1;
+  u4_link_gen = 3;
+  u4_link_lane = 3;
+  u4_connect_gate = 0x00;
 }
 
 static void pcie_tunnel_adapter_config(void) {  /* b410 */
