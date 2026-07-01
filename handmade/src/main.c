@@ -160,8 +160,19 @@ static void handle_usb_control(void) {
     wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
     wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
 
+    if (!(bmReq & USB_SETUP_TYPE_VENDOR)) {
+      uart_puts("[C ");
+      uart_puthex(bmReq);
+      uart_puts(" ");
+      uart_puthex(bReq);
+      uart_puts(" ");
+      uart_puthex(wLen >> 8); uart_puthex(wLen & 0xFF);
+      uart_puts("]\n");
+    }
+
     if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
       usb_handle_set_address(wValL);
+      uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
     } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
@@ -184,6 +195,7 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
       usb_send_zlp();
+      uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
