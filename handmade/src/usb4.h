@@ -65,9 +65,12 @@ static void boot_phy_sb_keystone_arm(void) {  /* ed02 */
   SB_WR(0x05, (SB_RD(0x05) & 0x7F) | 0x80);
   REG_CPU_CTRL_CA70 &= 0xFC;
   REG_SYS_CTRL_E780 &= 0xF9;
-  P1_CLR(0x0000, 0x02);
+  P1_CLR(P1_PORT_CTRL_0000, 0x02);
 }
 
+/* Drive REG_PHY_LINK_CTRL from the requested link mode:
+ *   mode 0/2 (or connect-gate off) -> 0x00 (idle),  1 -> 0xCC,  4 -> 0x30,
+ *   0xFF -> 0xFC. Other modes leave the register untouched. */
 static void boot_phy_set_link_mode(uint8_t mode) {  /* dd42 */
   if (!(u4_connect_gate & 0x20) || mode == 0 || mode == 2) {
     REG_PHY_LINK_CTRL = 0x00;
@@ -212,7 +215,7 @@ static void usb4_connect_u4(void) {
     if (u4_cfg.route_mode & 0x02) {
       REG_LINK_STATUS_E716 &= 0xFC;
       REG_LINK_STATUS_E716 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
-      SB_WR(0xD8, 0x02);
+      SB_WR(SB_ROUTE_ACK, 0x02);
     }
   }
   sb_assert();
@@ -338,7 +341,7 @@ static void usb4_sec_adapter_link_event(void) {  /* c105 */
       u4lb_reg_set_bit7(0x35);
       ENG_DESC_WR_CLR(0x36, 0x03);
       u4lb_desc_commit_noset(0x03);
-      if (P1_RD(0x1243) & 0x80) u4lb_link_phy_reconfig();
+      if (P1_RD(P1_DESC_RESULT_1243) & 0x80) u4lb_link_phy_reconfig();
     }
   }
 
@@ -668,11 +671,11 @@ static void usb4_phy_serdes_arm(void) {  /* db0d */
   REG_PHY_LINK_CTRL_C21B = (REG_PHY_LINK_CTRL_C21B & 0x3F) | 0xC0;
   REG_LINK_CTRL = (REG_LINK_CTRL & 0xF7) | 0x08;
   PG_WR(0x1262, PG_RD(0x1262) & 0xEF);
-  SB_WR(0xED, (SB_RD(0xED) & 0xBF) | 0x40);
+  SB_WR(SB_ROUTE_GATE, (SB_RD(SB_ROUTE_GATE) & 0xBF) | 0x40);
   SB_WR(0xCE, SB_RD(0xCE) & 0xFE);
-  SB_SET(0x1C, 0x80);
-  SB_SET(0x1C, 0x40);
-  SB_SET(0x1C, 0x02);
+  SB_SET(SB_USB_MODE, 0x80);
+  SB_SET(SB_USB_MODE, 0x40);
+  SB_SET(SB_USB_MODE, 0x02);
   REG_PHY_LINK_CTRL_C20B &= 0x7F;
   SB_WR(0x1D, SB_RD(0x1D) & 0xFE);
   PHY_SET_BIT2(0xC22F);
