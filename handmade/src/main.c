@@ -65,8 +65,7 @@ typedef struct {
 } hw_status_t;
 
 static void hw_status_read(__xdata hw_status_t *s) {
-  static __xdata uint16_t shunt_raw, bus_raw;
-  shunt_raw = 0; bus_raw = 0;
+  uint16_t shunt_raw = 0, bus_raw = 0;
   (void)ina231_read_u16(INA231_REG_SHUNT, &shunt_raw);
   (void)ina231_read_u16(INA231_REG_BUS, &bus_raw);
   s->voltage_mv = (uint16_t)(((uint32_t)bus_raw * 125) / 100);               /* 1.25 mV/LSB */
