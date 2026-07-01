@@ -429,7 +429,8 @@ void int0_isr(void) __interrupt(0) {
     } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
       uint8_t ep = REG_USB_EP_READY;
       uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts("]\n");
-      REG_USB_EP_READY = ep;    } else if (periph_status & USB_PERIPH_LINK_EVENT) {
+      REG_USB_EP_READY = ep;
+    } else if (periph_status & USB_PERIPH_LINK_EVENT) {
       /* 0x9302 USB4-router link-event demux; service .2 then the 9300 SS event. */
       if (REG_BUF_CFG_9302 & 0x04) {
         REG_BUF_CFG_9302 = 0x04;
