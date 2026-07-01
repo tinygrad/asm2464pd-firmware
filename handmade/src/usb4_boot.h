@@ -77,10 +77,10 @@ static void usb4_fallback_to_usb3(void) {
 #define USB4_INT1_BODY() do { \
   uint8_t saved_dpx = DPX; \
   DPX = 0x00; \
-  if ((u4_cfg.mode_flag & 0x83) && (REG_INT_SYSTEM & 0x01)) cc_pd_timer_tick(); \
+  if (IS_USB4() && (REG_INT_SYSTEM & 0x01)) cc_pd_timer_tick(); \
   if (REG_CPU_EXEC_STATUS_2 & 0x04) { REG_CPU_EXEC_STATUS_2 = 0x04; } \
-  if ((u4_cfg.mode_flag & 0x83) && (REG_INT_PCIE_NVME & 0x40)) pd_rx_isr(); \
-  if (u4_cfg.mode_flag & 0x83) usb4_int_demux(); \
+  if (IS_USB4() && (REG_INT_PCIE_NVME & 0x40)) pd_rx_isr(); \
+  if (IS_USB4()) usb4_int_demux(); \
   if (REG_INT_SYSTEM & 0x10) { } \
   DPX = saved_dpx; \
 } while (0)

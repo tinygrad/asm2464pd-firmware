@@ -409,7 +409,7 @@ void int0_isr(void) __interrupt(0) {
       uint8_t link_event = REG_USB_PHY_CTRL_91D1;
       if (link_event & USB_91D1_FLAG) {
         REG_USB_PHY_CTRL_91D1 = USB_91D1_FLAG;
-        if (u4_cfg.mode_flag & 0x83) u4c_lane_reinit_gate(0);
+        if (IS_USB4()) u4c_lane_reinit_gate(0);
       } else {
         REG_USB_PHY_CTRL_91D1 = link_event;
         uart_puts("[RST ");
@@ -433,7 +433,7 @@ void int0_isr(void) __interrupt(0) {
       /* 0x9302 USB4-router link-event demux; service .2 then the 9300 SS event. */
       if (REG_BUF_CFG_9302 & 0x04) {
         REG_BUF_CFG_9302 = 0x04;
-        if (u4_cfg.mode_flag & 0x83) u4c_lane_reinit_gate(1);
+        if (IS_USB4()) u4c_lane_reinit_gate(1);
       }
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
@@ -495,12 +495,12 @@ void main(void) {
 
   USB4_SELECT_BOOT_MODE(usb4_reset_fallback);
 
-  if (u4_cfg.mode_flag & 0x83) {
+  if (IS_USB4()) {
     pcie_power_off();
     usb4_state_prepare();
   }
 
-  if (!(u4_cfg.mode_flag & 0x83)) {
+  if (!IS_USB4()) {
     usb_phy_tune();
 
     if (usb4_reset_fallback) {
@@ -517,17 +517,17 @@ void main(void) {
     pcie_power_on();
   }
 
-  is_usb2 = (u4_cfg.mode_flag & 0x83) ? 1 : 0;
-  if (!(u4_cfg.mode_flag & 0x83)) {
+  is_usb2 = IS_USB4() ? 1 : 0;
+  if (!IS_USB4()) {
     usb_init_controller(0);
   }
 
-  if (u4_cfg.mode_flag & 0x83) {
+  if (IS_USB4()) {
     usb4_policy_enable();
   }
 
   // enable interrupts (EX1 = PD/USB4 INT1)
-  IE = (uint8_t)(IE_EA | IE_EX0 | ((u4_cfg.mode_flag & 0x83) ? (IE_EX1 | IE_ET0) : 0));
+  IE = (uint8_t)(IE_EA | IE_EX0 | (IS_USB4() ? (IE_EX1 | IE_ET0) : 0));
 
   // INA231 power monitor: init in both modes so the 0xC0 hw_status vendor
   // request works over USB3 and over the USB4-tunneled USB function.
@@ -537,7 +537,7 @@ void main(void) {
   uint8_t kicks = 0;
   uint8_t usb4_fallback_ticks = 0;
   while (1) {
-    if (u4_cfg.mode_flag & 0x83) {
+    if (IS_USB4()) {
       if (u4_boot.pd_seen && !u4_pd.enter_usb_accepted && !u4_boot.sb_asserted) {
         if (u4_pd.usb3_fallback_flag || usb4_fallback_ticks >= 12) {
           usb4_fallback_to_usb3();
