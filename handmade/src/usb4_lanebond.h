@@ -987,6 +987,12 @@ static void u4lb_lp1_width_settle(uint8_t lane) {
   if ((uint16_t)((widthA - 1) - neg) >= 0x00C8) { u4lb_lp1_finalize(lane); return; }
 }
 
+/*
+ * Active CL-walker: runs both lanes' loop1 state machine (lb_loop1_state[],
+ * LP1_* states) on the route_enable_latch==0x04 path. Walks each lane from
+ * width-init through lane-present detect, width settle, and CL0 bond, pushing
+ * per-lane CL descriptors over sideband. Selected by u4lb_walk() below.
+ */
 static void u4lb_walk_route_active(void) {  /* 8000 */
   __xdata uint8_t lane, state;
   for (lane = 0; lane < 2; lane++) {
@@ -1144,6 +1150,13 @@ static void u4lb_walk_route_active(void) {  /* 8000 */
   }
 }
 
+/*
+ * Passive CL-walker: runs both lanes' loop2 state machine (lb_loop2_state[])
+ * on the non-route_enable_latch==0x04 path, advancing each lane by polling the
+ * router-op result and the lane-present/CL0 sideband status. Distinct machine
+ * from the active walker (ROM 850b); its states are kept as bare hex because
+ * the individual state meanings are not established from the decompilation.
+ */
 static void u4lb_walk_route_passive(void) {  /* 850b */
   __xdata uint8_t lane, state, selector = 0;
   for (lane = 0; lane < 2; lane++) {
