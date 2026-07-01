@@ -188,7 +188,7 @@ static void handle_usb_control(void) {
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
       // enable USB bulk mode (bypass MSC)
       REG_USB_MSC_CFG = 0x00;
-      // clearn bulk endpoints
+      // clear bulk endpoints
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
@@ -379,9 +379,6 @@ void handle_usb_bulk_data(void) {
   uint8_t bulk_cfg1, bulk_cfg2;
   bulk_cfg1 = REG_USB_EP_CFG1;
   bulk_cfg2 = REG_USB_EP_CFG2;
-  /*uart_puts("[BULK ");
-  uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
-  uart_puts("]\n");*/
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
     REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_OUT_COMPLETE;
     uint16_t dword_count = (((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L) >> 2;

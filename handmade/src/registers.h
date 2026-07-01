@@ -2425,7 +2425,7 @@
 #define P1_USB4_ADP_EVENT_MASK_1406     0x1406u  /* secondary-adapter event aggregation mask */
 #define P1_USB4_ADP_EVENT_STATUS_1407   0x1407u  /* .0 width event, .3 tunnel event; c105 source */
 #define P1_USB4_TUNNEL_EVENT_MASK_1507  0x1507u  /* tunnel-event aggregation mask */
-#define P1_USB4_TUNNEL_EVENT_STATUS_1508 0x1508u /* tunnel event bits: enable/dispath/reset */
+#define P1_USB4_TUNNEL_EVENT_STATUS_1508 0x1508u /* tunnel event bits: enable/dispatch/reset */
 #define P1_USB4_BOOT_TAIL_CTRL_1602     0x1602u  /* d894 boot-tail event control */
 #define P1_USB4_BOOT_TAIL_EVENT_1603    0x1603u  /* d894 boot-tail W1C event register */
 #define P1_USB4_DROM_SHADOW_0240        0x0240u  /* router DROM shadow base; bytes served by native DROM_READ */
