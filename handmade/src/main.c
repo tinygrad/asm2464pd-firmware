@@ -428,16 +428,26 @@ void int0_isr(void) __interrupt(0) {
         if (u4_cfg.mode_flag & 0x83) u4c_lane_reinit_gate(1);
       }
       uint8_t ep = REG_BUF_CFG_9300;
-      /* On direct-path SS failure, fall back to USB2. USB4 is selected only at boot. */
-      if ((ep & BUF_CFG_9300_SS_FAIL) && !(u4_cfg.mode_flag & 0x83)) {
-        uart_puts("[USB3 fail]\n");
+      if (ep & BUF_CFG_9300_SS_FAIL) {
+        uart_puts("[USB2 fallback]\n");
+        // fallback to USB2
         is_usb2 = 1;
-        REG_CPU_MODE = CPU_MODE_USB2;          // without this, USB2 is flaky
-        REG_USB_PHY_CTRL_91C0 = 0x10;          // enable USB high speed mode
+        // without this, USB2 is flaky
+        REG_CPU_MODE = CPU_MODE_USB2;
+        // enable USB high speed mode
+        REG_USB_PHY_CTRL_91C0 = 0x10;
       }
       REG_BUF_CFG_9300 = ep;
+      uart_puts("[LINK EVENT ");
+      uart_puthex(ep);
+      uart_puts(" link=");
+      uart_puthex(REG_USB_LINK_STATUS);
+      uart_puts("]\n");
     } else if (periph_status & USB_PERIPH_CBW_RECEIVED) {
-      uint8_t mode = REG_USB_MODE; REG_USB_MODE = mode;   /* W1C ack */
+      // BULK OUT (but only if pointed to 0x911B)
+      uint8_t ep = REG_USB_MODE;
+      uart_puts("[CBW_RECEIVED "); uart_puthex(ep); uart_puthex(REG_USB_BULK_EP_CMD); uart_puts("]\n");
+      REG_USB_MODE = ep;
       REG_USB_BULK_EP_CMD = USB_BULK_EP_CMD_CBW;
     } else {
       uart_puts("[UNHANDLED INT0 ");
