@@ -328,7 +328,6 @@ static void handle_usb_control(void) {
           REG_PCIE_DATA_1 = DESC_BUF[10];
           REG_PCIE_DATA_0 = DESC_BUF[11];
         }
-        REG_PCIE_TLP_CTRL = 0x01;
         REG_PCIE_STATUS  = PCIE_STATUS_ERROR;
         REG_PCIE_STATUS  = PCIE_STATUS_COMPLETE;
         REG_PCIE_STATUS  = PCIE_STATUS_KICK;
