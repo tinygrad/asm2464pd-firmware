@@ -1517,12 +1517,16 @@
 #define   PHY_EXT_SIGNAL_CFG      HDDPC_ENABLE        // Legacy alias
 /*
  * PCIe Lane Control (0xC659)
- * Bit 0: Lane enable control.
- *   Stock firmware clears it during init (E612 with r7 bit 0 set).
- *   Gets SET back during link training by PHY event handlers.
- *   Stock trained value: 0x01. Custom untrained value: 0x00.
+ * Bit 0: downstream PCIe lane/power enable. Direct PCIe and stock USB4 both
+ *   set this before the endpoint LTSSM can leave Detect.
+ * Bit 3: companion lane/PHY control bit preserved by the USB4 tunnel path.
+ *
+ * Failure signature: USB4 tunnel exists but endpoint is absent, LTSSM=0x00,
+ * REG_PHY_PCIE_LINK_INFO=Gen1 x1, and C659.0 is clear.
  */
 #define REG_PCIE_LANE_CTRL_C659 XDATA_REG8V(0xC659)
+#define   PCIE_LANE_CTRL_ENABLE    0x01
+#define   PCIE_LANE_CTRL_USB4_PHY  0x08
 #define REG_PHY_CFG_C65A        XDATA_REG8V(0xC65A)  /* PHY config (bit 3 set by flash_set_bit3) */
 #define   PHY_CFG_C65A_BIT3       0x08  // Bit 3: PHY config flag
 #define REG_PHY_EXT_5B          XDATA_REG8(0xC65B)
@@ -2382,11 +2386,12 @@
 #define REG_SYS_CTRL_E763       REG_PHY_RXPLL_TRIGGER // Legacy alias
 /*
  * PHY Timer Control (0xE764)
- * Configured during hw_init (written 0x14 four times).
- * Stock trained value: 0x19 (bits 0,3,4 set) — bits 0,3 get set during link training.
- * Custom untrained value: 0x14 (bit 2,4 set).
+ * Downstream PCIe LTSSM/training control. Direct PCIe bring-up writes 0x1c
+ * after enabling rails/PERST; the USB4 tunnel path must also write 0x1c after
+ * programming the USB4 width/rate or the endpoint remains in Detect.
  */
 #define REG_PHY_TIMER_CTRL_E764 XDATA_REG8V(0xE764)
+#define   PHY_TIMER_PCIE_TRAIN_USB4 0x1C
 #define REG_SYS_CTRL_E765       XDATA_REG8V(0xE765)  /* System control E765 */
 #define   SYS_CTRL_E765_PCIE_LINK_UP  0x02           /*   Bit 1: PCIe link is up */
 #define REG_SYS_CTRL_E76C       XDATA_REG8(0xE76C)  /* System control */
