@@ -77,7 +77,7 @@ static void pcie_power_off(void) {
   /* Hold the downstream device in reset before removing its rails. */
   REG_PCIE_PERST_CTRL = PCIE_PERST_ASSERT;
   REG_TUNNEL_LINK_STATE = 0x00;
-  REG_PHY_TIMER_CTRL_E764 &= 0x10;
+  REG_PHY_TIMER_CTRL_E764 = 0x00;
   REG_PCIE_LANE_CTRL_C659 &= (uint8_t)~0x01;
   REG_HDDPC_CTRL &= (uint8_t)~0x20;
   led_set_rgb(false, false, true);  // blue = PCIe powered down
