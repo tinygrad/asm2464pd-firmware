@@ -1510,7 +1510,6 @@
  */
 #define REG_PCIE_LANE_CTRL_C659 XDATA_REG8(0xC659)
 #define   PCIE_LANE_CTRL_ENABLE    0x01
-#define   PCIE_LANE_CTRL_USB4_PHY  0x08
 #define REG_PHY_CFG_C65A        XDATA_REG8(0xC65A)  /* PHY config (bit 3 set by flash_set_bit3) */
 #define   PHY_CFG_C65A_BIT3       0x08  // Bit 3: PHY config flag
 #define REG_PHY_EXT_5B          XDATA_REG8(0xC65B)
@@ -2421,8 +2420,6 @@
 #define REG_BANK_1507           XDATA_REG8(0x1507)  /* Bank register at 0x1507 (= P1_USB4_TUNNEL_EVENT_MASK_1507) */
 #define REG_BANK_1603           XDATA_REG8(0x1603)  /* Bank register at 0x1603 (= P1_USB4_BOOT_TAIL_EVENT_1603) */
 /* USB4 page-1 config-space and event registers. Use P1_RD/P1_WR, not direct XDATA_REG8. */
-#define P1_USB4_LANE_ADP_CURRENT_WIDTH  0x1201u  /* c251 current-width leaf. HW-write-locked. */
-#define P1_USB4_LANE_ADP_CFG_1202       0x1202u  /* c8c7 config-space byte. HW-write-locked. */
 #define P1_USB4_WIDTH_EVENT_1203        0x1203u  /* width-event flag .7, W1C, a522 gate to c8c7 */
 #define P1_USB4_CFG_ENABLE_121E         0x121Eu  /* config/control-adapter enable .0; d894 tail */
 #define P1_USB4_ADP_EVENT_MASK_1406     0x1406u  /* secondary-adapter event aggregation mask */
@@ -2432,13 +2429,6 @@
 #define P1_USB4_BOOT_TAIL_CTRL_1602     0x1602u  /* d894 boot-tail event control */
 #define P1_USB4_BOOT_TAIL_EVENT_1603    0x1603u  /* d894 boot-tail W1C event register */
 #define P1_USB4_DROM_SHADOW_0240        0x0240u  /* router DROM shadow base; bytes served by native DROM_READ */
-#define P1_USB4_ROUTER_CFG_SEL_1234     0x1234u  /* router config descriptor engine selector byte */
-#define P1_USB4_ROUTER_CFG_CTRL_1235    0x1235u  /* router config descriptor engine selector/control byte */
-#define P1_USB4_ROUTER_CFG_INDEX_1236   0x1236u  /* router config-space dword index, e.g. CS_26 = 0x1a */
-#define P1_USB4_ROUTER_CFG_COMMIT_1237  0x1237u  /* descriptor commit direction; bit7 write, clear for read */
-#define P1_USB4_ROUTER_CFG_GO_1238      0x1238u  /* descriptor transfer trigger; bit0 busy/start */
-#define P1_USB4_ROUTER_CFG_WDATA_123C   0x123Cu  /* write-data window for selected router config dword */
-#define P1_USB4_ROUTER_CFG_RDATA_1240   0x1240u  /* readback window for selected router config dword */
 /*
  * USB4 router native operation config-space dwords. The host writes CS_25
  * metadata and CS_26 with the OV bit set, then polls for firmware to clear OV.
@@ -2634,8 +2624,6 @@
 #define REG_ROUTEROP_SPEED_LO_EA88         XDATA_REG8V(0xEA88)  /* router-op speed descriptor lo; seeded 100 */
 #define REG_ROUTEROP_SPEED_HI_EA89         XDATA_REG8V(0xEA89)  /* router-op speed descriptor hi; seeded 0x24 */
 #define REG_ROUTEROP_ENGINE_CTRL_EC00      XDATA_REG8V(0xEC00)  /* USB4 router-op engine enable; bit0 = enable */
-#define REG_ROUTEROP_EVENT_ACK_EC04        XDATA_REG8V(0xEC04)  /* router-op event W1C/ack byte, shared with NVMe event window */
 #define REG_ROUTEROP_CFG_EC05              XDATA_REG8V(0xEC05)  /* router-op init config; bit0 cleared at e56f */
-#define REG_ROUTEROP_EVENT_STATUS_EC06     XDATA_REG8V(0xEC06)  /* router-op/NVMe event aggregate status byte */
 
 #endif /* __REGISTERS_H__ */

@@ -1,8 +1,6 @@
 #ifndef USB4_LANEBOND_H
 #define USB4_LANEBOND_H
 
-#define U4LB_STATE   u4_sb.state
-
 static void u4lb_set_fsm_state(u4_fsm_state_t state) {  /* eb62 */
   uart_puts("\r\n[SB P0");
   uart_puthex(state);
