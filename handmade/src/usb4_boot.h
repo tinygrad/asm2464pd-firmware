@@ -4,7 +4,7 @@
 #define USB4_SKIP_MAGIC 0x5AA55AA5UL
 
 static uint8_t boot_mode_flags_usb4_policy(void) {
-  if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return 0x04u;
+  if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return USB4_MODE_USB3_DIRECT;
   return USB4_MODE_FLAGS;
 }
 
@@ -31,7 +31,7 @@ static void usb4_state_prepare(void) {
   // Stock seeds the sideband connect-service path at boot and then refreshes it in the main loop.
   u4lb_phy_connect_dma_kick();
 
-  { uint8_t z; for (z = 0; z < U4_ROUTEROP_MBOX_CLEAR_LEN; z++) U4_XDATA_BYTES(u4_routerop_mbox_state)[z] = 0; }
+  { uint8_t i; for (i = 0; i < U4_ROUTEROP_MBOX_CLEAR_LEN; i++) U4_XDATA_BYTES(u4_routerop_mbox_state)[i] = 0; }
   u4_sb.active_port_rr = 0;
   u4_sb.route_up_trigger = 0; u4_sb.lane_bonded_flag = 0;
   u4_sb.transport_edge_toggle = 0; u4_sb.link_edge_toggle = 0; u4_sb.active_plane_port = 0;
@@ -77,18 +77,18 @@ static void usb4_fallback_to_usb3(void) {
 #define USB4_INT1_BODY() do { \
   uint8_t saved_dpx = DPX; \
   DPX = 0x00; \
-  if (IS_USB4() && (REG_INT_SYSTEM & 0x01)) cc_pd_timer_tick(); \
-  if (REG_CPU_EXEC_STATUS_2 & 0x04) { REG_CPU_EXEC_STATUS_2 = 0x04; } \
-  if (IS_USB4() && (REG_INT_PCIE_NVME & 0x40)) pd_rx_isr(); \
+  if (IS_USB4() && (REG_INT_SYSTEM & INT_SYSTEM_EVENT)) cc_pd_timer_tick(); \
+  if (REG_CPU_EXEC_STATUS_2 & CPU_EXEC_STATUS_2_INT) { REG_CPU_EXEC_STATUS_2 = CPU_EXEC_STATUS_2_INT; } \
+  if (IS_USB4() && (REG_INT_PCIE_NVME & INT_PCIE_NVME_STATUS)) pd_rx_isr(); \
   if (IS_USB4()) usb4_int_demux(); \
-  if (REG_INT_SYSTEM & 0x10) { } \
+  if (REG_INT_SYSTEM & INT_SYSTEM_TIMER) { } \
   DPX = saved_dpx; \
 } while (0)
 
 #define USB4_SELECT_BOOT_MODE(reset_fallback) do { \
   if (usb4_skip_magic == USB4_SKIP_MAGIC) { \
     usb4_skip_magic = 0; \
-    u4_cfg.mode_flag = 0x04u; \
+    u4_cfg.mode_flag = USB4_MODE_USB3_DIRECT; \
     (reset_fallback) = 1; \
   } else { \
     u4_cfg.mode_flag = boot_mode_flags_usb4_policy(); \
