@@ -186,8 +186,8 @@ static void u4lb_cm_conn_routing_setup(void) {
   if (u4_sb.coldboot_seed_gate == 0) {
     uint8_t i;
     for (i = 0; i < 0x13; i++) {
-      sb_width_lut[(uint16_t)(0x0 + i)] = width_lut[i];
-      sb_branchA_gate[(uint16_t)(0x0 + i)] = branchA_gate[i];
+      sb_width_lut[(uint16_t)(i)] = width_lut[i];
+      sb_branchA_gate[(uint16_t)(i)] = branchA_gate[i];
     }
     for (i = 0; i < 2; i++) {
       lb_cl_status[i] = 0; lb_eq_status[i] = 0; lb_loop2_scratch[i] = 0; lb_cl0_width[i] = 0;
@@ -973,7 +973,7 @@ static void u4lb_lp1_finalize(uint8_t lane) {
   lb_settle_counter[lane]++;
   walk_idx = (uint8_t)((lb_lane_desc_idx[lane] + 1) & 0x0F);
   lb_lane_desc_idx[lane] = walk_idx;
-  u4_work_buf[0x1C + lane] = (uint8_t)((u4_work_buf[0x1C + lane] & 0xF0) | sb_lane_desc[(uint16_t)(0x0 + walk_idx)]);
+  u4_work_buf[0x1C + lane] = (uint8_t)((u4_work_buf[0x1C + lane] & 0xF0) | sb_lane_desc[(uint16_t)(walk_idx)]);
   u4_work_buf[0x1C + lane] |= 0x80;
   lb_loop1_state[lane] = LP1_BOND_WAIT_PUSH;
 }

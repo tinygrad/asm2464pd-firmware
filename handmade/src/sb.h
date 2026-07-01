@@ -88,12 +88,12 @@ static void sb_lane_flip_init(void) {
   REG_INT_CTRL = (REG_INT_CTRL & 0xF7) | 0x08;
   SB_CLR(0x67, 0x40);
   u4_sb.laneA_cl_latch = 0x07; u4_sb.laneB_cl_latch = 0x07;
-  { uint8_t k; for (k = 0; k < 0x10; k++) lb_cap_field[(uint16_t)(0x0 + k)] = 0; }
+  { uint8_t k; for (k = 0; k < 0x10; k++) lb_cap_field[(uint16_t)(k)] = 0; }
   if (REG_LANE_RATE_C8FF == 0x04) {
     uint8_t k;
     for (k = 0; k < 0x10; k++) {
-      sb_lane_flip[(uint16_t)(0x0 + k)] = sb_lane_rate_desc[k];
-      lb_cap_field[(uint16_t)(0x0 + k)] = sb_cap_field_desc[k];
+      sb_lane_flip[(uint16_t)(k)] = sb_lane_rate_desc[k];
+      lb_cap_field[(uint16_t)(k)] = sb_cap_field_desc[k];
     }
   }
 }
@@ -164,8 +164,8 @@ static void sb_rom_descriptor_load(void) {
   if (!(u4_cfg.mode_flag & 0x80)) u4_work_buf[0x1B] &= ~0x02;
   for (i = 0; i < 0x10; i++) sb_lane_desc[i] = lane_descriptor[i];
   for (i = 0; i < 0x13; i++) {
-    sb_width_lut[(uint16_t)(0x0 + i)] = width_lut[i];
-    sb_branchA_gate[(uint16_t)(0x0 + i)] = branchA_gate[i];
+    sb_width_lut[(uint16_t)(i)] = width_lut[i];
+    sb_branchA_gate[(uint16_t)(i)] = branchA_gate[i];
   }
   if (u4_cfg.cap20g_gate0) {
     u4_work_buf[0x1A] = (uint8_t)((u4_work_buf[0x1A] & 0xDF) | 0x20);
@@ -1059,7 +1059,7 @@ static void sb_descriptor_response(void) {  /* af38 */
   SBTX_WR(1, desc_dir);
 
   if (desc_type < 0x12) {
-    width = sb_width_lut[(uint16_t)(0x0 + desc_type)];
+    width = sb_width_lut[(uint16_t)(desc_type)];
     SBTX_WR(1, (uint8_t)(SBTX_RD(1) | width));
   }
 
@@ -1068,10 +1068,10 @@ static void sb_descriptor_response(void) {  /* af38 */
     u4_sb.sb_desc_resp_len = 1;
     SBTX_WR(2, 0);
     if (desc_type < 0x12 &&
-        sb_width_lut[(uint16_t)(0x0 + desc_type)] != 0 &&
+        sb_width_lut[(uint16_t)(desc_type)] != 0 &&
         desc_len == status5 &&
-        sb_branchA_gate[(uint16_t)(0x0 + desc_type)] != 0 &&
-        desc_len <= sb_width_lut[(uint16_t)(0x0 + desc_type)]) {
+        sb_branchA_gate[(uint16_t)(desc_type)] != 0 &&
+        desc_len <= sb_width_lut[(uint16_t)(desc_type)]) {
       for (i = 0; i < desc_len; i++)
         u4_work_buf[(uint16_t)(uint8_t)(sb_desc_field_offset[desc_type] + i)] = SBP2_RD((uint8_t)(2 + i));
     } else {
@@ -1081,7 +1081,7 @@ static void sb_descriptor_response(void) {  /* af38 */
   } else {
     u4_sb.sb_desc_resp_len = desc_len;
     if (desc_type < 0x12 &&
-        (width = sb_width_lut[(uint16_t)(0x0 + desc_type)]) != 0 &&
+        (width = sb_width_lut[(uint16_t)(desc_type)]) != 0 &&
         status5 == 0) {
       if ((uint8_t)(width + 1) <= u4_sb.sb_desc_resp_len) u4_sb.sb_desc_resp_len = width;
       for (i = 0; i < u4_sb.sb_desc_resp_len; i++)
