@@ -129,21 +129,27 @@ static void u4_phy_state_seed(void) {  /* 92c5 */
 static void pcie_tunnel_adapter_config(void) {  /* b410 */
   uint8_t lo = u4_cfg.tunnel_cfg_lo, hi = u4_cfg.tunnel_cfg_hi, mode = u4_cfg.tunnel_cfg_mode, cred = u4_cfg.tunnel_credits;
   REG_TUNNEL_CFG_A_LO = lo;
-  XDATA_REG8(0xB411) = hi;
-  REG_TUNNEL_DATA_LO = lo; XDATA_REG8(0xB421) = hi;
+  REG_TUNNEL_CFG_A_HI = hi;
+  REG_TUNNEL_DATA_LO = lo;
+  REG_TUNNEL_DATA_HI = hi;
   REG_TUNNEL_CREDITS = cred;
   REG_TUNNEL_CFG_MODE = mode;
-  XDATA_REG8(0xB422) = lo;
-  XDATA_REG8(0xB423) = mode;
-  XDATA_REG8(0xB415) = 6; XDATA_REG8(0xB416) = 4; XDATA_REG8(0xB417) = 0;
-  XDATA_REG8(0xB425) = 6; XDATA_REG8(0xB426) = 4; XDATA_REG8(0xB427) = 0;
-  XDATA_REG8(0xB41A) = lo;
-  XDATA_REG8(0xB41B) = hi;
-  XDATA_REG8(0xB42A) = lo; XDATA_REG8(0xB42B) = hi;
+  REG_TUNNEL_STATUS_0 = lo;
+  REG_TUNNEL_STATUS_1 = mode;
+  REG_TUNNEL_CAP_0 = 6;
+  REG_TUNNEL_CAP_1 = 4;
+  REG_TUNNEL_CAP_2 = 0;
+  REG_TUNNEL_CAP2_0 = 6;
+  REG_TUNNEL_CAP2_1 = 4;
+  REG_TUNNEL_CAP2_2 = 0;
+  REG_TUNNEL_LINK_CFG_LO = lo;
+  REG_TUNNEL_LINK_CFG_HI = hi;
+  REG_TUNNEL_AUX_CFG_LO = lo;
+  REG_TUNNEL_AUX_CFG_HI = hi;
   REG_TUNNEL_PATH_CREDITS = cred;
-  XDATA_REG8(0xB419) = mode;
-  XDATA_REG8(0xB428) = lo;
-  XDATA_REG8(0xB429) = mode;
+  REG_TUNNEL_PATH_MODE = mode;
+  REG_TUNNEL_PATH2_CRED = lo;
+  REG_TUNNEL_PATH2_MODE = mode;
 }
 
 static void pcie_tunnel_adapter_enable(void) {  /* b401 */
