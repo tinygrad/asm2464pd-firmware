@@ -188,7 +188,14 @@ volatile __xdata __at(0x0761) uint8_t lb_cl_value[0x2];
 volatile __xdata __at(0x076C) uint8_t lb_width_pairA[0x4];
 volatile __xdata __at(0x0770) uint8_t lb_width_pairB[0x4];
 volatile __xdata __at(0x0777) uint8_t u4_host_desc[0x40];
+/* u4_host_desc[] — the host's in-band connect descriptor. */
+#define HD_TYPE    0x0   /* descriptor type; 0x0C = route descriptor */
+#define HD_STATUS  0x1   /* host connect status */
+#define HD_WIDTH   0x3   /* host-advertised lane-width mask */
 volatile __xdata __at(0x0800) uint8_t u4_work_buf[0x64];
+/* u4_work_buf[] — negotiated lane state. */
+#define WB_LANE_EN   0x19  /* negotiated lane-enable mask */
+#define WB_LANE_CAP  0x1A  /* device lane-capability mask (from the DROM seed) */
 volatile __xdata __at(0x099C) uint8_t sb_routerop_body[0x40];
 volatile __xdata __at(0x0B26) uint8_t lb_cl_status[0x2];
 volatile __xdata __at(0x0B28) uint8_t lb_eq_status[0x2];

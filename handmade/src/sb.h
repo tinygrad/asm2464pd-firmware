@@ -168,13 +168,13 @@ static void sb_rom_descriptor_load(void) {
     sb_branchA_gate[(uint16_t)(i)] = branchA_gate_rom[i];
   }
   if (u4_cfg.cap20g_gate0) {
-    u4_work_buf[0x1A] = (uint8_t)((u4_work_buf[0x1A] & 0xDF) | 0x20);
+    u4_work_buf[WB_LANE_CAP] = (uint8_t)((u4_work_buf[WB_LANE_CAP] & 0xDF) | 0x20);
     if ((u4_pd.enter_usb_accepted != 0 && u4_pd.eudo_mode_confirm < 3) ||
         (u4_pd.connect_route_latch != 0 && (u4_pd.confirm_input_cf == 1 || u4_pd.confirm_input_cf == 2))) {
-      u4_work_buf[0x1A] &= 0xDF;
+      u4_work_buf[WB_LANE_CAP] &= 0xDF;
     }
   }
-  if (u4_cfg.cap20g_gate1 == 0) u4_work_buf[0x1A] &= 0xED;
+  if (u4_cfg.cap20g_gate1 == 0) u4_work_buf[WB_LANE_CAP] &= 0xED;
 
   u4_sb.lane_width_latch0 = 1; u4_sb.route_query_response = 0; u4_sb.connect_present = 0; u4_sb.route_up_trigger = 0; u4_sb.walk_oneshot_flag = 0;
   u4_sb.state = U4FSM_IDLE; u4_sb.conn_routing_substate = CONNRT_PRINT_STATUS; lb_lane_desc_idx[0x0] = 0x0F; lb_lane_desc_idx[0x1] = 0x0F; u4_sb.coldboot_seed_gate = 1;
@@ -1353,8 +1353,8 @@ static void sb_channel_connect_service(void) {
     }
     if ((((lo & 0x20) >> 5) & 7) == 0) return;
     SB_WR(0x5A, 0x40);
-    u4_work_buf[0x19] &= 0xFD;
-    if (u4_work_buf[0x19] & 0x01) {
+    u4_work_buf[WB_LANE_EN] &= 0xFD;
+    if (u4_work_buf[WB_LANE_EN] & 0x01) {
       (void)SB_RD(0xA0);
     }
     return;
@@ -1477,7 +1477,7 @@ static void sb_routerop_response(uint8_t r) {  /* cdf5 */
   uint8_t hdr1_new, hdr3_orig, w3, i, len;
   if (r == 1) return;
   u4_sb.routerop_resp_armed = 0;
-  hdr1_new  = (uint8_t)(u4_host_desc[0x1] & 0x7F);
+  hdr1_new  = (uint8_t)(u4_host_desc[HD_STATUS] & 0x7F);
   hdr3_orig = u4_rop_hdr.hdr3;
   if (r == 2) {
     w3 = (uint8_t)(hdr3_orig | 0x02);
@@ -1553,7 +1553,7 @@ static void sb_router_event_handler(void) {
     uart_puts("\r\nL0:CL0 ");
     uart_puthex(SB_RD(0xA0) & 0x0F);
     SB_WR(0x64, (uint8_t)((SB_RD(0x64) & 0xFE) | 0x01));
-    if (!(u4_work_buf[0x19] & 0x02) || ((SB_RD(0xA1) & 0x0F) == 2)) {
+    if (!(u4_work_buf[WB_LANE_EN] & 0x02) || ((SB_RD(0xA1) & 0x0F) == 2)) {
       sb_set_d4_peer_cl0();
     }
   }
@@ -1563,7 +1563,7 @@ static void sb_router_event_handler(void) {
     uart_puts("\r\nL1:CL0 ");
     uart_puthex(SB_RD(0xA1) & 0x0F);
     SB_WR(0x64, (uint8_t)((SB_RD(0x64) & 0xFD) | 0x02));
-    if (!(u4_work_buf[0x19] & 0x01) || ((SB_RD(0xA0) & 0x0F) == 2)) {
+    if (!(u4_work_buf[WB_LANE_EN] & 0x01) || ((SB_RD(0xA0) & 0x0F) == 2)) {
       sb_set_d4_peer_cl0();
     }
   }
