@@ -40,11 +40,11 @@ static void sleep(uint16_t milliseconds) {
   { uint32_t g = 0; while (!(REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && ++g < 4000000UL); }
 }
 
-static volatile uint8_t is_usb2;
-static volatile uint32_t __xdata usb4_skip_magic;
+static uint8_t is_usb2;
+static uint32_t __xdata usb4_skip_magic;
 
 /* Streaming PCIe state — configured via 0xF0 control message */
-static volatile uint32_t __xdata dma_dwords;
+static uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming transfer */
 #define DMA_DWORDS_BYTE(n) (((volatile __xdata uint8_t *)&dma_dwords)[(n)])
 
 #include "pcie_pio.h"
@@ -412,16 +412,24 @@ void int0_isr(void) __interrupt(0) {
         if (u4_cfg.mode_flag & 0x83) u4c_lane_reinit_gate(0);
       } else {
         REG_USB_PHY_CTRL_91D1 = link_event;
+        uart_puts("[RST ");
+        uart_puthex(link_event);
+        uart_puts("]\n");
       }
     } else if (periph_status & USB_PERIPH_CONTROL) {
       handle_usb_control();
     } else if (periph_status & USB_PERIPH_ALT_LINK) {
-      uint8_t status = REG_BUF_CFG_9301; REG_BUF_CFG_9301 = status;   /* W1C ack */
+      uint8_t status = REG_BUF_CFG_9301;
+      uart_puts("[ALT LINK ");
+      uart_puthex(status);
+      uart_puts("]\n");
+      REG_BUF_CFG_9301 = status;
     } else if (periph_status & USB_PERIPH_BULK_DATA) {
       handle_usb_bulk_data();
     } else if (periph_status & USB_PERIPH_EP_COMPLETE) {
-      uint8_t ep = REG_USB_EP_READY; REG_USB_EP_READY = ep;   /* W1C ack */
-    } else if (periph_status & USB_PERIPH_LINK_EVENT) {
+      uint8_t ep = REG_USB_EP_READY;
+      uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts("]\n");
+      REG_USB_EP_READY = ep;    } else if (periph_status & USB_PERIPH_LINK_EVENT) {
       /* 0x9302 USB4-router link-event demux; service .2 then the 9300 SS event. */
       if (REG_BUF_CFG_9302 & 0x04) {
         REG_BUF_CFG_9302 = 0x04;
@@ -456,7 +464,8 @@ void int0_isr(void) __interrupt(0) {
     }
   }
   if (int0_type & INT_USB_CTRL_PENDING) {
-    // MSC interrupts are not enabled; ack only.
+    // NOTE: MSC interrupts are not enabled, if you want them, you can do the two writes here
+    uart_puts("[MSC]\n");
     REG_USB_MSC_CTRL = 1;
     REG_USB_MSC_STATUS = 0;
   }
