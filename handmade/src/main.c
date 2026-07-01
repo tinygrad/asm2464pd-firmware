@@ -49,28 +49,6 @@ static volatile uint8_t __xdata usb4_skip_magic1;
 static volatile uint32_t __xdata dma_dwords;
 #define DMA_DWORDS_BYTE(n) (((volatile __xdata uint8_t *)&dma_dwords)[(n)])
 
-static void pcie_log_status(void) {
-  uint8_t ltssm_state = REG_PCIE_LTSSM_STATE;
-  uint8_t link_info;
-  DPX = 0x01;
-  link_info = REG_PHY_PCIE_LINK_INFO;
-  DPX = 0x00;
-  uart_puts("[PT ");
-  uart_puthex(ltssm_state);
-  uart_puts((REG_SYS_CTRL_E765 & SYS_CTRL_E765_PCIE_LINK_UP) ? " UP " : " dn ");
-  uart_puts("G");
-  uart_puthex(link_info & 0x0F);
-  uart_puts("x");
-  uart_puthex((link_info >> 4) & 0x0F);
-  uart_puts(" C");
-  uart_puthex(REG_PCIE_LANE_CTRL_C659);
-  uart_puts(" E");
-  uart_puthex(REG_PHY_TIMER_CTRL_E764);
-  uart_puts(" R");
-  uart_puthex(REG_PCIE_PERST_CTRL);
-  uart_puts("]\n");
-}
-
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
 #include "i2c.h"

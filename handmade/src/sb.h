@@ -1301,19 +1301,10 @@ static void sb_pcie_tunnel_setup_if_cl0(void) {
   if (((SB_RD(0xA0) & 0x0F) != 2) || ((SB_RD(0xA1) & 0x0F) != 2)) return;
 
   u4_boot.tunnel_up_done = 1;
-  uart_puts("\r\n[PcieTunnel-Enable]\r\n");
   u4lb_pcie_tunnel_setup(1);
   u4lb_pcie_link_enable();
-  uart_puts("\r\n[PcieTunnel-UPS_Rst_Deassert]\r\n");
   REG_PCIE_LANE_CTRL_C659 |= PCIE_LANE_CTRL_ENABLE;
   REG_PHY_TIMER_CTRL_E764 = PHY_TIMER_PCIE_TRAIN_USB4;
-  { uint8_t n;
-    for (n = 0; n < 12; n++) {
-      pcie_log_status();
-      if (REG_PCIE_LTSSM_STATE == 0x78) break;
-      sleep(100);
-    }
-  }
 }
 
 static void sb_channel_connect_service(void) {
