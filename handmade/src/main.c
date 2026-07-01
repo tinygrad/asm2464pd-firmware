@@ -462,14 +462,7 @@ void int0_isr(void) __interrupt(0) {
 
 /* INT1 / EX1: the PD / USB4 / system interrupt aggregate (C806/C80A/EC06). */
 void int1_isr(void) __interrupt(1) {
-  uint8_t saved_dpx = DPX;
-  DPX = 0x00;
-  if ((u4_cfg.mode_flag & 0x83) && (REG_INT_SYSTEM & 0x01)) cc_pd_timer_tick();
-  if (REG_CPU_EXEC_STATUS_2 & 0x04) { REG_CPU_EXEC_STATUS_2 = 0x04; }
-  if ((u4_cfg.mode_flag & 0x83) && (REG_INT_PCIE_NVME & 0x40)) pd_rx_isr();
-  if (u4_cfg.mode_flag & 0x83) usb4_int_demux();
-  if (REG_INT_SYSTEM & 0x10) { /* C806.4 ack-only (no-op) */ }
-  DPX = saved_dpx;
+  USB4_INT1_BODY();
 }
 
 void main(void) {
