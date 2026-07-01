@@ -142,6 +142,14 @@ static void do_usb_bulk_in(void) {
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
 
+/* Vendor control requests (bRequest) — the tinygrad USB interface. */
+#define USB_VREQ_HW_STATUS  0xC0  /* IN:  INA231 voltage/current */
+#define USB_VREQ_XDATA_RD   0xE4  /* IN:  read XDATA  (wValue=addr, wIndexH=bank) */
+#define USB_VREQ_XDATA_WR   0xE5  /* OUT: write XDATA (wValue=addr, wIndexL=val) */
+#define USB_VREQ_TLP        0xF0  /* PCIe TLP engine (single TLP / streaming) */
+#define USB_VREQ_SRAM_DMA   0xF2  /* SRAM DMA init + arm */
+#define USB_VREQ_PCIE_PWR   0xF3  /* PCIe power on/off */
+
 /*=== USB Control Handler ===*/
 
 static void handle_usb_control(void) {
@@ -196,11 +204,11 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
       usb_send_zlp();
-    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xC0) {
+    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == USB_VREQ_HW_STATUS) {
       /* 0xC0 IN: hw_status_t */
       hw_status_read((__xdata hw_status_t *)DESC_BUF);
       usb_send_data(sizeof(hw_status_t));
-    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
+    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == USB_VREQ_XDATA_RD) {
       /* Vendor read XDATA via control.  wValue=addr, wLength=size.
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
@@ -215,7 +223,7 @@ static void handle_usb_control(void) {
         DESC_BUF[vi] = val;
       }
       usb_send_data(rlen);
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE5) {
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == USB_VREQ_XDATA_WR) {
       /* Vendor write XDATA via control.  wValue=addr, wIndex low=val.
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
@@ -225,7 +233,7 @@ static void handle_usb_control(void) {
       XDATA_REG8(addr) = val;
       if (bank) DPX = 0x00;
       usb_send_zlp();
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF2) {
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == USB_VREQ_SRAM_DMA) {
       /* 0xF2: SRAM DMA — init DMA engine and arm for bulk transfer.
       *   wValue bit 15 = direction: 0=BULK OUT (host→SRAM), 1=BULK IN (SRAM→host)
       *   wValue bits 0-14 = total sector count (C426:C427)
@@ -247,7 +255,7 @@ static void handle_usb_control(void) {
       REG_NVME_CTRL_STATUS = NVME_CTRL_DMA_START | (bulk_in ? 0 : NVME_CTRL_WRITE_DIR);
       REG_NVME_CMD_PARAM   = slot_sel;
       usb_send_zlp();
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF3) {
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == USB_VREQ_PCIE_PWR) {
       /* 0xF3: PCIe power control.
        *   wValue low bit 0 = 0 power off, 1 power on. */
       if (wValL & 0x01) {
@@ -256,7 +264,7 @@ static void handle_usb_control(void) {
         pcie_power_off();
       }
       usb_send_zlp();
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == USB_VREQ_TLP) {
       /* 0xF0 OUT: PCIe TLP engine.
       *   wValue = fmt_type | (byte_enable << 8)
       *   wIndex low[1:0] = mode (0=single TLP, 1=stream write, 2=stream read)
@@ -264,7 +272,7 @@ static void handle_usb_control(void) {
       *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 LE] */
       /* Don't configure yet — wait for DATA_OUT phase.
        * SETUP params (wValue/wIndex) are readable from registers in DATA_OUT. */
-    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
+    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == USB_VREQ_TLP) {
       /* 0xF0 IN: read TLP completion (mode=0 only). Returns 8 bytes. */
       uint8_t ret_status = 0xFF;
       uint32_t t;
@@ -305,7 +313,7 @@ static void handle_usb_control(void) {
     // USB_CTRL_PHASE_DATA_IN on USB 2.0, USB_CTRL_PHASE_STAT_IN on USB 3.0
     if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
     if (REG_USB_SETUP_BMREQ == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) &&
-        REG_USB_SETUP_BREQ == 0xF0) {
+        REG_USB_SETUP_BREQ == USB_VREQ_TLP) {
       /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
        *   [0-3]  address low (LE), [4-7] address high (LE), [8-11] value (LE)
        * Read SETUP params now and configure everything atomically. */
