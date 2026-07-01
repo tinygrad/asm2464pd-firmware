@@ -80,17 +80,17 @@ static void boot_phy_reset_pulse(uint8_t enable) {  /* e57d/e764 */
   }
 }
 static void boot_phy_lane_power(uint8_t enable) {  /* d630 */
-  XDATA_REG8(0xB432) = (XDATA_REG8V(0xB432) & 0xF8) | 0x07;
-  XDATA_REG8(0xB404) = (XDATA_REG8V(0xB404) & 0xF0) | (enable & 0x0F);
+  REG_POWER_CTRL_B432 = (REG_POWER_CTRL_B432 & 0xF8) | 0x07;
+  REG_PCIE_LINK_PARAM_B404 = (REG_PCIE_LINK_PARAM_B404 & 0xF0) | (enable & 0x0F);
   if (enable == 0x01) {
-    XDATA_REG8(0xE76C) = (uint8_t)(XDATA_REG8V(0xE76C) & 0xEF);
-    XDATA_REG8(0xE774) = (uint8_t)(XDATA_REG8V(0xE774) & 0xEF);
-    REG_SYS_CTRL_E77C  = (uint8_t)(REG_SYS_CTRL_E77C & 0xEF);
+    REG_SYS_CTRL_E76C = (uint8_t)(REG_SYS_CTRL_E76C & 0xEF);
+    REG_SYS_CTRL_E774 = (uint8_t)(REG_SYS_CTRL_E774 & 0xEF);
+    REG_SYS_CTRL_E77C = (uint8_t)(REG_SYS_CTRL_E77C & 0xEF);
   }
 }
 static void boot_phy_set_lane_width(uint8_t width) {  /* d436 */
-  XDATA_REG8(0xB434) = width;
-  XDATA_REG8(0xB436) = (XDATA_REG8V(0xB436) & 0xF0) | (width & 0x0F);
+  REG_PCIE_LINK_STATE = width;
+  REG_PCIE_LANE_CONFIG = (REG_PCIE_LANE_CONFIG & 0xF0) | (width & 0x0F);
 }
 static void boot_phy_pcie_tunnel_boot(void) {  /* d996 */
   REG_PCIE_CTRL_B402 &= 0xFD;
@@ -257,7 +257,7 @@ static void u4rop_read_flash_resp(void) {
   REG_DMA_CHAN_AUX1  = 0x00;
   REG_DMA_XFER_CNT_HI = (uint8_t)(xfer_len ? 0xFE : 0xFF);
   REG_DMA_XFER_CNT_LO = (uint8_t)(xfer_len - 1);
-  XDATA_REG8(0xC8B6) = 0x10;
+  REG_DMA_CHAN_CTRL2 = 0x10;
   REG_DMA_TRIGGER = 0x01;
   for (g = 0; (REG_DMA_TRIGGER & 0x01) && g < 0x4000; g++) { }
 }
