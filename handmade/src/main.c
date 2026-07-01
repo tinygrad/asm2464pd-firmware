@@ -1,5 +1,6 @@
 /*
- * ASM2464PD handmade firmware.
+ * ASM2464PD USB 3.0/USB4 Vendor-Class Firmware
+ * Bulk IN/OUT via MSC engine, control transfers for enumeration + vendor cmds.
  */
 
 #include "types.h"
@@ -57,6 +58,7 @@ static volatile uint32_t __xdata dma_dwords;
 #include "usb4.h"
 #include "usb4_lanebond.h"
 
+/* Hardware status packet */
 typedef struct {
   uint16_t voltage_mv;   /* INA231 bus voltage */
   int16_t  current_ma;   /* INA231 shunt current (signed) */
@@ -73,7 +75,7 @@ static void hw_status_read(__xdata hw_status_t *s) {
 }
 
 static void pcie_power_off(void) {
-  /* Hold the downstream device in reset and remove its rails. */
+  /* Hold the downstream device in reset before removing its rails. */
   REG_PCIE_PERST_CTRL = PCIE_PERST_ASSERT;
   REG_TUNNEL_LINK_STATE = 0x00;
   REG_PHY_TIMER_CTRL_E764 &= 0x10;
@@ -91,8 +93,8 @@ static void pcie_power_on(void) {
   bank1_write(0x78AF, 0x4F); bank1_write(0x79AF, 0x4F); // rxphy lane commits
   bank1_write(0x7AAF, 0xCF); bank1_write(0x7BAF, 0xCF);
   REG_HDDPC_CTRL |= 0x20;                      // enable 3.3V
-  REG_PCIE_LANE_CTRL_C659 |= PCIE_LANE_CTRL_ENABLE;      // enable downstream PCIe lane power
-  REG_PHY_TIMER_CTRL_E764 = PHY_TIMER_PCIE_TRAIN_USB4;   // start downstream PCIe training
+  REG_PCIE_LANE_CTRL_C659 |= 0x01;             // enable 12V
+  REG_PHY_TIMER_CTRL_E764 = 0x1C;              // start link training
   REG_PCIE_TUNNEL_CFG = PCIE_TLP_CTRL_TUNNEL;  // fix late issue in RDNA3
   REG_PCIE_PERST_CTRL = 0x00;                  // deassert PERST#
 
@@ -162,7 +164,9 @@ static void handle_usb_control(void) {
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
     } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
-      /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming. */
+      /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
+       * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
+       * wIndex = endpoint address (0x02=OUT, 0x81=IN). */
       uint8_t ep_addr = REG_USB_SETUP_WIDX_L;
       if (ep_addr == 0x02) {
         REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
@@ -187,7 +191,8 @@ static void handle_usb_control(void) {
       hw_status_read((__xdata hw_status_t *)DESC_BUF);
       usb_send_data(sizeof(hw_status_t));
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
-      /* Vendor read XDATA via control. wValue=addr, wLength=size, wIndex-hi=bank. */
+      /* Vendor read XDATA via control.  wValue=addr, wLength=size.
+       * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
       uint8_t bank = REG_USB_SETUP_WIDX_H;
       uint16_t maxlen = is_usb2 ? 64 : 512;
@@ -195,12 +200,14 @@ static void handle_usb_control(void) {
       uint16_t vi;
       for (vi = 0; vi < rlen; vi++) {
         if (bank) DPX = bank;
-        DESC_BUF[vi] = XDATA_REG8(addr + vi);
+        uint8_t val = XDATA_REG8(addr + vi);
         if (bank) DPX = 0x00;
+        DESC_BUF[vi] = val;
       }
       usb_send_data(rlen);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE5) {
-      /* Vendor write XDATA via control. wValue=addr, wIndex-lo=val, wIndex-hi=bank. */
+      /* Vendor write XDATA via control.  wValue=addr, wIndex low=val.
+       * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
       uint8_t bank = REG_USB_SETUP_WIDX_H;
       uint8_t val = REG_USB_SETUP_WIDX_L;
@@ -209,12 +216,17 @@ static void handle_usb_control(void) {
       if (bank) DPX = 0x00;
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF2) {
-      /* 0xF2: SRAM DMA — init DMA engine and arm for bulk transfer. */
-      uint8_t bulk_in = wValH & 0x80;
+      /* 0xF2: SRAM DMA — init DMA engine and arm for bulk transfer.
+      *   wValue bit 15 = direction: 0=BULK OUT (host→SRAM), 1=BULK IN (SRAM→host)
+      *   wValue bits 0-14 = total sector count (C426:C427)
+      *   wIndex low  = start slot (slot_sel for C429, C414 base)
+      *   wIndex high = number of slots (for C415 end range; 0 means 1 slot) */
+      uint8_t bulk_in = wValH & 0x80;  /* bit 15 of wValue = direction flag */
       uint16_t sectors = (((uint16_t)(wValH & 0x7F)) << 8) | wValL;
       uint8_t slot_sel = REG_USB_SETUP_WIDX_L;
       uint8_t num_slots = REG_USB_SETUP_WIDX_H;
       if (num_slots == 0) num_slots = 1;
+      /* DMA_INIT sequence for SRAM DMA */
       REG_NVME_DOORBELL       = 0x0;
       REG_NVME_SECTOR_SIZE_HI = 0x02;
       REG_NVME_SECTOR_SIZE_LO = 0x00;
@@ -226,7 +238,8 @@ static void handle_usb_control(void) {
       REG_NVME_CMD_PARAM   = slot_sel;
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF3) {
-      /* 0xF3: PCIe power control. wValue bit0 = 0 off / 1 on. */
+      /* 0xF3: PCIe power control.
+       *   wValue low bit 0 = 0 power off, 1 power on. */
       if (wValL & 0x01) {
         pcie_power_on();
       } else {
@@ -234,7 +247,13 @@ static void handle_usb_control(void) {
       }
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
-      /* 0xF0 OUT: PCIe TLP engine. Configured later in the DATA_OUT phase. */
+      /* 0xF0 OUT: PCIe TLP engine.
+      *   wValue = fmt_type | (byte_enable << 8)
+      *   wIndex low[1:0] = mode (0=single TLP, 1=stream write, 2=stream read)
+      *   wIndex low[7:2] = dwords per read chunk (0 → 128 for writes)
+      *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 LE] */
+      /* Don't configure yet — wait for DATA_OUT phase.
+       * SETUP params (wValue/wIndex) are readable from registers in DATA_OUT. */
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 IN: read TLP completion (mode=0 only). Returns 8 bytes. */
       uint8_t ret_status = 0xFF;
@@ -277,13 +296,18 @@ static void handle_usb_control(void) {
     if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
     if (REG_USB_SETUP_BMREQ == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) &&
         REG_USB_SETUP_BREQ == 0xF0) {
-      /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (addr-lo, addr-hi, value, all LE). */
+      /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
+       *   [0-3]  address low (LE), [4-7] address high (LE), [8-11] value (LE)
+       * Read SETUP params now and configure everything atomically. */
       uint8_t fmt_type = REG_USB_SETUP_WVAL_L;
       uint8_t byte_en  = REG_USB_SETUP_WVAL_H;
-      uint8_t tlp_mode = REG_USB_SETUP_WIDX_L & 0x03;   /* 0=single TLP, 1=stream OUT, 2=stream IN */
+      uint8_t widx_l   = REG_USB_SETUP_WIDX_L;
+      uint8_t mode  = widx_l & 0x03;
 
+      /* Reset any in-flight streaming transfer so stale ISRs are no-ops. */
       dma_dwords = 0;
 
+      /* Configure PCIe TLP engine */
       REG_PCIE_FMT_TYPE   = fmt_type;
       REG_PCIE_BYTE_EN    = byte_en;
       REG_PCIE_ADDR_0     = DESC_BUF[3];
@@ -295,8 +319,8 @@ static void handle_usb_control(void) {
       REG_PCIE_ADDR_HIGH_2 = DESC_BUF[5];
       REG_PCIE_ADDR_HIGH_3 = DESC_BUF[4];
 
-      if (tlp_mode == 0) {
-        /* Single TLP: fire with data from DESC_BUF[8-11] (LE). */
+      if (mode == 0) {
+        /* Single TLP: fire with data from DESC_BUF[8-11] (LE: [8]=LSB, [11]=MSB) */
         if (fmt_type & PCIE_FMT_HAS_DATA) {
           REG_PCIE_DATA_3 = DESC_BUF[8];
           REG_PCIE_DATA_2 = DESC_BUF[9];
@@ -309,16 +333,19 @@ static void handle_usb_control(void) {
         REG_PCIE_STATUS  = PCIE_STATUS_KICK;
         REG_PCIE_TRIGGER = PCIE_TRIGGER_EXEC;
       } else {
-        /* Streaming: read dword count from the value field (LE). */
+        /* Streaming: read dword count from value field (LE), ADDR regs already set above */
         DMA_DWORDS_BYTE(0) = DESC_BUF[8];
         DMA_DWORDS_BYTE(1) = DESC_BUF[9];
         DMA_DWORDS_BYTE(2) = DESC_BUF[10];
         DMA_DWORDS_BYTE(3) = DESC_BUF[11];
         if (dma_dwords > 0) {
-          if (tlp_mode == 1) {
-            REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;   // host->device: arm the OUT endpoint
-          } else if (tlp_mode == 2) {
-            do_usb_bulk_in();                         // device->host: kick the first IN
+          if (mode == 1) {
+            // host to device, we arm the OUT endpoint
+            REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+          }
+          if (mode == 2) {
+            // device to host, we do the first IN
+            do_usb_bulk_in();
           }
         }
       }
@@ -426,10 +453,6 @@ void int1_isr(void) __interrupt(1) {
   DPX = saved_dpx;
 }
 
-static uint8_t boot_mode_flags_usb3(void) {
-  return HANDMADE_USB3_MODE_FLAGS;
-}
-
 #if HANDMADE_USB4_MODE_FLAGS
 static uint8_t boot_mode_flags_usb4_policy(void) {
   if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return HANDMADE_USB3_MODE_FLAGS;
@@ -523,7 +546,7 @@ void main(void) {
     if (usb4_skip_magic0 == 0xA5 && usb4_skip_magic1 == 0x5A) {
       usb4_skip_magic0 = 0;
       usb4_skip_magic1 = 0;
-      u4_cfg.mode_flag = boot_mode_flags_usb3();
+      u4_cfg.mode_flag = HANDMADE_USB3_MODE_FLAGS;
       usb4_reset_fallback = 1;
     } else {
       u4_cfg.mode_flag = boot_mode_flags_usb4_policy();
@@ -537,7 +560,7 @@ void main(void) {
     uart_puts("]\n");
   }
 #else
-  u4_cfg.mode_flag = boot_mode_flags_usb3();
+  u4_cfg.mode_flag = HANDMADE_USB3_MODE_FLAGS;
   uart_puts("[Mode ");
   uart_puthex(u4_cfg.mode_flag);
   uart_puts(" S");
