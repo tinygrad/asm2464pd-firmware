@@ -40,8 +40,8 @@ clear_ram_loop:
     mov     @r0, a
     djnz    r0, clear_ram_loop
 
-    ; First push lands at SDCC's current stack start.
-    mov     sp, #0x5C
+    ; First push lands at SDCC's reported stack start (0x76).
+    mov     sp, #0x75
 
     ; Initialize DPX = 0 (bank 0)
     mov     0x96, #0x00
