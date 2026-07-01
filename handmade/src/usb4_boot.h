@@ -1,12 +1,11 @@
 #ifndef USB4_BOOT_H
 #define USB4_BOOT_H
 
-#if HANDMADE_USB4_MODE_FLAGS
 #define USB4_SKIP_MAGIC 0x5AA55AA5UL
 
 static uint8_t boot_mode_flags_usb4_policy(void) {
   if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return 0x04u;
-  return HANDMADE_USB4_MODE_FLAGS;
+  return USB4_MODE_FLAGS;
 }
 
 static void usb4_state_prepare(void) {
@@ -113,11 +112,5 @@ static void usb4_fallback_to_usb3(void) {
   boot_phy_set_lane_width(0x0F); \
   u4lb_pcie_set_link_width(PCIE_LINK_WIDTH_x2); \
 } while (0)
-
-#else
-
-#define USB4_INT1_BODY() do { uart_puts("[int1]\n"); } while (0)
-
-#endif
 
 #endif

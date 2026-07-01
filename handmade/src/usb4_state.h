@@ -1,6 +1,8 @@
 #ifndef USB4_STATE_H
 #define USB4_STATE_H
 
+#define USB4_MODE_FLAGS 0x87u  /* Stock USB4 tunnel route + VDM-ACK policy. */
+
 typedef enum {
     U4FSM_IDLE       = 0x00,
     U4FSM_CONN_ROUT  = 0x03,

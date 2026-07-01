@@ -140,14 +140,10 @@ static void pd_int1_enable_group(void) {
   REG_INT_STATUS_C800 |= 0x01;
 }
 
-#ifndef HANDMADE_USB4_MODE_FLAGS
-#define HANDMADE_USB4_MODE_FLAGS 0x87u
-#endif
-
 /* Top-level keystone bring-up: enable INT1, set the USB4 mode policy, init PD PHY + state. */
 static void pd_keystone_init(void) {
   pd_int1_enable_group();
-  u4_cfg.mode_flag = HANDMADE_USB4_MODE_FLAGS;  /* 0x87 = USB4 tunnel route + VDM-ACK */
+  u4_cfg.mode_flag = USB4_MODE_FLAGS;
   cc_pd_phy_term_init();
   pd_internal_state_init();
 }

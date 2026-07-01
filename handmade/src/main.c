@@ -482,9 +482,7 @@ void int1_isr(void) __interrupt(1) {
 }
 
 void main(void) {
-#if HANDMADE_USB4_MODE_FLAGS
   uint8_t usb4_reset_fallback = 0;
-#endif
 
   // without this, UART has parity
   REG_UART_LCR &= ~LCR_PARITY_MASK;
@@ -495,34 +493,19 @@ void main(void) {
   // flash controller — needed for the USB serial OTP read on enumeration
   flash_init();
 
-#if HANDMADE_USB4_MODE_FLAGS
   USB4_SELECT_BOOT_MODE(usb4_reset_fallback);
-#else
-  u4_cfg.mode_flag = 0x04u;
-  uart_puts("[Mode ");
-  uart_puthex(u4_cfg.mode_flag);
-  uart_puts(" S");
-  uart_puthex(REG_FLASH_READY_STATUS);
-  uart_puts(" C");
-  uart_puthex(REG_FLASH_BUF_BYTE(0));
-  uart_puts("]\n");
-#endif
 
-#if HANDMADE_USB4_MODE_FLAGS
   if (u4_cfg.mode_flag & 0x83) {
     pcie_power_off();
     usb4_state_prepare();
   }
-#endif
 
   if (!(u4_cfg.mode_flag & 0x83)) {
     usb_phy_tune();
 
-#if HANDMADE_USB4_MODE_FLAGS
     if (usb4_reset_fallback) {
       USB4_REINIT_USB3_AFTER_RESET_FALLBACK();
     }
-#endif
 
     // PCIe TLP engine values that don't change + tuning
     REG_PCIE_TLP_CTRL   = 0x01;
@@ -539,11 +522,9 @@ void main(void) {
     usb_init_controller(0);
   }
 
-#if HANDMADE_USB4_MODE_FLAGS
   if (u4_cfg.mode_flag & 0x83) {
     usb4_policy_enable();
   }
-#endif
 
   // enable interrupts (EX1 = PD/USB4 INT1)
   IE = (uint8_t)(IE_EA | IE_EX0 | ((u4_cfg.mode_flag & 0x83) ? (IE_EX1 | IE_ET0) : 0));
@@ -553,12 +534,9 @@ void main(void) {
   i2c_init();
   ina231_init();
 
-#if HANDMADE_USB4_MODE_FLAGS
   uint8_t kicks = 0;
   uint8_t usb4_fallback_ticks = 0;
-#endif
   while (1) {
-#if HANDMADE_USB4_MODE_FLAGS
     if (u4_cfg.mode_flag & 0x83) {
       if (u4_boot.pd_seen && !u4_pd.enter_usb_accepted && !u4_boot.sb_asserted) {
         if (u4_pd.usb3_fallback_flag || usb4_fallback_ticks >= 12) {
@@ -614,6 +592,5 @@ void main(void) {
         }
       }
     }
-#endif
   }
 }
