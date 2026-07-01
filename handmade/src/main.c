@@ -363,8 +363,12 @@ static void handle_usb_control(void) {
 /*=== ISR ===*/
 
 void handle_usb_bulk_data(void) {
-  uint8_t bulk_cfg1;
+  uint8_t bulk_cfg1, bulk_cfg2;
   bulk_cfg1 = REG_USB_EP_CFG1;
+  bulk_cfg2 = REG_USB_EP_CFG2;
+  /*uart_puts("[BULK ");
+  uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
+  uart_puts("]\n");*/
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
     REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_OUT_COMPLETE;
     uint16_t dword_count = (((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L) >> 2;
