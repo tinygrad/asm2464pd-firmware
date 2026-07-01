@@ -85,6 +85,35 @@ static void usb4_fallback_to_usb3(void) {
   DPX = saved_dpx; \
 } while (0)
 
+#define USB4_SELECT_BOOT_MODE(reset_fallback) do { \
+  if (usb4_skip_magic0 == 0xA5 && usb4_skip_magic1 == 0x5A) { \
+    usb4_skip_magic0 = 0; \
+    usb4_skip_magic1 = 0; \
+    u4_cfg.mode_flag = HANDMADE_USB3_MODE_FLAGS; \
+    (reset_fallback) = 1; \
+  } else { \
+    u4_cfg.mode_flag = boot_mode_flags_usb4_policy(); \
+  } \
+  uart_puts("[Mode "); \
+  uart_puthex(u4_cfg.mode_flag); \
+  uart_puts(" S"); \
+  uart_puthex(REG_FLASH_READY_STATUS); \
+  uart_puts(" C"); \
+  uart_puthex(REG_FLASH_BUF_BYTE(0)); \
+  uart_puts("]\n"); \
+} while (0)
+
+#define USB4_REINIT_USB3_AFTER_RESET_FALLBACK() do { \
+  usb_pipe_engine_init(); \
+  REG_CPU_MODE = CPU_MODE_USB3; \
+  REG_CPU_MODE_NEXT &= 0x1F; \
+  REG_CPU_CTRL_CA81 &= 0xFE; \
+  boot_phy_set_link_mode(0); \
+  boot_phy_lane_power(0x0F); \
+  boot_phy_set_lane_width(0x0F); \
+  u4lb_pcie_set_link_width(PCIE_LINK_WIDTH_x2); \
+} while (0)
+
 #else
 
 #define USB4_INT1_BODY() do { uart_puts("[int1]\n"); } while (0)
