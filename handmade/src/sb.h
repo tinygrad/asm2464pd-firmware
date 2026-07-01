@@ -588,126 +588,133 @@ static void u4c_identity_desc_emit(uint8_t width_byte) {  /* c270 */
   u4c_sb_desc_commit();
 }
 
-static volatile uint8_t __xdata u4c_stock_r1;
+/*
+ * USB4 router config-space (CS_25) access primitives, ported from stock ROM.
+ * The host reads/writes router config dwords through the page-1 0x1234-0x1243
+ * register file; u4c_cs_ptr is the current CS register index the wr/rd helpers
+ * operate on. The u4c_cs_a3xx/e7f8 steps encode individual protocol fields and
+ * keep their ROM addresses in the name for cross-referencing the stock decomp.
+ */
+static volatile uint8_t __xdata u4c_cs_ptr;
 
-static uint8_t u4c_stock_read34(void) {
-  u4c_stock_r1 = 0x34;
+static uint8_t u4c_cs_read34(void) {
+  u4c_cs_ptr = 0x34;
   return P12_RD(0x34);
 }
-static uint8_t u4c_stock_read35(void) {
-  u4c_stock_r1 = 0x35;
+static uint8_t u4c_cs_read35(void) {
+  u4c_cs_ptr = 0x35;
   return P12_RD(0x35);
 }
-static void u4c_stock_wr(uint8_t v) {
-  P12_WR(u4c_stock_r1, v);
+static void u4c_cs_wr(uint8_t v) {
+  P12_WR(u4c_cs_ptr, v);
 }
-static uint8_t u4c_stock_rd(void) {
-  return P12_RD(u4c_stock_r1);
+static uint8_t u4c_cs_rd(void) {
+  return P12_RD(u4c_cs_ptr);
 }
-static uint8_t u4c_stock_a308(uint8_t a) {
+static uint8_t u4c_cs_a308(uint8_t a) {
   a = (uint8_t)((a & 0xF0) | 0x0F);
-  u4c_stock_wr(a);
-  u4c_stock_r1++;
-  a = (uint8_t)((u4c_stock_rd() & 0x3F) | 0x80);
-  u4c_stock_wr(a);
-  u4c_stock_r1++;
+  u4c_cs_wr(a);
+  u4c_cs_ptr++;
+  a = (uint8_t)((u4c_cs_rd() & 0x3F) | 0x80);
+  u4c_cs_wr(a);
+  u4c_cs_ptr++;
   return a;
 }
-static uint8_t u4c_stock_a30c(uint8_t a) {
-  u4c_stock_wr(a);
-  u4c_stock_r1++;
-  a = (uint8_t)((u4c_stock_rd() & 0x3F) | 0x80);
-  u4c_stock_wr(a);
-  u4c_stock_r1++;
+static uint8_t u4c_cs_a30c(uint8_t a) {
+  u4c_cs_wr(a);
+  u4c_cs_ptr++;
+  a = (uint8_t)((u4c_cs_rd() & 0x3F) | 0x80);
+  u4c_cs_wr(a);
+  u4c_cs_ptr++;
   return a;
 }
-static uint8_t u4c_stock_a2df(uint8_t a) {
-  u4c_stock_wr(a);
-  u4c_stock_r1++;
-  a = (uint8_t)(u4c_stock_rd() & 0xE0);
-  u4c_stock_wr(a);
+static uint8_t u4c_cs_a2df(uint8_t a) {
+  u4c_cs_wr(a);
+  u4c_cs_ptr++;
+  a = (uint8_t)(u4c_cs_rd() & 0xE0);
+  u4c_cs_wr(a);
   return a;
 }
-static uint8_t u4c_stock_a2de(uint8_t a) {
-  u4c_stock_r1++;
-  return u4c_stock_a2df(a);
+static uint8_t u4c_cs_a2de(uint8_t a) {
+  u4c_cs_ptr++;
+  return u4c_cs_a2df(a);
 }
-static uint8_t u4c_stock_commit_read34(void) {
+static uint8_t u4c_cs_commit_read34(void) {
   u4c_sb_desc_commit();
-  return u4c_stock_read34();
+  return u4c_cs_read34();
 }
-static uint8_t u4c_stock_a2f9(uint8_t a) {
-  u4c_stock_wr(a);
-  return u4c_stock_commit_read34();
+static uint8_t u4c_cs_a2f9(uint8_t a) {
+  u4c_cs_wr(a);
+  return u4c_cs_commit_read34();
 }
-static uint8_t u4c_stock_a2f8(uint8_t a) {
-  u4c_stock_r1++;
-  return u4c_stock_a2f9(a);
+static uint8_t u4c_cs_a2f8(uint8_t a) {
+  u4c_cs_ptr++;
+  return u4c_cs_a2f9(a);
 }
-static uint8_t u4c_stock_a31c(uint8_t a) {
-  u4c_stock_wr(a);
-  u4c_stock_r1++;
-  a = (uint8_t)((u4c_stock_rd() & 0xC0) | 0x04);
-  u4c_stock_wr(a);
-  a = (uint8_t)((u4c_stock_rd() & 0x3F) | 0x40);
-  u4c_stock_wr(a);
+static uint8_t u4c_cs_a31c(uint8_t a) {
+  u4c_cs_wr(a);
+  u4c_cs_ptr++;
+  a = (uint8_t)((u4c_cs_rd() & 0xC0) | 0x04);
+  u4c_cs_wr(a);
+  a = (uint8_t)((u4c_cs_rd() & 0x3F) | 0x40);
+  u4c_cs_wr(a);
   return a;
 }
-static uint8_t u4c_stock_a327(uint8_t a) {
-  u4c_stock_wr(a);
-  a = (uint8_t)((u4c_stock_rd() & 0x3F) | 0x40);
-  u4c_stock_wr(a);
+static uint8_t u4c_cs_a327(uint8_t a) {
+  u4c_cs_wr(a);
+  a = (uint8_t)((u4c_cs_rd() & 0x3F) | 0x40);
+  u4c_cs_wr(a);
   return a;
 }
-static uint8_t u4c_stock_a348(uint8_t a) {
-  u4c_stock_wr(a);
-  u4c_stock_r1++;
-  return u4c_stock_rd();
+static uint8_t u4c_cs_a348(uint8_t a) {
+  u4c_cs_wr(a);
+  u4c_cs_ptr++;
+  return u4c_cs_rd();
 }
-static uint8_t u4c_stock_a369(uint8_t a) {
-  u4c_stock_wr(a);
-  u4c_stock_r1++;
-  u4c_stock_wr(a);
-  u4c_stock_r1++;
+static uint8_t u4c_cs_a369(uint8_t a) {
+  u4c_cs_wr(a);
+  u4c_cs_ptr++;
+  u4c_cs_wr(a);
+  u4c_cs_ptr++;
   return a;
 }
-static uint8_t u4c_stock_a3cb(void) {
+static uint8_t u4c_cs_a3cb(void) {
   uint8_t a = XDATA_REG8V(0x0B19);
-  u4c_stock_wr(a);
+  u4c_cs_wr(a);
   return a;
 }
-static uint8_t u4c_stock_a3d4(uint8_t a) {
-  u4c_stock_wr(a);
-  u4c_stock_r1++;
+static uint8_t u4c_cs_a3d4(uint8_t a) {
+  u4c_cs_wr(a);
+  u4c_cs_ptr++;
   return 0x01;
 }
-static void u4c_stock_e7f8(uint8_t a) {
-  u4c_stock_wr(a);
+static void u4c_cs_e7f8(uint8_t a) {
+  u4c_cs_wr(a);
   u4c_sb_desc_commit();
 }
 static void u4c_router_cfg_dword_write(uint8_t idx, uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3) {
   uint8_t a;
-  a = u4c_stock_read34();
-  a = u4c_stock_a308(a);
+  a = u4c_cs_read34();
+  a = u4c_cs_a308(a);
   (void)a;
-  u4c_stock_a2df(idx);
-  u4c_stock_r1 = 0x3C;
-  u4c_stock_wr(b0);
-  u4c_stock_r1++;
-  u4c_stock_wr(b1);
-  u4c_stock_r1++;
-  u4c_stock_wr(b2);
-  u4c_stock_r1++;
-  u4c_stock_wr(b3);
+  u4c_cs_a2df(idx);
+  u4c_cs_ptr = 0x3C;
+  u4c_cs_wr(b0);
+  u4c_cs_ptr++;
+  u4c_cs_wr(b1);
+  u4c_cs_ptr++;
+  u4c_cs_wr(b2);
+  u4c_cs_ptr++;
+  u4c_cs_wr(b3);
   u4c_sb_desc_commit();
 }
 static uint32_t u4c_router_cfg_dword_read(uint8_t idx) {
   uint8_t a, b0, b1, b2, b3;
   uint16_t g;
-  a = u4c_stock_read34();
-  a = u4c_stock_a308(a);
+  a = u4c_cs_read34();
+  a = u4c_cs_a308(a);
   (void)a;
-  u4c_stock_a2df(idx);
+  u4c_cs_a2df(idx);
   P12_WR(0x37, (uint8_t)(P12_RD(0x37) & 0x7F));
   P12_WR(0x38, 0x01);
   for (g = 0; (P12_RD(0x38) & 0x01) && g < 0x2000; g++) { }
@@ -809,7 +816,7 @@ static void u4c_router_cfg_seed_usb4(void) {
                                usb4_router_cfg_seed[(uint8_t)(base + 4)]);
   }
 }
-static void u4c_stock_ce20(uint16_t desc_addr, uint8_t val) {
+static void u4c_cs_ce20(uint16_t desc_addr, uint8_t val) {
   XDATA_REG8V(desc_addr) = val;
   u4lb_desc0_lanemask = XDATA_REG8V(0x0B34);
   u4lb_desc1 = XDATA_REG8V(0x0B35);
@@ -824,66 +831,66 @@ static void u4c_stock_ce20(uint16_t desc_addr, uint8_t val) {
 
 static void u4c_identity_desc_emit_stock(void) {  /* c270 */
   uint8_t a;
-  a = u4c_stock_read34();
-  a = u4c_stock_a308(a);
+  a = u4c_cs_read34();
+  a = u4c_cs_a308(a);
   (void)a;
-  u4c_stock_a2df(0x00);
-  u4c_stock_r1 = 0x3C;
-  u4c_stock_a3cb();
-  a = XDATA_REG8V(0x0B1A); u4c_stock_r1++; u4c_stock_wr(a);
-  a = XDATA_REG8V(0x0A57); u4c_stock_r1++; u4c_stock_wr(a);
-  a = XDATA_REG8V(0x0A58); a = u4c_stock_a2f8(a);
+  u4c_cs_a2df(0x00);
+  u4c_cs_ptr = 0x3C;
+  u4c_cs_a3cb();
+  a = XDATA_REG8V(0x0B1A); u4c_cs_ptr++; u4c_cs_wr(a);
+  a = XDATA_REG8V(0x0A57); u4c_cs_ptr++; u4c_cs_wr(a);
+  a = XDATA_REG8V(0x0A58); a = u4c_cs_a2f8(a);
 
-  a = u4c_stock_a308(a);
+  a = u4c_cs_a308(a);
   (void)a;
-  u4c_stock_a2df(0x07);
-  a = XDATA_REG8V(0x0B17); u4c_stock_r1 = 0x3C; u4c_stock_wr(a);
-  a = XDATA_REG8V(0x0B18); u4c_stock_r1++; u4c_stock_wr(a);
-  u4c_stock_r1++;
-  u4c_stock_a3cb();
-  a = XDATA_REG8V(0x0B1A); a = u4c_stock_a2f8(a);
+  u4c_cs_a2df(0x07);
+  a = XDATA_REG8V(0x0B17); u4c_cs_ptr = 0x3C; u4c_cs_wr(a);
+  a = XDATA_REG8V(0x0B18); u4c_cs_ptr++; u4c_cs_wr(a);
+  u4c_cs_ptr++;
+  u4c_cs_a3cb();
+  a = XDATA_REG8V(0x0B1A); a = u4c_cs_a2f8(a);
 
-  a = u4c_stock_a308(a);
+  a = u4c_cs_a308(a);
   (void)a;
-  u4c_stock_a2df(0x08);
-  a = XDATA_REG8V(0x0B13); u4c_stock_r1 = 0x3C; u4c_stock_wr(a);
-  a = XDATA_REG8V(0x0B14); u4c_stock_r1++; u4c_stock_wr(a);
-  a = XDATA_REG8V(0x0B15); u4c_stock_r1++; u4c_stock_wr(a);
-  a = XDATA_REG8V(0x0B16); u4c_stock_r1++; u4c_stock_wr(a);
+  u4c_cs_a2df(0x08);
+  a = XDATA_REG8V(0x0B13); u4c_cs_ptr = 0x3C; u4c_cs_wr(a);
+  a = XDATA_REG8V(0x0B14); u4c_cs_ptr++; u4c_cs_wr(a);
+  a = XDATA_REG8V(0x0B15); u4c_cs_ptr++; u4c_cs_wr(a);
+  a = XDATA_REG8V(0x0B16); u4c_cs_ptr++; u4c_cs_wr(a);
   u4c_sb_desc_commit();
 }
 
 static void u4c_lane_width_desc_stock(void) {  /* ccb3 */
   uint8_t a;
-  a = u4c_stock_read34();
+  a = u4c_cs_read34();
   a = (uint8_t)((a & 0xF0) | 0x0E);
-  u4c_stock_a30c(a);
-  u4c_stock_a2df(0x01);
-  u4c_stock_r1 = 0x3C;
-  a = 0x00; u4c_stock_wr(a);
-  u4c_stock_r1++;
-  a = 0x01; u4c_stock_a369(a);
-  a = 0x00; u4c_stock_wr(a);
+  u4c_cs_a30c(a);
+  u4c_cs_a2df(0x01);
+  u4c_cs_ptr = 0x3C;
+  a = 0x00; u4c_cs_wr(a);
+  u4c_cs_ptr++;
+  a = 0x01; u4c_cs_a369(a);
+  a = 0x00; u4c_cs_wr(a);
   u4c_sb_desc_commit();
 
   a = XDATA_REG8V(0x09FB);
   if (!(a & 0x01)) {
-    a = u4c_stock_read34();
+    a = u4c_cs_read34();
     a = (uint8_t)((a & 0xF0) | 0x07);
-    u4c_stock_a31c(a);
-    u4c_stock_r1++;
-    u4c_stock_a2df(0x02);
+    u4c_cs_a31c(a);
+    u4c_cs_ptr++;
+    u4c_cs_a2df(0x02);
     u4c_sb_desc_commit();
   }
   a = XDATA_REG8V(0x09FB);
   if (!(a & 0x02)) {
-    a = u4c_stock_read34();
+    a = u4c_cs_read34();
     a = (uint8_t)((a & 0xF0) | 0x07);
-    a = u4c_stock_a348(a);
+    a = u4c_cs_a348(a);
     a = (uint8_t)((a & 0xC0) | 0x03);
-    u4c_stock_a327(a);
-    u4c_stock_r1++;
-    u4c_stock_a2df(0x02);
+    u4c_cs_a327(a);
+    u4c_cs_ptr++;
+    u4c_cs_a2df(0x02);
     u4c_sb_desc_commit();
   }
 }
@@ -894,57 +901,57 @@ static void u4c_descriptor_load_stock(void) {  /* b779 */
   u4c_lane_width_desc_stock();
 
   if (!(XDATA_REG8V(0x09F9) & 0x80)) {
-    a = u4c_stock_read35();
-    u4c_stock_wr((uint8_t)((a & 0x3F) | 0x80));
-    u4c_stock_a2de(0x06);
-    u4c_stock_ce20(0x0B34, 0x02);
+    a = u4c_cs_read35();
+    u4c_cs_wr((uint8_t)((a & 0x3F) | 0x80));
+    u4c_cs_a2de(0x06);
+    u4c_cs_ce20(0x0B34, 0x02);
   }
 
-  u4c_stock_r1 = 0x35;
-  a = u4c_stock_rd();
-  u4c_stock_wr((uint8_t)((a & 0x3F) | 0x80));
-  u4c_stock_r1++;
-  u4c_stock_a2df(0x20);
-  u4c_stock_ce20(0x0B37, 0x40);
+  u4c_cs_ptr = 0x35;
+  a = u4c_cs_rd();
+  u4c_cs_wr((uint8_t)((a & 0x3F) | 0x80));
+  u4c_cs_ptr++;
+  u4c_cs_a2df(0x20);
+  u4c_cs_ce20(0x0B37, 0x40);
 
-  a = u4c_stock_read34();
-  a = u4c_stock_a308(a);
+  a = u4c_cs_read34();
+  a = u4c_cs_a308(a);
   (void)a;
-  u4c_stock_a2df(0x41);
-  u4c_stock_r1 = 0x3C;
-  u4c_stock_wr(0x01);
-  a = u4c_stock_a2f8(0x40);
+  u4c_cs_a2df(0x41);
+  u4c_cs_ptr = 0x3C;
+  u4c_cs_wr(0x01);
+  a = u4c_cs_a2f8(0x40);
 
-  a = u4c_stock_a308(a);
+  a = u4c_cs_a308(a);
   (void)a;
-  u4c_stock_a2df(0x44);
-  u4c_stock_r1 = 0x3C;
-  u4c_stock_wr(0x8A);
-  u4c_stock_r1 = 0x3E;
-  a = u4c_stock_a2f9(0x03);
+  u4c_cs_a2df(0x44);
+  u4c_cs_ptr = 0x3C;
+  u4c_cs_wr(0x8A);
+  u4c_cs_ptr = 0x3E;
+  a = u4c_cs_a2f9(0x03);
 
-  a = u4c_stock_a308(a);
+  a = u4c_cs_a308(a);
   (void)a;
-  u4c_stock_a2df(0x4C);
-  u4c_stock_r1 = 0x3C;
-  u4c_stock_wr(0x00);
-  u4c_stock_r1++;
-  u4c_stock_wr(0x03);
-  u4c_stock_r1++;
-  u4c_stock_wr(0x00);
-  a = u4c_stock_a2f8(0x00);
+  u4c_cs_a2df(0x4C);
+  u4c_cs_ptr = 0x3C;
+  u4c_cs_wr(0x00);
+  u4c_cs_ptr++;
+  u4c_cs_wr(0x03);
+  u4c_cs_ptr++;
+  u4c_cs_wr(0x00);
+  a = u4c_cs_a2f8(0x00);
   a = (uint8_t)((a & 0xF0) | 0x04);
-  u4c_stock_a30c(a);
-  a = u4c_stock_a348(0x97);
+  u4c_cs_a30c(a);
+  a = u4c_cs_a348(0x97);
   a = (uint8_t)((a & 0xE0) | 0x01);
-  u4c_stock_wr(a);
-  u4c_stock_r1 = 0x3E;
-  u4c_stock_e7f8(0x04);
-  u4c_stock_r1 = 0x06;
-  a = u4c_stock_rd();
+  u4c_cs_wr(a);
+  u4c_cs_ptr = 0x3E;
+  u4c_cs_e7f8(0x04);
+  u4c_cs_ptr = 0x06;
+  a = u4c_cs_rd();
   a = (uint8_t)(a & 0xDF);
-  u4c_stock_a3d4(a);
-  u4c_stock_wr(0x01);
+  u4c_cs_a3d4(a);
+  u4c_cs_wr(0x01);
 }
 
 static void u4c_route_mode_regs(void) {  /* d556 */
