@@ -86,21 +86,6 @@
  */
 #define REG_FLASH_BUF_BYTE(off) XDATA_REG8(FLASH_BUFFER_BASE + (off))
 #define FLASH_BUF               ((__xdata uint8_t *)FLASH_BUFFER_BASE)
-/*
- * Stock overlays a validated 128-byte config record onto 0x7000. Bytes below
- * only have this meaning after the stock flash-config read/validation state has
- * populated the buffer; otherwise 0x7000 is just the shared flash/USB landing
- * buffer.
- */
-#define FLASH_CFG_PD_MODE_OFF          0x59u  /* 0x7059: bits 5:4 select stock event/USB4 policy */
-#define FLASH_CFG_PD_SRC_CAP_OFF       0x5Au  /* 0x705A: source-cap policy bits */
-#define FLASH_CFG_USB_MODE_OFF         0x5Cu  /* 0x705C: parsed to stock G_FLASH_CFG_0A42 */
-#define FLASH_CFG_LANE_CFG_OFF         0x5Du  /* 0x705D: parsed to stock G_FLASH_CFG_0A43 */
-#define FLASH_CFG_LINK_SPEED_OFF       0x5Eu  /* 0x705E: parsed to stock G_FLASH_CFG_0A44 */
-#define FLASH_CFG_TUNNEL_FLAGS_OFF     0x5Fu  /* 0x705F: parsed to stock G_FLASH_CFG_0A45 */
-#define FLASH_CFG_MARKER_OFF           0x7Eu  /* 0x707E: 0xA5 means config record is valid */
-#define FLASH_CFG_CHECKSUM_OFF         0x7Fu  /* 0x707F: additive checksum over 0x7004..0x707E */
-#define FLASH_CFG_MARKER_VALID         0xA5u
 
 // Flash buffer control registers (0x7041, 0x78AF-0x78B2)
 #define REG_FLASH_BUF_CTRL_7041 XDATA_REG8(0x7041)  /* Flash buffer control */
@@ -259,8 +244,7 @@
 #define   USB_CONFIG_MASK        0x0F  // Bits 0-3: USB configuration value
 #define   USB_CONFIG_BIT1        0x02  // Bit 1: Must be CLEAR to reach 0x9091 check at 0xCDF5
 #define   USB_CONFIG_MSC_INIT    0xE0  // MSC engine init value (stock 0xB203; partially volatile)
-#define REG_USB_EP0_STATUS      XDATA_REG8(0x9003)  /* EP0 descriptor-DMA status/length high clear */
-#define REG_USB_EP0_LEN_H       REG_USB_EP0_STATUS  /* Legacy alias: stock writes 0 before 0x9004=len */
+#define REG_USB_EP0_LEN_H       XDATA_REG8(0x9003)  /* EP0 transfer length high byte */
 #define REG_USB_EP0_LEN_L       XDATA_REG8(0x9004)  /* EP0 transfer length low byte */
 #define REG_USB_EP0_CFG         XDATA_REG8(0x9005)  /* EP0 config / bulk interrupt enable (not length) */
 /*
