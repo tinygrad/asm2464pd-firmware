@@ -194,27 +194,9 @@ static void handle_usb_control(void) {
       dma_dwords = 0;
       usb_send_zlp();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
-      uint8_t t;
-      REG_USB_EP_BUF_CTRL = 0x55;
-      REG_USB_EP_BUF_SEL = 0x53;
-      REG_USB_EP_BUF_DATA = 0x42;
-      REG_USB_EP_BUF_PTR_LO = 0x53;
-      REG_USB_MSC_LENGTH = 0x0D;
-
-      t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
-      t = REG_USB_EP0_CONFIG; REG_USB_EP0_CONFIG = t;
-      REG_USB_EP_CFG2 = 0x01;
-      REG_USB_EP_CFG2 = 0x08;
-
-      REG_USB_EP_STATUS_90E3 = 0x02;
-      t = REG_USB_EP_CTRL_905F; REG_USB_EP_CTRL_905F = t;
-      t = REG_USB_EP_CTRL_905D; REG_USB_EP_CTRL_905D = t;
-      REG_USB_EP_STATUS_90E3 = 0x01;
-      REG_USB_CTRL_90A0 = 0x01;
-      REG_USB_INT_MASK_9090 |= USB_INT_MASK_GLOBAL;
-
-      t = REG_USB_STATUS; REG_USB_STATUS = t;
-      t = REG_USB_CTRL_924C; REG_USB_CTRL_924C = t;
+      REG_USB_MSC_CFG = 0x00;
+      REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
+      REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
@@ -474,30 +456,9 @@ static uint8_t boot_mode_flags_initial(void) {
 static uint8_t __xdata boot_probe_link;
 static uint8_t __xdata boot_probe_phy_mode;
 
-static uint8_t boot_should_init_usb4(void) {
-  uint8_t link, phy_mode;
-
-  /*
-   * This is the only handmade USB3/USB4 fork. In stock boot, 4C40 seeds
-   * 09F9=04, the flash/config path may promote it, and B1CB performs this
-   * PIPE/PHY probe before the later 09F9&83 USB4 follow-up dispatch.
-   * Do not use direct SuperSpeed presence as a veto here: USB4-capable ports
-   * may expose the direct USB path before the USB4 sideband path is started.
-   */
-  link = (uint8_t)(REG_USB_LINK_STATUS & USB_LINK_STATUS_MASK);
-  phy_mode = (uint8_t)((REG_USB_PHY_CTRL_91C0 & 0x18) >> 3);
-  boot_probe_link = link;
-  boot_probe_phy_mode = phy_mode;
-  if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return 0;
-
-  usb_pipe_engine_init();
-  usb4_phy_arm();
-  link = (uint8_t)(REG_USB_LINK_STATUS & USB_LINK_STATUS_MASK);
-  phy_mode = (uint8_t)((REG_USB_PHY_CTRL_91C0 & 0x18) >> 3);
-  boot_probe_link = link;
-  boot_probe_phy_mode = phy_mode;
-
-  return (uint8_t)(phy_mode == 2);
+static void boot_record_link_probe(void) {
+  boot_probe_link = (uint8_t)(REG_USB_LINK_STATUS & USB_LINK_STATUS_MASK);
+  boot_probe_phy_mode = (uint8_t)((REG_USB_PHY_CTRL_91C0 & 0x18) >> 3);
 }
 
 static void usb4_state_prepare(void) {
@@ -541,6 +502,8 @@ static void usb4_state_prepare(void) {
 }
 
 static void usb4_policy_enable(void) {
+  usb_pipe_engine_init();
+  usb4_phy_arm();
   pd_keystone_init();
   usb4_phy_rx_arm();
   usb4_routerop_init();
@@ -585,13 +548,12 @@ void main(void) {
     if (usb4_skip_magic0 == 0xA5 && usb4_skip_magic1 == 0x5A) {
       usb4_skip_magic0 = 0;
       usb4_skip_magic1 = 0;
-      boot_probe_link = (uint8_t)(REG_USB_LINK_STATUS & USB_LINK_STATUS_MASK);
-      boot_probe_phy_mode = (uint8_t)((REG_USB_PHY_CTRL_91C0 & 0x18) >> 3);
+      boot_record_link_probe();
       u4_cfg.mode_flag = boot_mode_flags_initial();
       usb4_reset_fallback = 1;
     } else {
-      u4_cfg.mode_flag = boot_should_init_usb4() ?
-                         HANDMADE_USB4_MODE_FLAGS : boot_mode_flags_initial();
+      boot_record_link_probe();
+      u4_cfg.mode_flag = HANDMADE_USB4_MODE_FLAGS;
     }
     uart_puts("[Mode ");
     uart_puthex(u4_cfg.mode_flag);
@@ -650,7 +612,9 @@ void main(void) {
   }
 
   is_usb2 = (u4_cfg.mode_flag & 0x83) ? 1 : 0;
-  usb_init_controller(0);
+  if (!(u4_cfg.mode_flag & 0x83)) {
+    usb_init_controller(0);
+  }
   IE = IE_EA | IE_EX0;
 
 #if HANDMADE_USB4_MODE_FLAGS
