@@ -92,10 +92,13 @@ typedef struct {
 } u4_sb_fsm_t;
 
 typedef struct {
-    uint8_t contract_state;
+    uint8_t contract_state;  /* negotiated power: 0 none, 1 <5V, 2 5V/1.5A, 3 5V/3A, 4 other */
     uint8_t connect_route_latch;
     uint8_t enter_usb_accepted;
     uint8_t role_state;
+    /* PD policy substate: 1 idle/init, 2 Source_Cap rx (staging Request),
+     * 3 Request sent (await Accept), 4 Accepted (await PS_RDY),
+     * 0x0D Enter_USB pending, 0x0E Data_Reset pending (5/6 transient Source_Cap). */
     uint8_t msg_substate;
     uint8_t usb3_fallback_flag;
     uint8_t rx_slot_idx;

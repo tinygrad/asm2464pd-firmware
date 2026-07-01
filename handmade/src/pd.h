@@ -34,6 +34,12 @@ static void pd_rx_message_dispatch(void);
 #define VDM_CMD_ENTER_MODE      0x04
 #define VDM_CMDT_ACK  1
 #define VDM_CMDT_NAK  2
+
+/* PD message mailbox (E4xx): one 0x20-byte slot per message.
+ * TX staging buffer at 0xE420; RX ring of slots from 0xE440. */
+#define PD_TX_BASE    0xE420u
+#define PD_RX_BASE    0xE440u
+#define PD_MSG_STRIDE 0x20u   /* bytes per message slot (also the TX buffer size) */
 /* Bounded poll until (*reg & mask) matches set (1=wait-for-set, 0=wait-for-clear). */
 static void pd_wait(volatile __xdata uint8_t *reg, uint8_t mask, uint8_t set) {
   uint16_t iters = 0;
@@ -136,7 +142,7 @@ static void pd_drive_hard_reset(void) {
     return;
   }
   uart_puts("][Drive_HardRst]");
-  { uint8_t i; for (i = 0; i < 0x20; i++) PR(0xE420 + i) = 0; }
+  { uint8_t i; for (i = 0; i < PD_MSG_STRIDE; i++) PR(PD_TX_BASE + i) = 0; }
   pd_internal_state_init();
   REG_PHY_EVENT_E40F = 0xFF; REG_PHY_INT_STATUS_E410 = 0xFF;
   REG_CMD_CONFIG &= ~0x0E;
@@ -290,7 +296,7 @@ static void pd_handle_enter_usb(void);
 /* Return the 16-bit RX buffer pointer for the current RX slot. */
 static uint16_t pd_rx_ptr(void) {
   uint8_t slot = u4_pd.rx_slot_idx;
-  return (uint16_t)(0xE440u + (uint16_t)(0x20u * slot));
+  return (uint16_t)(PD_RX_BASE + (uint16_t)(PD_MSG_STRIDE * slot));
 }
 
 /* Send the message staged in E420-E43F and bump the TX MessageID. */
@@ -330,12 +336,12 @@ static void pd_tx_set_sop_header(uint8_t nobj, uint8_t msgtype) {
 /* Zero the PD TX message buffer E420-E43F. */
 static void pd_tx_buf_clear(void) {
   uint8_t i;
-  for (i = 0; i < 0x20; i++) PR(0xE420 + i) = 0;
+  for (i = 0; i < PD_MSG_STRIDE; i++) PR(PD_TX_BASE + i) = 0;
 }
 
 /* Build a Request (header + Fixed RDO) and send it, then arm SenderResponse. */
 static void pd_build_send_request_rdo(void) {
-  uint16_t pdo0 = (uint16_t)(0xE442u + (uint16_t)(0x20u * u4_pd.rx_slot_idx));
+  uint16_t pdo0 = (uint16_t)(PD_RX_BASE + 2u + (uint16_t)(PD_MSG_STRIDE * u4_pd.rx_slot_idx));
   uint8_t cur_lo = PR(pdo0 + 0);
   uint8_t cur_hi = PR(pdo0 + 1) & 0x03;
 
