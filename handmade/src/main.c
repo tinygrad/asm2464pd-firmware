@@ -41,8 +41,7 @@ static void sleep(uint16_t milliseconds) {
 }
 
 static volatile uint8_t is_usb2;
-static volatile uint8_t __xdata usb4_skip_magic0;
-static volatile uint8_t __xdata usb4_skip_magic1;
+static volatile uint32_t __xdata usb4_skip_magic;
 
 /* Streaming PCIe state — configured via 0xF0 control message */
 static volatile uint32_t __xdata dma_dwords;

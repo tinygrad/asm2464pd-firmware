@@ -2,6 +2,8 @@
 #define USB4_BOOT_H
 
 #if HANDMADE_USB4_MODE_FLAGS
+#define USB4_SKIP_MAGIC 0x5AA55AA5UL
+
 static uint8_t boot_mode_flags_usb4_policy(void) {
   if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return 0x04u;
   return HANDMADE_USB4_MODE_FLAGS;
@@ -68,8 +70,7 @@ static void usb4_policy_enable(void) {
 
 static void usb4_fallback_to_usb3(void) {
   uart_puts("[USB4 fallback]\n");
-  usb4_skip_magic0 = 0xA5;
-  usb4_skip_magic1 = 0x5A;
+  usb4_skip_magic = USB4_SKIP_MAGIC;
   REG_CPU_RESET = CPU_RESET_TRIGGER;
   while (1) { }
 }
@@ -86,9 +87,8 @@ static void usb4_fallback_to_usb3(void) {
 } while (0)
 
 #define USB4_SELECT_BOOT_MODE(reset_fallback) do { \
-  if (usb4_skip_magic0 == 0xA5 && usb4_skip_magic1 == 0x5A) { \
-    usb4_skip_magic0 = 0; \
-    usb4_skip_magic1 = 0; \
+  if (usb4_skip_magic == USB4_SKIP_MAGIC) { \
+    usb4_skip_magic = 0; \
     u4_cfg.mode_flag = 0x04u; \
     (reset_fallback) = 1; \
   } else { \
