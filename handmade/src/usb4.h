@@ -1,3 +1,12 @@
+/*
+ * usb4.h — USB4 PHY/link boot bring-up and the INT1 (EX1) interrupt demux.
+ *
+ * Boot path: PHY clock/keystone setup, PCIe-tunnel adapter config, and the
+ * banked (DPX=1) PHY RX descriptor/table load.
+ * Runtime: usb4_int_demux() fans the C806/C80A/EC06 aggregate out to the
+ * sideband router event handler, the secondary-adapter link events, and the
+ * router-op mailbox; u4c_link_mode_apply() drives the USB4 link-mode machine.
+ */
 #ifndef USB4_H
 #define USB4_H
 
@@ -368,6 +377,9 @@ static void usb4_int_demux(void) {
   }
 }
 
+/* PHY RX serdes init table, applied via banked (DPX=1) read-modify-write in
+ * usb4_phy_rx_table_apply(): each row is { page_hi, reg_lo, and_mask, or_val }.
+ * Load-bearing analog/PHY seed values — never edit the numbers. */
 static __code const uint8_t u4_phy_rx_init_tab[324][4] = {
   {0x78,0x9b,0xcf,0x10}, {0x78,0x9b,0x7f,0x80}, {0x60,0x00,0x3f,0xc0}, {0x60,0x04,0xff,0x01},
   {0x60,0x06,0x0f,0x40}, {0x60,0x07,0x80,0x01}, {0x60,0x59,0x03,0x40}, {0x60,0x5a,0xe0,0x00},
@@ -452,6 +464,8 @@ static __code const uint8_t u4_phy_rx_init_tab[324][4] = {
   {0x7a,0x0b,0xc0,0x1c}, {0x7a,0x2a,0xf0,0x06}, {0x7b,0x0b,0xc0,0x1c}, {0x7b,0x2a,0xf0,0x06},
 };
 
+/* Banked PHY register access: select XDATA page 1 (DPX=1) around the access.
+ * Same DPX dance as sb.h's P1_RD/P1_WR; kept local to the PHY table loader. */
 static uint8_t PG_RD(uint16_t addr) {
   uint8_t v; DPX = 0x01; v = XDATA_REG8V(addr); DPX = 0x00; return v;
 }
@@ -459,6 +473,8 @@ static void PG_WR(uint16_t addr, uint8_t v) {
   DPX = 0x01; XDATA_REG8V(addr) = v; DPX = 0x00;
 }
 
+/* Read-modify-write a page-0 register: reg = (reg & mask) | or_val. The
+ * PHY_SET_* helpers below are the specific (mask, or_val) pairs from stock. */
 #define RMW(a, m, o)   PR(a) = (PR(a) & (uint8_t)(m)) | (uint8_t)(o)
 #define PHY_SET_BIT2(a)        RMW((a), 0xFB, 0x04)  /* c390 */
 #define PHY_SET_NIB_HI7(a)        RMW((a), 0x8F, 0x70)  /* c34a */
