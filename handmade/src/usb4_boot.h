@@ -3,7 +3,7 @@
 
 #if HANDMADE_USB4_MODE_FLAGS
 static uint8_t boot_mode_flags_usb4_policy(void) {
-  if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return HANDMADE_USB3_MODE_FLAGS;
+  if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return 0x04u;
   return HANDMADE_USB4_MODE_FLAGS;
 }
 
@@ -89,7 +89,7 @@ static void usb4_fallback_to_usb3(void) {
   if (usb4_skip_magic0 == 0xA5 && usb4_skip_magic1 == 0x5A) { \
     usb4_skip_magic0 = 0; \
     usb4_skip_magic1 = 0; \
-    u4_cfg.mode_flag = HANDMADE_USB3_MODE_FLAGS; \
+    u4_cfg.mode_flag = 0x04u; \
     (reset_fallback) = 1; \
   } else { \
     u4_cfg.mode_flag = boot_mode_flags_usb4_policy(); \

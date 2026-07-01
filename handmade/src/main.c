@@ -18,8 +18,6 @@ __sfr __at(0x88) TCON;
 #define IE_ET0  0x02
 #define IE_EX0  0x01
 
-#define HANDMADE_USB3_MODE_FLAGS 0x04u
-
 /* Blocking UART putc with a bounded spin so a wedged UART can't hang the CPU. */
 void uart_putc(uint8_t ch) { uint16_t g = 0; while (!REG_UART_TFBF && ++g < 0x8000) { } REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
@@ -482,7 +480,7 @@ void main(void) {
 #if HANDMADE_USB4_MODE_FLAGS
   USB4_SELECT_BOOT_MODE(usb4_reset_fallback);
 #else
-  u4_cfg.mode_flag = HANDMADE_USB3_MODE_FLAGS;
+  u4_cfg.mode_flag = 0x04u;
   uart_puts("[Mode ");
   uart_puthex(u4_cfg.mode_flag);
   uart_puts(" S");
