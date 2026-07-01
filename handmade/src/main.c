@@ -522,7 +522,6 @@ void main(void) {
   if (!(u4_cfg.mode_flag & 0x83)) {
     usb_init_controller(0);
   }
-  IE = IE_EA | IE_EX0;
 
 #if HANDMADE_USB4_MODE_FLAGS
   if (u4_cfg.mode_flag & 0x83) {
