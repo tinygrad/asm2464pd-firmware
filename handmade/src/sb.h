@@ -526,17 +526,6 @@ static void u4c_lane_width_desc(uint8_t width_byte) {  /* ccb3 */
   }
 }
 
-static volatile uint8_t __xdata sb_eng_nibble_acc;
-static uint8_t sb_eng_nibble_swap(uint16_t addr) {  /* bbc7/bc70 */
-  uint8_t code = XDATA_REG8(addr);
-  uint8_t hi = (uint8_t)(code >> 4);
-  u4_cfg.lb_width_rate_code = (uint8_t)(((uint8_t)(hi | (uint8_t)(code << 4))) ^ hi);
-  sb_eng_nibble_acc = (uint8_t)((uint8_t)(sb_eng_nibble_acc << 4) | hi);
-  return sb_eng_nibble_acc;
-}
-static uint8_t sb_eng_nibble_merge(uint16_t addr) {  /* bbc7/bcb8 */
-  return (uint8_t)(u4_cfg.lb_width_rate_code | (uint8_t)(XDATA_REG8(addr) >> 4));
-}
 static void sb_eng_data_init(void) {  /* bbc7 */
   uint8_t i;
   for (i = 0; i < 9; i++) P12_WR((uint8_t)(0x12 + i), 0x00);
