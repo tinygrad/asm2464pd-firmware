@@ -129,14 +129,11 @@ static void pcie_power_on(void) {
 }
 
 static void do_usb_bulk_in(void) {
-  uint16_t chunk = ((uint16_t)DMA_DWORDS_BYTE(1) << 8) | DMA_DWORDS_BYTE(0);
-  if (DMA_DWORDS_BYTE(2) || DMA_DWORDS_BYTE(3)) {
-    chunk = is_usb2 ? (512/4) : (1024/4);
-  } else if (is_usb2) {
-    if (chunk > (512/4)) chunk = (512/4);
-  } else if (chunk > (1024/4)) {
-    chunk = (1024/4);
-  }
+  /* Move at most one bulk max-packet per IN: 512 B (USB2) or 1024 B (USB3),
+   * i.e. chunk = min(dma_dwords remaining, packet size in dwords). */
+  uint16_t max_dwords = is_usb2 ? (512/4) : (1024/4);
+  uint16_t chunk = (dma_dwords > max_dwords) ? max_dwords : (uint16_t)dma_dwords;
+
   pcie_read_chunk((__xdata uint8_t *)0x8000, chunk);
   uint16_t nbytes = chunk * 4;
   REG_USB_BULK_IN_LEN_H = nbytes >> 8;
