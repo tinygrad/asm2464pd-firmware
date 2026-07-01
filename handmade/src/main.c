@@ -499,9 +499,7 @@ void main(void) {
   if (IS_USB4()) {
     pcie_power_off();
     usb4_state_prepare();
-  }
-
-  if (!IS_USB4()) {
+  } else {
     usb_phy_tune();
 
     if (usb4_reset_fallback) {
@@ -518,13 +516,11 @@ void main(void) {
     pcie_power_on();
   }
 
-  is_usb2 = IS_USB4() ? 1 : 0;
-  if (!IS_USB4()) {
-    usb_init_controller(0);
-  }
-
   if (IS_USB4()) {
+    is_usb2 = 1; // sideband access
     usb4_policy_enable();
+  } else {
+    usb_init_controller(0);
   }
 
   // enable interrupts (EX1 = PD/USB4 INT1)
