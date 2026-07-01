@@ -808,6 +808,7 @@ static void vdm_tx_dispatch(void) {
       break;
     case 0x03:
       uart_puts("[Disc_Modes]");
+      u4_pd.usb3_fallback_flag = 1;
       vdm_build_discover_modes();
       break;
     case 0x04:

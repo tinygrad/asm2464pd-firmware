@@ -639,11 +639,11 @@ void main(void) {
 #if HANDMADE_USB4_MODE_FLAGS
     if (u4_cfg.mode_flag & 0x83) {
       if (u4_boot.pd_seen && !u4_pd.enter_usb_accepted && !u4_boot.sb_asserted) {
-        if (usb4_fallback_ticks < 12) {
-          usb4_fallback_ticks++;
-        } else {
+        if (u4_pd.usb3_fallback_flag || usb4_fallback_ticks >= 12) {
           usb4_fallback_to_usb3();
           continue;
+        } else {
+          usb4_fallback_ticks++;
         }
       }
       if (u4_sb.conn_consequence_done) {
