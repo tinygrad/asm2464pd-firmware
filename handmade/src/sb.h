@@ -1005,6 +1005,8 @@ static void phy_cc10_cmd_wait(uint8_t subcmd, uint8_t cc12, uint8_t cc13);
 } while (0)
 static void u4c_link_mode_apply(uint8_t mode);  /* 8a89 */
 static void u4lb_transport_reinit(uint8_t skip_lane);  /* b031 */
+static void u4lb_pcie_tunnel_setup(uint8_t param);  /* e305 */
+static void u4lb_pcie_link_enable(void);  /* e4ea */
 static void boot_phy_set_bit0(uint16_t addr);  /* bceb */
 static void sb_channel_connect_service(void);
 static void u4lb_set_fsm_state(u4_fsm_state_t state);  /* eb62 */
@@ -1294,6 +1296,26 @@ static void sb_lane_bond_complete_tunnel_up(void) {
   }
 }
 
+static void sb_pcie_tunnel_setup_if_cl0(void) {
+  if (u4_boot.tunnel_up_done) return;
+  if (((SB_RD(0xA0) & 0x0F) != 2) || ((SB_RD(0xA1) & 0x0F) != 2)) return;
+
+  u4_boot.tunnel_up_done = 1;
+  uart_puts("\r\n[PcieTunnel-Enable]\r\n");
+  u4lb_pcie_tunnel_setup(1);
+  u4lb_pcie_link_enable();
+  uart_puts("\r\n[PcieTunnel-UPS_Rst_Deassert]\r\n");
+  REG_PCIE_LANE_CTRL_C659 |= PCIE_LANE_CTRL_ENABLE;
+  REG_PHY_TIMER_CTRL_E764 = PHY_TIMER_PCIE_TRAIN_USB4;
+  { uint8_t n;
+    for (n = 0; n < 12; n++) {
+      pcie_log_status();
+      if (REG_PCIE_LTSSM_STATE == 0x78) break;
+      sleep(100);
+    }
+  }
+}
+
 static void sb_channel_connect_service(void) {
   uint8_t port = u4_sb.active_port_rr;
   uint8_t lo, hi, n;
@@ -1547,6 +1569,8 @@ static void sb_router_event_handler(void) {
       sb_set_d4_peer_cl0();
     }
   }
+
+  sb_pcie_tunnel_setup_if_cl0();
 
   if (SB_RD(0x66) & 0x04) {
     SB_WR(0x66, 0x04);
