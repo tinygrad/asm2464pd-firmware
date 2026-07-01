@@ -204,18 +204,19 @@ static void usb_pipe_engine_init(void) {
     REG_USB_PHY_CTRL_91C0 &= (uint8_t)~0x01;
 }
 
-/* Arm USB4 PHY link-up once at boot via the CC10 mailbox, with a bounded wait. */
+/* Arm USB4 PHY link-up once at boot: run Timer0 (CC10-CC13) as a bounded-wait
+ * timeout while polling E318 for PHY link-up completion. */
 static void usb4_phy_arm(void) {
-    REG_TIMER0_CSR = 0x04;
-    REG_TIMER0_CSR = 0x02;
+    REG_TIMER0_CSR = TIMER_CSR_CLEAR;
+    REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
     REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x04;
     REG_TIMER0_THRESHOLD_HI = 0x01;
     REG_TIMER0_THRESHOLD_LO = 0x8F;
-    REG_TIMER0_CSR = 0x01;
+    REG_TIMER0_CSR = TIMER_CSR_ENABLE;
     { uint16_t spin = 0;
-      while (!((REG_PHY_COMPLETION_E318 & 0x10) || (REG_TIMER0_CSR & 0x02)) && ++spin < 0xFFFF); }
-    REG_TIMER0_CSR = 0x04;
-    REG_TIMER0_CSR = 0x02;
+      while (!((REG_PHY_COMPLETION_E318 & 0x10) || (REG_TIMER0_CSR & TIMER_CSR_EXPIRED)) && ++spin < 0xFFFF); }
+    REG_TIMER0_CSR = TIMER_CSR_CLEAR;
+    REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
 }
 
 /* EP0 IN: send `len` bytes of DESC_BUF, or a zero-length ack. */
