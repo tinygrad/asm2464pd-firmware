@@ -46,7 +46,7 @@ static volatile uint8_t __xdata is_usb2;
 static volatile uint8_t __xdata usb4_skip_magic0;
 static volatile uint8_t __xdata usb4_skip_magic1;
 
-/* Streaming PCIe state — dwords remaining for the current transfer. */
+/* Streaming PCIe state — configured via 0xF0 control message */
 static volatile uint32_t __xdata dma_dwords;
 #define DMA_DWORDS_BYTE(n) (((volatile __xdata uint8_t *)&dma_dwords)[(n)])
 
@@ -177,7 +177,9 @@ static void handle_usb_control(void) {
       dma_dwords = 0;
       usb_send_zlp();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
+      // enable USB bulk mode (bypass MSC)
       REG_USB_MSC_CFG = 0x00;
+      // clearn bulk endpoints
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
@@ -543,7 +545,7 @@ void main(void) {
   uart_puts("\n[BOOT]\n");
   led_set_rgb(false, false, true);
 
-  // Flash controller for the USB serial OTP read.
+  // flash controller — needed for the USB serial OTP read on enumeration
   flash_init();
 
 #if HANDMADE_USB4_MODE_FLAGS
@@ -604,7 +606,7 @@ void main(void) {
     pcie_apply_x2_rxphy_tuning();
     pcie_power_off();
 
-    // Non-USB4 compatibility path: train the directly attached downstream PCIe link.
+    // PCIe power on for backwards compatibility, can be removed
     pcie_power_on();
   }
 
