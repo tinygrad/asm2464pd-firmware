@@ -317,13 +317,14 @@ static void u4c_desc_edge_engine(void) {  /* d4c8 */
   ENG_DESC_WR_SELF40(0x35, (uint8_t)((P12_RD(DE_CTRL) & 0xC0) | 0x03));
   ENG_DESC_WR_CLR(0x36, 0x05);
 
-  P12_WR(DE_WR(1), 0x40); commit_a = u4c_sb_desc_commit();
-  (void)ENG_DESC_WR_STROBE_RET(0x3D, (uint8_t)((commit_a & 0xF0) | 0x08));
-  ENG_DESC_WR_CLR(0x3F, 0x09);
-
-  P12_WR(DE_WR(1), 0x04); commit_a = u4c_sb_desc_commit();
-  (void)ENG_DESC_WR_STROBE_RET(0x3D, (uint8_t)((commit_a & 0xF0) | 0x02));
-  ENG_DESC_WR_CLR(0x3F, 0x05);
+#define EDGE_STROBE(wr_val, or_val, clr_val) do { \
+  P12_WR(DE_WR(1), (wr_val)); commit_a = u4c_sb_desc_commit(); \
+  (void)ENG_DESC_WR_STROBE_RET(0x3D, (uint8_t)((commit_a & 0xF0) | (or_val))); \
+  ENG_DESC_WR_CLR(0x3F, (clr_val)); \
+} while (0)
+  EDGE_STROBE(0x40, 0x08, 0x09);
+  EDGE_STROBE(0x04, 0x02, 0x05);
+#undef EDGE_STROBE
 
   P12_WR(DE_WR(1), 0x40); (void)u4c_sb_desc_commit();
 }
@@ -360,21 +361,21 @@ static void u4c_desc_seq_commit(void) {  /* cbf8 */
   ENG_DESC_WR_CLR(0x35, 0x41);
   u4c_desc_block_cc();
 
-  ENG_DESC_WR_SELF40(0x3D, 0x01);
-  ENG_DESC_WR_CLR(0x3E, 0x42);
-  u4c_desc_block_66();
-  P12_WR(DE_WR(3), 0x01);
-  (void)u4c_sb_desc_commit();
+#define DESC_SEQ_BOND(val) do { \
+  ENG_DESC_WR_SELF40(0x3D, (val)); \
+  ENG_DESC_WR_CLR(0x3E, 0x42); \
+  u4c_desc_block_66(); \
+  P12_WR(DE_WR(3), 0x01); \
+  (void)u4c_sb_desc_commit(); \
+} while (0)
+  DESC_SEQ_BOND(0x01);
 
   ENG_DESC_WR_SELF40(0x3D, 0x02);
   ENG_DESC_WR_CLR(0x3E, 0x41);
   u4c_desc_block_cc();
 
-  ENG_DESC_WR_SELF40(0x3D, 0x02);
-  ENG_DESC_WR_CLR(0x3E, 0x42);
-  u4c_desc_block_66();
-  P12_WR(DE_WR(3), 0x01);
-  (void)u4c_sb_desc_commit();
+  DESC_SEQ_BOND(0x02);
+#undef DESC_SEQ_BOND
 }
 
 static __code const uint8_t u4c_crc32_table[256][4] = {  /* 5466 */
@@ -543,31 +544,20 @@ static void sb_eng_data_init(void) {  /* bbc7 */
   XDATA_REG8V(0x0B1A) = u4_p12.data_hi;
 }
 
+/* Write a router-config descriptor dword (LO0F+CLR header + 4 data bytes + commit). */
+#define DESC_DWORD_COMMIT(arg1, arg2, b0, b1, b2, b3) do { \
+  (void)P12_RD(DE_LANESEL); \
+  ENG_DESC_WR_LO0F(0x34, (arg1)); \
+  ENG_DESC_WR_CLR(0x35, (arg2)); \
+  P12_WR(DE_WR(0), (b0)); P12_WR(DE_WR(1), (b1)); \
+  P12_WR(DE_WR(2), (b2)); P12_WR(DE_WR(3), (b3)); \
+  (void)u4c_sb_desc_commit(); \
+} while (0)
+
 static void u4c_identity_desc_emit(uint8_t width_byte) {  /* c270 */
-  (void)P12_RD(DE_LANESEL);
-  ENG_DESC_WR_LO0F(0x34, width_byte);
-  ENG_DESC_WR_CLR(0x35, 0x00);
-  P12_WR(DE_WR(0), u4_p12.data_lo);
-  P12_WR(DE_WR(1), u4_p12.data_hi);
-  P12_WR(DE_WR(2), u4_cfg.product_pid_lo);
-  P12_WR(DE_WR(3), u4_cfg.product_pid_hi);
-  u4c_sb_desc_commit();
-  (void)P12_RD(DE_LANESEL);
-  ENG_DESC_WR_LO0F(0x34, u4_cfg.product_pid_hi);
-  ENG_DESC_WR_CLR(0x35, 0x07);
-  P12_WR(DE_WR(0), u4_p12.p12_desc_a0);
-  P12_WR(DE_WR(1), u4_p12.p12_desc_a1);
-  P12_WR(DE_WR(2), u4_p12.data_lo);
-  P12_WR(DE_WR(3), u4_p12.data_hi);
-  u4c_sb_desc_commit();
-  (void)P12_RD(DE_LANESEL);
-  ENG_DESC_WR_LO0F(0x34, u4_p12.data_hi);
-  ENG_DESC_WR_CLR(0x35, 0x08);
-  P12_WR(DE_WR(0), u4_p12.p12_desc_b0);
-  P12_WR(DE_WR(1), u4_p12.p12_desc_b1);
-  P12_WR(DE_WR(2), u4_p12.p12_desc_b2);
-  P12_WR(DE_WR(3), u4_p12.p12_desc_b3);
-  u4c_sb_desc_commit();
+  DESC_DWORD_COMMIT(width_byte, 0x00, u4_p12.data_lo, u4_p12.data_hi, u4_cfg.product_pid_lo, u4_cfg.product_pid_hi);
+  DESC_DWORD_COMMIT(u4_cfg.product_pid_hi, 0x07, u4_p12.p12_desc_a0, u4_p12.p12_desc_a1, u4_p12.data_lo, u4_p12.data_hi);
+  DESC_DWORD_COMMIT(u4_p12.data_hi, 0x08, u4_p12.p12_desc_b0, u4_p12.p12_desc_b1, u4_p12.p12_desc_b2, u4_p12.p12_desc_b3);
 }
 
 /*
