@@ -103,6 +103,7 @@ static void usb4_fallback_to_usb3(void) {
 } while (0)
 
 #define USB4_REINIT_USB3_AFTER_RESET_FALLBACK() do { \
+  usb4_skip_magic = USB4_SKIP_MAGIC; \
   usb_pipe_engine_init(); \
   REG_CPU_MODE = CPU_MODE_USB3; \
   REG_CPU_MODE_NEXT &= 0x1F; \

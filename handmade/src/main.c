@@ -588,8 +588,9 @@ void main(void) {
        * power-cycling the device before the PD contract completes. */
       { static __xdata uint8_t pd_settle = 0;
         if (!u4_boot.pd_seen) {
-          if (pd_settle < 12) { pd_settle++; }
-          else if (kicks < 8) { pd_drive_hard_reset(); kicks++; pd_settle = 0; }
+          if (pd_settle < 3) { pd_settle++; }
+          else if (kicks < 3) { pd_drive_hard_reset(); kicks++; pd_settle = 0; }
+          else { usb4_fallback_to_usb3(); }
         }
       }
     }
