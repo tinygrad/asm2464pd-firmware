@@ -506,7 +506,15 @@ void main(void) {
 
   if (IS_USB4()) {
     pcie_power_off();
+    /* PD interrupt routing must be enabled before PHY ready wait
+     * (stock fw boot_hw_init_main: pd_int1_enable_group before PHY ready). */
+    pd_int1_enable_group();
     usb4_state_prepare();
+    /* Wait for PHY/clock ready before USB init (stock fw boot_hw_init_main). */
+    { uint8_t b; do { b = REG_PHY_EXT_B3; } while ((b & 0x30) == 0); }
+    /* USB PIPE init + PHY arm (stock fw boot_usb4_vs_usb3_mode_decision). */
+    usb_pipe_engine_init();
+    usb4_phy_arm();
   } else {
     usb_phy_tune();
 
@@ -563,6 +571,15 @@ void main(void) {
         REG_PCIE_TLP_LENGTH = 0x20;
         pcie_apply_x2_rxphy_tuning();
         pcie_power_on();
+      }
+      /* On the USB4 card, after PD connects and Enter_USB is accepted,
+       * start the USB function (stock fw does this from its main loop USB
+       * enum state machine).  Deferred from boot so the USB function
+       * doesn't try SS before the USB4 tunnel is up. */
+      if (u4_pd.enter_usb_accepted && !usb4_usb_inited) {
+        usb4_usb_inited = 1;
+        usb_pipe_engine_init();
+        usb_init_controller(0);
       }
       if (u4_boot.pd_seen && !u4_pd.enter_usb_accepted && !u4_boot.sb_asserted) {
         if (u4_pd.usb3_fallback_flag || usb4_fallback_ticks >= 12) {
