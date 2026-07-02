@@ -4,6 +4,7 @@
  */
 
 #include "types.h"
+#include "util.h"
 #include "registers.h"
 #include "usb4_state.h"
 #include "usb.h"
@@ -554,11 +555,8 @@ void main(void) {
         U4_CRITICAL_ENTER();
         if (u4_sb.state != U4FSM_IDLE) {
           uint16_t cur = u4lb_read_lane_width_cnt();
-          uint8_t cur_hi = (uint8_t)(cur >> 8), cur_lo = (uint8_t)cur;
-          uint8_t snap_hi = u4_sb.walk_throttle_snap_hi, snap_lo = u4_sb.walk_throttle_snap_lo;  /* 0x076A:0x076B */
-          uint8_t d_lo = (uint8_t)(snap_lo - cur_lo);
-          uint8_t d_hi = (uint8_t)(snap_hi - cur_hi - (uint8_t)((snap_lo < cur_lo) ? 1 : 0));
-          if (d_hi >= (uint8_t)((d_lo < 3) ? 1 : 0)) {
+          uint16_t snap = ((uint16_t)u4_sb.walk_throttle_snap_hi << 8) | u4_sb.walk_throttle_snap_lo;  /* 0x076A:0x076B */
+          if ((uint16_t)(snap - cur) >= 3) {
             u4lb_fsm_step();
             cur = u4lb_read_lane_width_cnt();
             u4_sb.walk_throttle_snap_hi = (uint8_t)(cur >> 8);

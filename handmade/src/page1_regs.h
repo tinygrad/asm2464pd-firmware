@@ -57,6 +57,34 @@
 #define SB_WIDTH_LO         0x74u   /* lane-width cfg lo (inferred) */
 #define SB_WIDTH_HI         0x75u   /* lane-width cfg hi (inferred) */
 
+/* Remaining sideband registers (inferred; hex-suffixed where meaning is uncertain). */
+#define SB_KEYSTONE_05      0x05u   /* keystone arm .7 (inferred) */
+#define SB_OP_CTRL          0x0Fu   /* sideband op enable .0 (inferred) */
+#define SB_OP_TRIGGER       0x10u   /* sideband op trigger (write 0x01) (inferred) */
+#define SB_PHY_CTRL_1D      0x1Du   /* PHY/sideband control (inferred) */
+#define SB_EVENT_CLR_27     0x27u   /* event clear (inferred) */
+#define SB_EVENT_CLR_29     0x29u   /* event clear .3 (inferred) */
+#define SB_EVENT_CLR_2B     0x2Bu   /* event clear .3 (inferred) */
+#define SB_PHY_CFG_49       0x49u   /* PHY config (always 0xA0) (inferred) */
+#define SB_MASK_53          0x53u   /* mask register (write 0xFF) (inferred) */
+#define SB_MASK_5D          0x5Du   /* mask register (write 0xFF) (inferred) */
+#define SB_EVENT_CLR_67     0x67u   /* event clear (inferred) */
+#define SB_LINK_EDGE_STAT   0x80u   /* link-edge toggle status .0 (inferred) */
+#define SB_EVENT_CLR_82     0x82u   /* event clear .3 (inferred) */
+#define SB_EVENT_CLR_84     0x84u   /* event clear .3 (inferred) */
+#define SB_DESC_CFG_8F      0x8Fu   /* descriptor config .4 (inferred) */
+#define SB_CFG_94           0x94u   /* multi-byte cfg (inferred) */
+#define SB_CFG_95           0x95u   /* multi-byte cfg (inferred) */
+#define SB_CFG_96           0x96u   /* multi-byte cfg (inferred) */
+#define SB_CFG_98           0x98u   /* multi-byte cfg (inferred) */
+#define SB_CFG_99           0x99u   /* multi-byte cfg (inferred) */
+#define SB_EVENT_CLR_9F     0x9Fu   /* event clear (inferred) */
+#define SB_EVENT_CLR_C4     0xC4u   /* event clear .1 (inferred) */
+#define SB_EVENT_CLR_C8     0xC8u   /* event clear hi-nibble (inferred) */
+#define SB_EVENT_CLR_CF     0xCFu   /* event clear .0 (inferred) */
+#define SB_SERDES_CTRL      0xCEu   /* serdes control .0 (inferred) */
+#define SB_LANE_CFG_D1      0xD1u   /* lane config .4 (inferred) */
+
 /* SB_BOND_EVENT (0x66) bits */
 #define BOND_EVT_BONDED     0x01u
 #define BOND_EVT_L0_ABR2    0x04u
@@ -66,8 +94,12 @@
 /* SB_CL0_EVENT (0x9E) bits */
 #define CL0_EVT_L0          0x01u
 #define CL0_EVT_L1          0x02u
+#define CL0_EVT_L0_TRAIN    0x10u
+#define CL0_EVT_L1_TRAIN    0x20u
 /* SB_ROUTEROP_EVENT (0x26) bits */
 #define ROUTEROP_EVT_PENDING 0x02u
+#define ROUTEROP_EVT_L0_DIS  0x04u
+#define ROUTEROP_EVT_L1_DIS  0x10u
 
 /* ---- SB TX window: SBTX_RD/SBTX_WR, 0x2900 ---- */
 #define SBTX_DESC_TYPE      0x00u
@@ -93,6 +125,7 @@
 #define DE_ENG_RESET_7A     0x7Au   /* inferred */
 #define DE_ENG_RESET_8F     0x8Fu   /* inferred */
 #define DE_ENG_RESET_90     0x90u   /* inferred */
+#define DE_TRANSPORT_TRIG   0x58u   /* transport reinit trigger (write 0x01) (inferred) */
 
 /* ---- Raw page-1 tunnel/link/event regs: P1_RD/P1_WR (arbitrary DPX=1 addr) ---- */
 #define P1_PORT_CTRL_0000   0x0000u          /* .1 SB assert (inferred) */
@@ -117,6 +150,21 @@
 #define P1_RXPLL_CFG_1808      0x1808u       /* RXPLL cfg-trigger context */
 #define P1_PCIE_LINK_1835      0x1835u       /* PCIe link bring-up */
 #define P1_PCIE_LANE_SLOT(l)   (0x78AFu + 0x100u*(l)) /* per-lane PCIe slot-enable .7 (0x78AF..0x7BAF) */
+/* PCIe tunnel / PHY config registers (inferred; hex-suffixed). */
+#define P1_LINK_MODE_011F      0x011Fu      /* link-mode apply (write 0x01) (inferred) */
+#define P1_USB4_WIDTH_EVT_124E 0x124Eu      /* USB4 width event .1 (inferred) */
+#define P1_TUNNEL_CFG_4084     0x4084u      /* tunnel adapter cfg (write 0x22) (inferred) */
+#define P1_PCIE_PHY_408D       0x408Du      /* PCIe PHY 8D (lane-gated) (inferred) */
+#define P1_LINK_GEN_40B0       0x40B0u      /* link gen width (low nibble) (inferred) */
+#define P1_TUNNEL_CFG_5084     0x5084u      /* tunnel adapter cfg (write 0x22) (inferred) */
+#define P1_PCIE_PHY_508D       0x508Du      /* PCIe PHY 8D (lane-gated) (inferred) */
+#define P1_PCIE_PHY_508F       0x508Fu      /* PCIe PHY (write 0x01) (inferred) */
+#define P1_PCIE_PHY_5204       0x5204u      /* PCIe PHY (clear .0/.1) (inferred) */
+#define P1_TUNNEL_CFG_6025     0x6025u      /* tunnel cfg (set .7) (inferred) */
+#define P1_TUNNEL_CFG_6043     0x6043u      /* tunnel cfg (write 0x70) (inferred) */
+#define P1_PCIE_PHY_7041       0x7041u      /* PCIe PHY (set/clear .6) (inferred) */
+#define P1_PCIE_PHY_7104       0x7104u      /* PCIe PHY (set .6) (inferred) */
+#define P1_TUNNEL_PHY_2805     0x2805u      /* tunnel PHY finalize readback (inferred) */
 /* 0x1203/0x121E/0x1406/0x1407/0x1507/0x1508/0x1602/0x1603 are already named
  * P1_USB4_* in registers.h — reuse those. */
 

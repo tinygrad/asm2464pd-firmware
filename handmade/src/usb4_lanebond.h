@@ -33,7 +33,7 @@ static void u4lb_reg_set_bit7(uint8_t cur) {  /* a310 */
 static void u4lb_desc_engine_clear(uint8_t commit_hi2) {  /* e711 */
   (void)commit_hi2;
   P12_WR(DE_CTRL, (uint8_t)(P12_RD(DE_CTRL) & 0xC0));
-  P12_WR(DE_WR(0), 0x00); P12_WR(DE_WR(1), 0x00); P12_WR(DE_WR(2), 0x00); P12_WR(DE_WR(3), 0x00);
+  DE_WR_CLEAR();
 }
 static void u4lb_engine_kick_wait(void) {
   uint16_t g;
@@ -184,14 +184,11 @@ static void u4lb_cm_conn_routing_setup(void) {
     }
   }
   if (u4_sb.coldboot_seed_gate == 0) {
-    uint8_t i;
-    for (i = 0; i < 0x13; i++) {
-      sb_width_lut[(uint16_t)(i)] = width_lut_rom[i];
-      sb_branchA_gate[(uint16_t)(i)] = branchA_gate_rom[i];
-    }
-    for (i = 0; i < 2; i++) {
+    mem_copy(sb_width_lut, width_lut_rom, 0x13);
+    mem_copy(sb_branchA_gate, branchA_gate_rom, 0x13);
+    { uint8_t i; for (i = 0; i < 2; i++) {
       lb_cl_status[i] = 0; lb_eq_status[i] = 0; lb_loop2_scratch[i] = 0; lb_cl0_width[i] = 0;
-    }
+    } }
   }
 
   if (u4_sb.coldboot_seed_gate == 0 && u4_pd.confirm_input_ce != 0) {
@@ -296,15 +293,15 @@ static void u4lb_sb_op_kick(uint8_t op) {  /* 96fe */
 
 static void u4lb_sb_op_run_drain(uint8_t param) {  /* d5da */
   if (param == 1) {
-    SB_WR(0x0F, (SB_RD(0x0F) & 0xFE) | 0x01);
+    SB_WR(SB_OP_CTRL, (SB_RD(SB_OP_CTRL) & 0xFE) | 0x01);
   }
   P1_WR(P1_LANE_FLIP(0), P1_RD(P1_LANE_FLIP(0)) & 0xFE);
   SB_WR(SB_ADP0_EN, SB_RD(SB_ADP0_EN) & 0xFD);
-  SB_WR(0x10, 0x01);
+  SB_WR(SB_OP_TRIGGER, 0x01);
   while ((SB_RD(SB_CONNECT_EVENT) & 0x04) == 0) { }
   SB_WR(SB_CONNECT_EVENT, 0x04);
   phy_cc10_cmd_wait(1, 0, 0x0B);
-  SB_WR(0x0F, SB_RD(0x0F) & 0xFE);
+  SB_WR(SB_OP_CTRL, SB_RD(SB_OP_CTRL) & 0xFE);
   if (param != 0) return;
   { uint8_t count = SB_RD(SB_DESC_COUNT_GO);
     if (count <= 6) return;
@@ -416,7 +413,7 @@ static void u4lb_conn_rout_restart(void) {  /* 98ec */
 }
 
 static void u4lb_p1_7104_set40(void) {  /* d195 */
-  P1_WR(0x7104, (uint8_t)((P1_RD(0x7104) & 0xBF) | 0x40));
+  P1_WR(P1_PCIE_PHY_7104, (uint8_t)((P1_RD(P1_PCIE_PHY_7104) & 0xBF) | 0x40));
 }
 
 static uint8_t u4lb_phy_8d_set08(uint16_t base_hi) {  /* d1d3 */
@@ -429,15 +426,15 @@ static void u4lb_pcie_link_bringup(void) {  /* df61 */
   P1_WR(P1_RXPLL_CFG_1808, 0x00);
   v = (uint8_t)((P1_RD(P1_PCIE_LINK_1835) & 0xFE) | 0x01);
   P1_WR(P1_PCIE_LINK_1835, v);
-  (void)P1_RD(0x7041);
-  P1_WR(0x7041, (uint8_t)(v | 0x40));
-  P1_WR(0x6043, 0x70);
-  P1_WR(0x6025, (uint8_t)((P1_RD(0x6025) & 0x7F) | 0x80));
-  P1_WR(0x508F, 0x01);
-  P1_WR(0x508D, u4lb_phy_8d_set08(0x5000));
-  P1_WR(0x5204, (uint8_t)(P1_RD(0x5204) & 0xFE));
-  P1_WR(0x5204, (uint8_t)(P1_RD(0x5204) & 0xFD));
-  P1_WR(0x408D, u4lb_phy_8d_set08(0x4000));
+  (void)P1_RD(P1_PCIE_PHY_7041);
+  P1_WR(P1_PCIE_PHY_7041, (uint8_t)(v | 0x40));
+  P1_WR(P1_TUNNEL_CFG_6043, 0x70);
+  P1_WR(P1_TUNNEL_CFG_6025, (uint8_t)((P1_RD(P1_TUNNEL_CFG_6025) & 0x7F) | 0x80));
+  P1_WR(P1_PCIE_PHY_508F, 0x01);
+  P1_WR(P1_PCIE_PHY_508D, u4lb_phy_8d_set08(0x5000));
+  P1_WR(P1_PCIE_PHY_5204, (uint8_t)(P1_RD(P1_PCIE_PHY_5204) & 0xFE));
+  P1_WR(P1_PCIE_PHY_5204, (uint8_t)(P1_RD(P1_PCIE_PHY_5204) & 0xFD));
+  P1_WR(P1_PCIE_PHY_408D, u4lb_phy_8d_set08(0x4000));
 }
 
 static void u4lb_pcie_tunnel_reset(void) {  /* ed44 */
@@ -474,7 +471,7 @@ static void u4lb_transport_reinit(uint8_t skip_lane) {  /* b031 */
   P12_WR(DE_TRANSPORT(2), 0x02);
   P12_WR(DE_TRANSPORT(0), (uint8_t)(P12_RD(DE_TRANSPORT(0)) & 0xDF));
   P12_WR(DE_TRANSPORT(2), 0x04);
-  P12_WR(0x58, 0x01);
+  P12_WR(DE_TRANSPORT_TRIG, 0x01);
   a = (uint8_t)(P1_RD(P1_XPORT_RESET_1802) & 0xFD); P1_WR(P1_XPORT_RESET_1802, a); a = (uint8_t)(P1_RD(P1_XPORT_RESET_1802) & 0xFB);
   P1_WR(P1_XPORT_RESET_1802, a); a = (uint8_t)(P1_RD(P1_XPORT_RESET_1802) & 0xF7); P1_WR(P1_XPORT_RESET_1802, a);
   a = (uint8_t)(P1_RD(P1_XPORT_RESET_1802) & 0xEF); P1_WR(P1_XPORT_RESET_1802, a);
@@ -554,8 +551,8 @@ static void u4lb_pcie_tunnel_pwron(void) {  /* e76b */
   if (gate != 0) {
     uint8_t v;
     u4lb_save_b402_clr();
-    v = (uint8_t)(P1_RD(0x7041) & 0xBF);
-    P1_WR(0x7041, v);
+    v = (uint8_t)(P1_RD(P1_PCIE_PHY_7041) & 0xBF);
+    P1_WR(P1_PCIE_PHY_7041, v);
     phy_cc10_cmd_wait(1, 0, 0xCF);
     u4lb_p1_7104_set40();
     if (!(REG_PCIE_LANE_CTRL_C659 & 0x01)) {
@@ -640,8 +637,8 @@ static void u4lb_tunnel_event_dispatch(uint8_t assert) {  /* d855 */
     if (assert) {
       uint8_t v;
       REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);
-      v = (uint8_t)(P1_RD(0x7041) | 0x40);
-      P1_WR(0x7041, v);
+      v = (uint8_t)(P1_RD(P1_PCIE_PHY_7041) | 0x40);
+      P1_WR(P1_PCIE_PHY_7041, v);
       phy_cc10_cmd_wait(1, 0, 0xCF);
       REG_PCIE_CTRL_B402 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);
     }
@@ -741,10 +738,10 @@ static void u4lb_set_link_gen_width(uint8_t param) {  /* a840 */
   }
   if (gen < 3) {
     REG_TUNNEL_CTRL_B403 = (uint8_t)((REG_TUNNEL_CTRL_B403 & 0xFE) | 0x01);
-    P1_WR(0x40B0, (uint8_t)((uint8_t)(gen + 1) | (uint8_t)(P1_RD(0x40B0) & 0xF0)));
+    P1_WR(P1_LINK_GEN_40B0, (uint8_t)((uint8_t)(gen + 1) | (uint8_t)(P1_RD(P1_LINK_GEN_40B0) & 0xF0)));
   } else {
     REG_TUNNEL_CTRL_B403 &= 0xFE;
-    P1_WR(0x40B0, (uint8_t)((P1_RD(0x40B0) & 0xF0) | 0x04));
+    P1_WR(P1_LINK_GEN_40B0, (uint8_t)((P1_RD(P1_LINK_GEN_40B0) & 0xF0) | 0x04));
   }
   width_code = 0;
   if (lane < 3) {
@@ -772,7 +769,7 @@ static void u4lb_pcie_tunnel_setup(uint8_t param) {  /* e305 */
   u4lb_tunnel_pwron_train();
 }
 
-static uint8_t u4lb_read_p1_2805(void) { return P1_RD(0x2805); }  /* e916 */
+static uint8_t u4lb_read_p1_2805(void) { return P1_RD(P1_TUNNEL_PHY_2805); }  /* e916 */
 static void u4lb_tunnel_phy_finalize(void) {  /* c593 */
   uint8_t v;
   REG_TUNNEL_PHY_CFG_CCB0 = (uint8_t)((REG_TUNNEL_PHY_CFG_CCB0 & 0xF8) | 0x05);
@@ -802,7 +799,7 @@ static void u4lb_phy_eye_margin_wait(void) {  /* b8db */
   __xdata uint8_t phase0, phase1, margin0_lo, margin0_hi, margin1_lo, margin1_hi;
   uint8_t iter;
   if ((P1_RD(P1_PORT_CTRL_0000) & 0x02) == 0) {
-    if ((PR(0x92F8) & 0x0C) == 0) return;
+    if ((REG_POWER_STATUS_92F8 & 0x0C) == 0) return;
     eye_phase_min = 0x01; eye_phase_max = 0x28;
     eye_lo_min = 0x01; eye_lo_limit = 0x3D; eye_hi_min = 0x01; eye_hi_limit = 0x43;
   } else if (u4_sb.lane_width_latch0 == 1) {
@@ -1130,8 +1127,8 @@ static void u4lb_walk_route_active(void) {  /* 8000 */
           cap = u4_phy.lane_cap[lane];
           if ((cap >> 1) & 1) cl_cfg_lo = lb_cap_field[cl_idx];
           if (cap & 1) { __xdata uint16_t m = (uint16_t)(sb_lane_flip[cl_idx] * 0x20); cl_cfg_lo |= (uint8_t)m; cl_cfg_hi |= (uint8_t)(m >> 8); }
-          SB_WR(0x6A + 2 * lane, cl_cfg_hi);
-          SB_WR(0x6B + 2 * lane, cl_cfg_lo);
+          SB_WR(SB_RATE_HI(lane), cl_cfg_hi);
+          SB_WR(SB_RATE_LO(lane), cl_cfg_lo);
           u4lb_phy_cl_orient_strobe(cl_idx, lane);
           lb_loop2_state[lane] = LP2_CL_BOND_WAIT;
         }
