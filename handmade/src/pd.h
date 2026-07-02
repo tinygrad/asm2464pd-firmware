@@ -116,6 +116,11 @@ static void cc_ctrl_enable_events(void) {
   REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x10;
   REG_CPU_DMA_READY &= 0xEF;
   REG_CPU_DMA_READY = (REG_CPU_DMA_READY & 0xF8) | 0x04;
+  /* Arm the 1s DMA timer (stock fw func_e352: CC90|=5, CC92=0, CC93=0xC8, CC91=1). */
+  REG_CPU_DMA_CTRL_CC90 = (uint8_t)(REG_CPU_DMA_CTRL_CC90 | 0x05);
+  REG_CPU_DMA_DATA_LO = 0x00;
+  REG_CPU_DMA_DATA_HI = 0xC8;
+  REG_CPU_DMA_INT = 0x01;
 }
 
 /* Reset the PD policy-engine state block, set substate=init, seed timers, enable CC events. */
@@ -267,9 +272,18 @@ static void cc_pd_timer_tick(void) {
   }
   if (REG_CPU_DMA_INT & 0x02) {                 /* CC91.1: 1s sender-response timeout -> commit USB4 mode */
     REG_CPU_DMA_INT = 0x02;
-    uart_puts("[1 sec time out]\n");
-    u4_cfg.route_mode = 0x04;
-    u4_entered_usb_mode = usb4_mode_entry_commit();
+    if (!u4_boot.pd_seen) {                    /* only act if PD never connected (USB3-only host) */
+      uart_puts("[1 sec time out]\n");
+      u4_cfg.route_mode = 0x04;
+      u4_pd.enter_usb_accepted = 1;
+      u4_entered_usb_mode = usb4_mode_entry_commit();
+      XDATA_REG8V(0x09FA) = 0x04;  /* stock fw's u4_route_mode, separate from u4_cfg.route_mode */
+    }
+    /* Re-arm the 1s DMA timer (stock fw func_e352). */
+    REG_CPU_DMA_CTRL_CC90 = (uint8_t)(REG_CPU_DMA_CTRL_CC90 | 0x05);
+    REG_CPU_DMA_DATA_LO = 0x00;
+    REG_CPU_DMA_DATA_HI = 0xC8;
+    REG_CPU_DMA_INT = 0x01;
   }
   if (REG_XFER_DMA_CFG & 0x02) {                 /* CC99.1: role-dependent reset */
     uint8_t role = u4_pd.role_state;
