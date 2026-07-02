@@ -1337,10 +1337,7 @@ static void sb_channel_connect_service(void) {
     return;
   }
   if (n == 0) {
-    if (u4_sb.state == 3) {
-      if (u4_pd.cm_dispatch_sel == 0x69) return;
-      return;
-    }
+    if (u4_sb.state == U4FSM_CONN_ROUT) return;  /* both cm_dispatch_sel arms returned */
     if ((((lo & 0x20) >> 5) & 7) == 0) return;
     SB_WR(SB_LINK_REINIT_5A, 0x40);
     u4_work_buf[WB_LANE_EN] &= 0xFD;

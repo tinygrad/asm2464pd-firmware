@@ -1158,16 +1158,16 @@ static void u4lb_walk_route_active(void) {  /* 8000 */
  * the individual state meanings are not established from the decompilation.
  */
 static void u4lb_walk_route_passive(void) {  /* 850b */
-  __xdata uint8_t lane, state, selector = 0;
+  __xdata uint8_t lane, state;
   for (lane = 0; lane < 2; lane++) {
     if (!u4lb_lane_gate(lane)) continue;
     state = lb_loop2_state[lane];
     if (state == 0x11) {
-      __xdata uint8_t r = u4lb_routerop_poll(); selector = r;
+      __xdata uint8_t r = u4lb_routerop_poll();
       if (r == 0) lb_loop2_state[lane] = 0x20;
       else if (r == 1) lb_loop2_state[lane] = 0x10;
     } else if (state == 0x20) {
-      __xdata uint8_t r = u4lb_routerop_poll(); selector = r;
+      __xdata uint8_t r = u4lb_routerop_poll();
       if (r == 0) { if (u4_host_desc[0x2] == 0) lb_loop2_state[lane] = 0x30; else lb_loop2_state[lane] = 0x20; }
       else if (r != 2) lb_loop2_state[lane] = 0x20;
     } else if (state == 0x21) {
@@ -1273,7 +1273,6 @@ static void u4lb_walk_route_passive(void) {  /* 850b */
       }
     }
   }
-  (void)selector;
 }
 
 static void u4lb_state_lane_bond(void) {
