@@ -89,7 +89,6 @@ static void sb_lane_flip_init(void) {
   SB_CLR(SB_CONNECT_EVENT, 0x01);
   REG_INT_CTRL = (REG_INT_CTRL & 0xF7) | 0x08;
   SB_CLR(0x67, 0x40);
-  u4_sb.laneA_cl_latch = 0x07; u4_sb.laneB_cl_latch = 0x07;
   { uint8_t k; for (k = 0; k < 0x10; k++) lb_cap_field[(uint16_t)(k)] = 0; }
   if (REG_LANE_RATE_C8FF == 0x04) {
     uint8_t k;
@@ -1600,18 +1599,5 @@ static void sb_router_event_handler(void) {
   (void)SB_RD(SB_EVENT_CLEAR_F6);
 }
 
-static void sb_lane_cl_track(void) {  /* cb10 */
-  uint8_t nibble, lat;
-  nibble = SB_RD(SB_LANE_CL(0)) & 0x0F;
-  lat = u4_sb.laneA_cl_latch;
-  if (nibble != lat) {
-    u4_sb.laneA_cl_latch = nibble;
-  }
-  nibble = SB_RD(SB_LANE_CL(1)) & 0x0F;
-  lat = u4_sb.laneB_cl_latch;
-  if (nibble != lat) {
-    u4_sb.laneB_cl_latch = nibble;
-  }
-}
 
 #endif

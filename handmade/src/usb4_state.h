@@ -68,8 +68,6 @@ typedef struct {
     uint8_t route_enable_latch;
     uint8_t routerop_push_token;  /* e461 */
     uint8_t routerop_resp_armed;  /* cdf5 */
-    uint8_t laneA_cl_latch;
-    uint8_t laneB_cl_latch;
     uint8_t lane_bonded_flag;
     uint8_t lane_width_latch0;
     uint8_t lane_width_latch1;

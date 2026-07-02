@@ -552,7 +552,6 @@ void main(void) {
       }
       if (u4_sb.conn_consequence_done) {
         U4_CRITICAL_ENTER();
-        sb_lane_cl_track();
         if (u4_sb.state != U4FSM_IDLE) {
           uint16_t cur = u4lb_read_lane_width_cnt();
           uint8_t cur_hi = (uint8_t)(cur >> 8), cur_lo = (uint8_t)cur;
