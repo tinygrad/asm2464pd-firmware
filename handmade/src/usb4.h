@@ -62,7 +62,7 @@ static void boot_phy_link_clk_setup(void) {  /* cf28 */
 
 static void boot_phy_sb_keystone_arm(void) {  /* ed02 */
   REG_CPU_CTRL_CC37 = (REG_CPU_CTRL_CC37 & 0xFB) | 0x04;
-  SB_WR(0x05, (SB_RD(0x05) & 0x7F) | 0x80);
+  SB_WR(SB_KEYSTONE_05, (SB_RD(SB_KEYSTONE_05) & 0x7F) | 0x80);
   REG_CPU_CTRL_CA70 &= 0xFC;
   REG_SYS_CTRL_E780 &= 0xF9;
   P1_CLR(P1_PORT_CTRL_0000, 0x02);
@@ -167,8 +167,8 @@ static void pcie_tunnel_adapter_config(void) {  /* b410 */
 static void pcie_tunnel_adapter_enable(void) {  /* b401 */
   REG_CPU_MODE_NEXT &= 0xEF;
   pcie_tunnel_adapter_config();
-  P1_WR(0x4084, 0x22);
-  P1_WR(0x5084, 0x22);
+  P1_WR(P1_TUNNEL_CFG_4084, 0x22);
+  P1_WR(P1_TUNNEL_CFG_5084, 0x22);
   REG_PCIE_TUNNEL_CTRL |= 0x01;
   REG_TUNNEL_ADAPTER_MODE |= 0x01;
   REG_TUNNEL_ADAPTER_MODE = (uint8_t)((REG_TUNNEL_ADAPTER_MODE & 0x0F) | 0xF0);
@@ -176,8 +176,8 @@ static void pcie_tunnel_adapter_enable(void) {  /* b401 */
   REG_PCIE_PERST_CTRL = (uint8_t)((REG_PCIE_PERST_CTRL & 0xFE) | 0x01);
   REG_TUNNEL_LINK_STATE &= 0xFE;
   REG_PCIE_TUNNEL_CFG = (uint8_t)((REG_PCIE_TUNNEL_CFG & 0xEF) | 0x10);
-  P1_WR(0x6043, 0x70);
-  P1_WR(0x6025, (uint8_t)((P1_RD(0x6025) & 0x7F) | 0x80));
+  P1_WR(P1_TUNNEL_CFG_6043, 0x70);
+  P1_WR(P1_TUNNEL_CFG_6025, (uint8_t)((P1_RD(P1_TUNNEL_CFG_6025) & 0x7F) | 0x80));
 }
 
 static void u4c_phy_cdr_seed(uint8_t mode) {  /* e0d9 */
@@ -336,8 +336,8 @@ static void usb4_sec_adapter_link_event(void) {  /* c105 */
       P1_WR(P1_USB4_WIDTH_EVENT_1203, 0x80);
       if ((u4_connect_gate & 0x10) && (u4_cfg.route_mode & 0x81)) u4_cfg.route_mode |= 0x04;
     }
-    if (P1_RD(0x124E) & 0x02) {
-      P1_WR(0x124E, 0x02);
+    if (P1_RD(P1_USB4_WIDTH_EVT_124E) & 0x02) {
+      P1_WR(P1_USB4_WIDTH_EVT_124E, 0x02);
       u4lb_reg_set_bit7(0x35);
       ENG_DESC_WR_CLR(0x36, 0x03);
       u4lb_desc_commit_noset(0x03);
@@ -509,7 +509,7 @@ static void usb4_phy_rx_descriptor_load(void) {  /* 8e31 */
   REG_PHY_PLL_CFG &= 0xF7;
   REG_CPU_CLK_CFG = (REG_CPU_CLK_CFG & 0x1F) | 0x80;
   PHY_SET_BIT2(0xC21F);
-  SB_WR(0x49, 0xA0);
+  SB_WR(SB_PHY_CFG_49, 0xA0);
 
   REG_PHY_LINK_CTRL_C21F = (REG_PHY_LANEA_RATE_START_C2A8 & 0x3F) | 0x40;
   PHY_SET_NIB_HI7(0xC2C5);
@@ -672,12 +672,12 @@ static void usb4_phy_serdes_arm(void) {  /* db0d */
   REG_LINK_CTRL = (REG_LINK_CTRL & 0xF7) | 0x08;
   PG_WR(0x1262, PG_RD(0x1262) & 0xEF);
   SB_WR(SB_ROUTE_GATE, (SB_RD(SB_ROUTE_GATE) & 0xBF) | 0x40);
-  SB_WR(0xCE, SB_RD(0xCE) & 0xFE);
+  SB_WR(SB_SERDES_CTRL, SB_RD(SB_SERDES_CTRL) & 0xFE);
   SB_SET(SB_USB_MODE, 0x80);
   SB_SET(SB_USB_MODE, 0x40);
   SB_SET(SB_USB_MODE, 0x02);
   REG_PHY_LINK_CTRL_C20B &= 0x7F;
-  SB_WR(0x1D, SB_RD(0x1D) & 0xFE);
+  SB_WR(SB_PHY_CTRL_1D, SB_RD(SB_PHY_CTRL_1D) & 0xFE);
   PHY_SET_BIT2(0xC22F);
   REG_PHY_SERDES_C22F &= 0xBF;
 }
@@ -785,7 +785,7 @@ static void u4c_link_mode_apply(uint8_t mode) {  /* 8a89 */
         REG_LINK_CTRL_E717 &= 0xFE;
       }
       u4c_uart_drain_wait();
-      P1_WR(0x011F, 0x01);
+      P1_WR(P1_LINK_MODE_011F, 0x01);
       if (config & 0x02) u4c_lane_timers_on();
     } else if (u4_cfg.routerop_desc0 == 0x01) {
       if (config & 0x02) u4c_timer_cc3b_clr1();

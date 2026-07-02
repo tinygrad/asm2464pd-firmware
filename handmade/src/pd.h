@@ -342,8 +342,7 @@ static void pd_tx_set_sop_header(uint8_t nobj, uint8_t msgtype) {
 
 /* Zero the PD TX message buffer E420-E43F. */
 static void pd_tx_buf_clear(void) {
-  uint8_t i;
-  for (i = 0; i < PD_MSG_STRIDE; i++) PR(PD_TX_BASE + i) = 0;
+  mem_set((void __xdata *)PD_TX_BASE, 0, PD_MSG_STRIDE);
 }
 
 /* Build a Request (header + Fixed RDO) and send it, then arm SenderResponse. */
@@ -470,10 +469,8 @@ static void pd_ctrl_wait(void) {
     pd_arm_cc_timer(0xD007);
     { uint16_t guard = 0; while (!(REG_CPU_INT_CTRL & 0x02) && ++guard < PD_WAIT_LIMIT); }
     REG_CPU_INT_CTRL = 0x02;
-    pd_ctrl_goodcrc();
-  } else {
-    pd_ctrl_goodcrc();
   }
+  pd_ctrl_goodcrc();
 }
 
 /* Stage and send a 2-byte control NAK response, then advance the RX slot. */
@@ -705,7 +702,7 @@ static uint8_t usb4_mode_entry_commit(void) {
   if (mode_flags & 0x40) {
     u4_mode_entry_class = 3;
     u4_mode_entry_param = 1;
-    PR(0x92E1) = 0x10;
+    REG_POWER_EVENT_92E1 = 0x10;
     REG_USB_INT_MASK_9090 &= 0x7F;
     return 4;
   }

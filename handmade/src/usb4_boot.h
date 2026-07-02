@@ -31,7 +31,7 @@ static void usb4_state_prepare(void) {
   // Stock seeds the sideband connect-service path at boot and then refreshes it in the main loop.
   u4lb_phy_connect_dma_kick();
 
-  { uint8_t i; for (i = 0; i < U4_ROUTEROP_MBOX_CLEAR_LEN; i++) U4_XDATA_BYTES(u4_routerop_mbox_state)[i] = 0; }
+  { mem_set((void __xdata *)&u4_routerop_mbox_state, 0, U4_ROUTEROP_MBOX_CLEAR_LEN); }
   u4_sb.active_port_rr = 0;
   u4_sb.route_up_trigger = 0; u4_sb.lane_bonded_flag = 0;
   u4_sb.transport_edge_toggle = 0; u4_sb.link_edge_toggle = 0; u4_sb.active_plane_port = 0;

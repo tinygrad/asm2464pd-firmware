@@ -6,8 +6,14 @@
 #include "types.h"
 #include "registers.h"
 #include "usb4_state.h"
+
+#define USB_PID                 0x0001
+#define USB_STR_PRODUCT         "chestnut"
+#define USB_STR_PRODUCT_FROM_USERFW_HEADER 1
+#define USB_GITVERSION_GLOBAL 1
 #include "usb.h"
 #include "gpio.h"
+#include "util.h"
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
@@ -23,34 +29,63 @@ __sfr __at(0x88) TCON;
 #define U4_CRITICAL_ENTER()  (IE &= (uint8_t)~IE_EA)
 #define U4_CRITICAL_EXIT()   (IE |= IE_EA)
 
-// blocking version: void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
-void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
-void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
-static void uart_puthex(uint8_t val) {
-  static __code const char hex[] = "0123456789ABCDEF";
-  uart_putc(hex[val >> 4]);
-  uart_putc(hex[val & 0x0F]);
-}
-
-#define TIMER1_MODE_HALF_MS     0x04U
-/* Millisecond busy-sleep on Timer1; must never touch the CC10-CC13 PHY/PD mailbox. */
-static void sleep(uint16_t milliseconds) {
-  REG_TIMER1_CSR = TIMER_CSR_CLEAR;
-  REG_TIMER1_CSR = TIMER_CSR_EXPIRED;
-  REG_TIMER1_DIV = (REG_TIMER1_DIV & 0xF8) | TIMER1_MODE_HALF_MS;
-  uint16_t threshold = 2*milliseconds;
-  REG_TIMER1_THRESHOLD_HI = threshold >> 8;
-  REG_TIMER1_THRESHOLD_LO = threshold & 0xFF;
-  REG_TIMER1_CSR = TIMER_CSR_ENABLE;
-  { uint32_t g = 0; while (!(REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && ++g < 4000000UL); }
-}
-
 static uint8_t is_usb2;
 static uint32_t __xdata usb4_skip_magic;
+
+/* 0x5FF8-0x5FFF is reserved in the linker flags and survives CPU reset. */
+#define DFU_COOKIE              (*(__xdata volatile uint32_t *)0x5FF8)
+#define DFU_COOKIE_MAGIC        0xDF0BC0DEUL
 
 /* Streaming PCIe state — configured via 0xF0 control message */
 static uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming transfer */
 #define DMA_DWORDS_BYTE(n) (((volatile __xdata uint8_t *)&dma_dwords)[(n)])
+
+/* Gitversion read from userfw header at boot (avoids calling flash_cmd from
+ * the USB descriptor path, which would make flash_cmd non-overlayable and
+ * push DSEG past the internal-RAM limit). 22 bytes is enough for the 8-hex-hash
+ * + "-CLEAN"/"-DIRTY" string; the header field is 24 but we trim to fit XDATA. */
+__xdata uint8_t userfw_gitversion[22];
+
+static void cpu_reset(void) {
+  (void)usb_wait_ep0_dma_idle();
+  REG_CPU_RESET = CPU_RESET_TRIGGER;
+  while (1) ;
+}
+
+/* Read the gitversion field from the userfw header at flash 0x4004 into
+ * userfw_gitversion[].  Uses raw SPI-controller register ops instead of
+ * flash_cmd — calling flash_cmd from main() would put it in two overlay
+ * trees (main + the USB descriptor ISR path) and force its locals out of
+ * OSEG into DSEG, overflowing internal RAM. */
+static void read_userfw_gitversion(void) {
+  uint32_t addr = USERFW_FLASH_OFFSET + 4;
+  uint8_t i;
+  for (i = 0; i < sizeof(userfw_gitversion); ) {
+    uint8_t take = sizeof(userfw_gitversion) - i;
+    while (REG_FLASH_CSR & FLASH_CSR_BUSY);
+    REG_FLASH_CON = 0;
+    REG_FLASH_MODE &= (uint8_t)~FLASH_MODE_ENABLE;
+    REG_FLASH_BUF_OFFSET_LO = 0;
+    REG_FLASH_BUF_OFFSET_HI = 0;
+    REG_FLASH_CMD = FLASH_CMD_READ;
+    REG_FLASH_ADDR_LEN = (REG_FLASH_ADDR_LEN & FLASH_ADDR_LEN_MASK) | FLASH_ADDR_LEN_3BYTE;
+    REG_FLASH_ADDR_LO = (addr - 1) & 0xFF;
+    REG_FLASH_ADDR_MD = ((addr - 1) >> 8) & 0xFF;
+    REG_FLASH_ADDR_HI = ((addr - 1) >> 16) & 0xFF;
+    REG_FLASH_DATA_LEN_HI = ((take + 1) >> 8) & 0xFF;
+    REG_FLASH_DATA_LEN_LO = (take + 1) & 0xFF;
+    REG_FLASH_CSR = 0x01;
+    while (REG_FLASH_CSR & FLASH_CSR_BUSY);
+    REG_FLASH_MODE &= (uint8_t)~FLASH_MODE_ENABLE;
+    REG_FLASH_MODE &= (uint8_t)~0x10;
+    REG_FLASH_MODE &= (uint8_t)~0x20;
+    REG_FLASH_MODE &= (uint8_t)~0x40;
+    REG_FLASH_MODE &= (uint8_t)~0x80;
+    for (uint8_t j = 0; j < take; j++) userfw_gitversion[i + j] = FLASH_BUF[j + 1];
+    i += take;
+    addr += take;
+  }
+}
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
@@ -124,7 +159,7 @@ static void pcie_power_on(void) {
     } else {
       stable_samples = 0;
     }
-    sleep(100);
+    timer_delay_ms(100);
   }
   if (stable_samples < 3) uart_puts("[PCIe timeout]\n");
 
@@ -154,6 +189,8 @@ static void do_usb_bulk_in(void) {
 #define USB_VREQ_TLP        0xF0  /* PCIe TLP engine (single TLP / streaming) */
 #define USB_VREQ_SRAM_DMA   0xF2  /* SRAM DMA init + arm */
 #define USB_VREQ_PCIE_PWR   0xF3  /* PCIe power on/off */
+#define USB_VREQ_RESET       0xEB  /* OUT: CPU reset */
+#define USB_VREQ_ENTER_DFU   0xEC  /* OUT: set DFU cookie then CPU reset */
 
 /*=== USB Control Handler ===*/
 
@@ -238,6 +275,13 @@ static void handle_usb_control(void) {
       XDATA_REG8(addr) = val;
       if (bank) DPX = 0x00;
       usb_send_zlp();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == USB_VREQ_RESET) {
+      usb_send_zlp();
+      cpu_reset();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == USB_VREQ_ENTER_DFU) {
+      DFU_COOKIE = DFU_COOKIE_MAGIC;
+      usb_send_zlp();
+      cpu_reset();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == USB_VREQ_SRAM_DMA) {
       /* 0xF2: SRAM DMA — init DMA engine and arm for bulk transfer.
       *   wValue bit 15 = direction: 0=BULK OUT (host→SRAM), 1=BULK IN (SRAM→host)
@@ -446,14 +490,11 @@ void int0_isr(void) __interrupt(0) {
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
         uart_puts("[USB2 fallback]\n");
-        // fallback to USB2
         is_usb2 = 1;
-        // without this, USB2 is flaky
         REG_CPU_MODE = CPU_MODE_USB2;
-        // enable USB high speed mode
-        REG_USB_PHY_CTRL_91C0 = 0x10;
+        REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_FORCE_HS;
       }
-      REG_BUF_CFG_9300 = ep;
+      REG_BUF_CFG_9300 = (ep & BUF_CFG_9300_SS_EVENT) ? BUF_CFG_9300_SS_FAIL : ep;
       uart_puts("[LINK EVENT ");
       uart_puthex(ep);
       uart_puts(" link=");
@@ -477,7 +518,7 @@ void int0_isr(void) __interrupt(0) {
     REG_USB_MSC_CTRL = 1;
     REG_USB_MSC_STATUS = 0;
   }
-  if (int0_type & ~(INT_USB_GATE | INT_USB_CTRL_PENDING)) {
+  if (int0_type & ~(INT_USB_GATE | INT_USB_CTRL_PENDING | INT_USB_AUX_PENDING)) {
     uart_puts("[UNHANDLED INT0 TYPE ");
     uart_puthex(int0_type);
     uart_puts("]\n");
@@ -501,6 +542,8 @@ void main(void) {
   // flash controller — needed for the USB serial OTP read on enumeration
   flash_init();
 
+  read_userfw_gitversion();
+
   USB4_SELECT_BOOT_MODE(usb4_reset_fallback);
 
   if (IS_USB4()) {
@@ -518,6 +561,7 @@ void main(void) {
     REG_PCIE_TLP_LENGTH = 0x20;
     pcie_apply_x2_rxphy_tuning();
     pcie_power_off();
+    timer_delay_ms(1000);  // CPU reset does not reset downstream power state
 
     // PCIe power on for backwards compatibility, can be removed
     pcie_power_on();
@@ -537,6 +581,8 @@ void main(void) {
   // request works over USB3 and over the USB4-tunneled USB function.
   i2c_init();
   ina231_init();
+
+  usb_attach_controller();
 
   uint8_t kicks = 0;
   uint8_t usb4_fallback_ticks = 0;
@@ -585,7 +631,7 @@ void main(void) {
         continue;
       }
       if (u4_boot.sb_asserted) { uint32_t b; for (b = 0; b < 60000UL; b++) { __asm nop __endasm; } }
-      else             { sleep(500); }
+      else             { timer_delay_ms(500); }
       /* Give the host a settle window before each Hard Reset kick. Repeated immediate kicks can keep
        * power-cycling the device before the PD contract completes. */
       { static __xdata uint8_t pd_settle = 0;

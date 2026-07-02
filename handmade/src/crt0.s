@@ -18,20 +18,36 @@
 ; Interrupt vectors in absolute area
     .area   VECTOR  (ABS,CODE)
 
-; Reset vector (address 0x0000)
-    .org    0x0000
+; Reset vector (address 0x2400)
+    .org    0x2400
 __reset:
     ljmp    __sdcc_program_startup
 
-; External interrupt 0 vector (address 0x0003)
-    .org    0x0003
+; External interrupt 0 vector (address 0x2403)
+    .org    0x2403
 __ext0_vector:
     ljmp    _int0_isr
 
-; External interrupt 1 vector (address 0x0013)
-    .org    0x0013
+; Timer 0 vector (address 0x240B)
+    .org    0x240B
+    ljmp    _int1_isr
+
+; External interrupt 1 vector (address 0x2413)
+    .org    0x2413
 __ext1_vector:
     ljmp    _int1_isr
+
+; Timer 1 vector (address 0x241B)
+    .org    0x241B
+    reti
+
+; Serial vector (address 0x2423)
+    .org    0x2423
+    reti
+
+; Timer 2 vector (address 0x242B)
+    .org    0x242B
+    reti
 
 ; Startup code in relocatable area
     .area   HOME    (CODE)
@@ -51,6 +67,7 @@ clear_ram_loop:
 
     ; Initialize DPX = 0 (bank 0)
     mov     0x96, #0x00
+    mov     0xA8, #0x00     ; IE = 0, main re-enables interrupts
 
     ; Jump to main
     ljmp    _main

@@ -247,6 +247,7 @@
 #define REG_USB_EP0_LEN_H       XDATA_REG8(0x9003)  /* EP0 transfer length high byte */
 #define REG_USB_EP0_LEN_L       XDATA_REG8(0x9004)  /* EP0 transfer length low byte */
 #define REG_USB_EP0_CFG         XDATA_REG8(0x9005)  /* EP0 config / bulk interrupt enable (not length) */
+#define   USB_EP0_CFG_INIT       0xF0  // Stock USB init value for EP0/config gate
 /*
  * USB EP0 Config / Bulk Ready (0x9006)
  * Dual purpose: EP0 config during enumeration, bulk ready during transfers.
@@ -383,6 +384,9 @@
 #define   USB_CTRL_PHASE_DATA_OUT 0x04  // Bit 2: OUT data received from host
 #define   USB_CTRL_PHASE_DATA_IN  0x08  // Bit 3: IN data phase ready (poll for GET_DESC)
 #define   USB_CTRL_PHASE_STAT_IN  0x10  // Bit 4: Status phase (IN/device-to-host, SET_ADDR)
+#define   USB_CTRL_PHASE_ALL      (USB_CTRL_PHASE_SETUP | USB_CTRL_PHASE_STAT_OUT | \
+                                   USB_CTRL_PHASE_DATA_OUT | USB_CTRL_PHASE_DATA_IN | \
+                                   USB_CTRL_PHASE_STAT_IN)
 
 /*
  * USB EP0 DMA Control Register (0x9092)
@@ -439,6 +443,7 @@
 #define   USB_EP_CFG1_BULK_OUT_COMPLETE  0x02
 #define   USB_EP_CFG1_BULK_IN_START      0x04
 #define   USB_EP_CFG1_BULK_IN_COMPLETE   0x08
+#define   USB_EP_CFG1_INIT_CLEAR         0x0F  // Stock init: clear all endpoint pending bits
 
 #define REG_USB_EP_CFG2         XDATA_REG8(0x9094)
 #define   USB_EP_CFG2_CLEAR_IN    0x01
@@ -457,13 +462,16 @@
  */
 #define REG_USB_EP_READY        XDATA_REG8(0x9096)  /* EP ready (read/writeback to ack) */
 #define REG_USB_EP_CTRL_9097    XDATA_REG8(0x9097)  /* EP control (init: 0xFF) */
+#define   USB_EP_CTRL_9097_INIT   0xFF
 #define REG_USB_EP_MODE_9098    XDATA_REG8(0x9098)  /* EP mode (init: 0xFF) */
 #define REG_USB_EP_MODE_9099    XDATA_REG8(0x9099)  /* EP mode 2 (init: 0xFF) */
 #define REG_USB_EP_MODE_909A    XDATA_REG8(0x909A)  /* EP mode 3 (init: 0xFF) */
 #define REG_USB_EP_MODE_909B    XDATA_REG8(0x909B)  /* EP mode 4 (init: 0xFF) */
 #define REG_USB_EP_MODE_909C    XDATA_REG8(0x909C)  /* EP mode 5 (init: 0xFF) */
 #define REG_USB_EP_MODE_909D    XDATA_REG8(0x909D)  /* EP mode 6 (init: 0xFF) */
+#define   USB_EP_MODE_INIT        0xFF
 #define REG_USB_STATUS_909E     XDATA_REG8(0x909E)  /* EP status (init: 0x03) */
+#define   USB_STATUS_909E_INIT    0x03
 #define REG_USB_CTRL_90A0       XDATA_REG8(0x90A0)  /* Bulk strobe (auto-clears after write) */
 /*
  * Bulk DMA Trigger (0x90A1)
@@ -521,6 +529,7 @@
  * Reading it back after C42C or DMA operations may return 0x00.
  */
 #define REG_USB_MODE            XDATA_REG8(0x90E2)
+#define   USB_MODE_INIT           0x01
 /*
  * Bulk Endpoint Command Register (0x90E3) — WRITE-ONLY
  *
@@ -720,7 +729,9 @@
  *          at 0xc465. If clear → link is down → writes E710 and clears CC3B bit 1.
  */
 #define REG_USB_PHY_CTRL_91C0   XDATA_REG8(0x91C0)
+#define   USB_PHY_91C0_INIT_TOGGLE 0x01  // Stock init toggles bit 0 high then low
 #define   USB_PHY_91C0_LINK_UP    0x02  // Bit 1: SS link up (checked in 91D1 bit 0 handler)
+#define   USB_PHY_91C0_FORCE_HS   0x10  // Bit 4: force USB 2.0 High Speed path
 #define REG_USB_PHY_CTRL_91C1   XDATA_REG8(0x91C1)
 #define REG_USB_PHY_CTRL_91C3   XDATA_REG8(0x91C3)
 #define REG_USB_EP_CTRL_91D0    XDATA_REG8(0x91D0)
@@ -868,6 +879,7 @@
 #define   BUF_CFG_9302_BIT7      0x80  // Bit 7: Buffer status flag
 #define   BUF_CFG_9302_MSC_INIT  0xBF  // MSC engine init value (stock 0xB1DF)
 #define REG_BUF_CFG_9303        XDATA_REG8(0x9303)  /* MSC init: 0x33 (retains) */
+#define   BUF_CFG_9303_MSC_INIT  0x33
 #define REG_BUF_CFG_9304        XDATA_REG8(0x9304)  /* MSC init: 0x3F (retains) */
 #define REG_BUF_CFG_9305        XDATA_REG8(0x9305)  /* MSC init: 0x40 (retains) */
 
@@ -1552,6 +1564,7 @@
 #define REG_INT_USB_STATUS      XDATA_REG8(0xC802)  /* USB interrupt gate/status */
 #define   INT_USB_GATE            0x01  // Bit 0: ISR gate (stock checks before processing)
 #define   INT_USB_CTRL_PENDING    0x04  // Bit 2: Control transfer processing (C471 poll loop)
+#define   INT_USB_AUX_PENDING     0x40  // Bit 6: Observed with USB gate events; stock ignores after dispatch
 /*
  * Auxiliary/DMA Mode Status (0xC805)
  * Also used for DMA mode configuration before bulk OUT data handling.
@@ -1619,19 +1632,19 @@
 #define REG_FLASH_CON           XDATA_REG8(0xC89F)
 #define REG_FLASH_ADDR_LO       XDATA_REG8(0xC8A1)  /* SPI addr[7:0] */
 #define REG_FLASH_ADDR_MD       XDATA_REG8(0xC8A2)  /* SPI addr[15:8] */
-#define REG_FLASH_DATA_PAGE_CNT XDATA_REG8(0xC8A3)  /* Transfer length: page count (256 bytes per page) */
-#define REG_FLASH_DATA_BYTE_OFS XDATA_REG8(0xC8A4)  /* Transfer length: byte offset within page */
-#define REG_FLASH_DATA_LEN      REG_FLASH_DATA_PAGE_CNT  /* Legacy alias */
-#define REG_FLASH_DATA_LEN_HI   REG_FLASH_DATA_BYTE_OFS  /* Legacy alias */
+#define REG_FLASH_DATA_LEN_HI   XDATA_REG8(0xC8A3)  /* Transfer length bits 15:8 */
+#define REG_FLASH_DATA_LEN_LO   XDATA_REG8(0xC8A4)  /* Transfer length bits 7:0 */
+#define REG_FLASH_DATA_PAGE_CNT REG_FLASH_DATA_LEN_HI  /* Alias: page count (256 B/page) */
+#define REG_FLASH_DATA_BYTE_OFS REG_FLASH_DATA_LEN_LO  /* Alias: byte offset within page */
 #define REG_FLASH_DIV           XDATA_REG8(0xC8A6)  /* SPI clock divider */
 #define REG_FLASH_CSR           XDATA_REG8(0xC8A9)  /* Write 0x01 to trigger transaction */
 #define   FLASH_CSR_BUSY          0x01  // Bit 0: Transaction in progress
 #define REG_FLASH_CMD           XDATA_REG8(0xC8AA)  /* SPI command byte */
 #define REG_FLASH_ADDR_HI       XDATA_REG8(0xC8AB)  /* SPI addr[23:16] */
 #define REG_FLASH_ADDR_LEN      XDATA_REG8(0xC8AC)  /* SPI address mode control */
-#define   FLASH_ADDR_LEN_MASK     0xFC  // Bits 2-7 (stock code reads & masks these)
-#define   FLASH_ADDR_LEN_NOADDR   0x04  // No address bytes sent (bits 0-1 = 0)
-#define   FLASH_ADDR_LEN_3BYTE    0x07  // 3 address bytes sent (bits 0-1 = 0x03)
+#define   FLASH_ADDR_LEN_MASK     0xFC  // Preserve controller mode bits 2-7
+#define   FLASH_ADDR_LEN_NOADDR   0x00  // No address bytes sent
+#define   FLASH_ADDR_LEN_3BYTE    0x03  // Send 24-bit SPI address
 #define REG_FLASH_MODE          XDATA_REG8(0xC8AD)
 #define   FLASH_MODE_ENABLE       0x01  // Bit 0: Flash mode enable
 #define REG_FLASH_BUF_OFFSET    XDATA_REG16(0xC8AE)
@@ -1715,24 +1728,21 @@
 //=============================================================================
 /*
  * CPU Mode / USB Speed Control (0xCC30)
- * Controls USB speed capability. Written 0x01 at boot (hw_init).
- * Write 0x00 to force USB 2.0 High Speed fallback (handle_link_event).
+ * Controls USB speed capability. CPU reset preserves this register, so USB
+ * init must set it explicitly.
  */
 #define REG_CPU_MODE            XDATA_REG8(0xCC30)
 #define   CPU_MODE_USB2           0x00  // Force USB 2.0 High Speed (fallback)
 #define   CPU_MODE_USB3           0x01  // USB 3.0 SuperSpeed capable (boot default)
 /*
  * CPU Reset (0xCC31)
- * Writing bit 0 restarts the CPU from CODE address 0 (re-executes crt0 + main)
- * AND triggers USB re-enumeration. Device comes back in ~0.32s.
- * CODE RAM and XDATA are preserved — does NOT reload from SPI flash.
- * CC28 is NOT needed — CC31 bit 0 alone does the full reset + USB re-enum.
+ * Writing bit 0 restarts the CPU from CODE address 0 (re-executes crt0 + main).
+ * CODE RAM and XDATA are preserved; SPI flash is not reloaded.
  * Bits 1-7 have no effect (writes ignored, always read back 0).
  * Self-clearing: reads back 0x00 after reset completes.
  */
-#define REG_CPU_RESET           XDATA_REG8(0xCC31)  /* Write 0x01 to restart CPU + USB */
-#define REG_CPU_EXEC_CTRL       REG_CPU_RESET       /* Legacy alias for pcie.c */
-#define   CPU_RESET_TRIGGER       0x01              /* Bit 0: Trigger CPU restart + USB re-enum (self-clearing) */
+#define REG_CPU_RESET           XDATA_REG8(0xCC31)  /* Write 0x01 to restart CPU */
+#define   CPU_RESET_TRIGGER       0x01              /* Bit 0: Trigger CPU restart (self-clearing) */
 #define REG_CPU_EXEC_STATUS     XDATA_REG8(0xCC32)  /* CPU execution status */
 #define   CPU_EXEC_STATUS_ACTIVE  0x01  // Bit 0: CPU execution active
 #define REG_CPU_EXEC_STATUS_2   XDATA_REG8(0xCC33)  /* CPU execution status 2 */
@@ -1769,12 +1779,10 @@
 #define   TIMER_CTRL_LINK_POWER   0x02              /* Bit 1: SS link power control (cleared in 91D1 handlers) */
 /*
  * USB Power Cycle (0xCC28)
- * Writing 0x01 power-cycles the USB controller, causing the host to
- * detect a disconnect/reconnect and re-enumerate the device.
+ * Write 0x00 then 0x01 to make the host detect a USB disconnect/reconnect.
  * The CPU keeps running — CODE RAM and firmware state are preserved.
- * After write, CC28 reads back as 0x01. On hardware pin reset, CC28 is 0x00.
- * NOTE: CC31 bit 0 alone also triggers USB re-enum, so CC28 is redundant
- * for reset purposes. CC28 is USB-only (no CPU restart).
+ * After the trigger write, CC28 reads back as 0x01. On hardware pin reset,
+ * CC28 is 0x00.
  */
 #define REG_USB_POWER_CYCLE     XDATA_REG8(0xCC28)  /* Write 0x01 to power-cycle USB (no CPU restart) */
 #define   USB_POWER_CYCLE_TRIGGER 0x01              /* Bit 0: Trigger */
