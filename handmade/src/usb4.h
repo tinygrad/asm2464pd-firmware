@@ -501,6 +501,62 @@ static void phy_clr_lo4(uint16_t reg) { PR(reg) &= 0xFE; PR(reg) &= 0xFD; PR(reg
 static void phy_set_60_07_pair(uint16_t reg) { RMW(reg, 0x0F, 0x60); RMW(reg + 1, 0xF0, 0x07); }  /* c2d9 */
 static void phy_set_0e_clr_next(uint16_t reg) { RMW(reg, 0xF1, 0x0E); PR(reg + 1) = 0; }  /* c397 */
 
+/* Per-lane PHY RX serdes init — the 18 operations that are identical for both
+ * lanes modulo the +0x80 LaneB offset.  base = 0xC200 (LaneA) or 0xC280 (LaneB).
+ * Macro so SDCC constant-folds base+offset -> identical codegen to the original. */
+#define USB4_PHY_LANE_SERDES_INIT(base) do { \
+  PHY_SET_NIB_HI7(base + 0xC5); \
+  PR(base + 0xA1) = (PR(base + 0xA1) & 0x9F) | 0x60; \
+  PHY_SET_BIT0(base + 0x8C); PHY_SET_BIT0(base + 0x9C); PHY_SET_BIT0(base + 0xAC); \
+  PR(base + 0xBC) &= 0xFE; \
+  PR(base + 0x8C) &= 0xFD; \
+  PHY_SET_BIT1(base + 0x9C); PHY_SET_BIT1(base + 0xAC); \
+  PR(base + 0xBC) &= 0xFD; \
+  PR(base + 0xC3) = (PR(base + 0xC3) & 0xC3) | 0x1C; \
+  PR(base + 0xC9) = (PR(base + 0xC9) & 0x80) | 0x41; \
+  phy_set_e0_07_pair(base + 0xA5); \
+  phy_clr_lo4(base + 0xCA); \
+  PHY_SET_HI3_60(base + 0x87); \
+  PHY_SET_NIB_HI7(base + 0x94); \
+  PHY_SET_HI3_60(base + 0xA2); \
+  PHY_SET_LO_0B(base + 0xC5); \
+  PHY_SET_F3_04(base + 0x93); \
+  PHY_SET_FC_02(base + 0xCE); \
+  PR(base + 0xCE) = (PR(base + 0xCE) & 0xE3) | 0x14; \
+} while (0)
+
+/* Per-lane PHY RX equalizer trim — 28 operations identical for both lanes. */
+#define USB4_PHY_LANE_EQ_TRIM(base) do { \
+  PR(base + 0x90) &= 0x9F; \
+  PR(base + 0xA0) &= 0x9F; \
+  PHY_SET_E0_0A(base + 0x82); \
+  PR(base + 0x92) = (PR(base + 0x92) & 0xE0) | 0x09; \
+  PHY_SET_E0_0A(base + 0xA2); \
+  PHY_SET_E0_03(base + 0x90); \
+  PHY_SET_E0_03(base + 0xA0); \
+  PHY_SET_E0_08(base + 0x91); \
+  PHY_SET_E0_08(base + 0xA1); \
+  PR(base + 0xDB) = (PR(base + 0xDB) & 0xE0) | 0x1B; \
+  PR(base + 0x84) = (PR(base + 0x84) & 0xF0) | 0x05; \
+  PHY_SET_F0_07(base + 0x94); \
+  PHY_SET_F0_0F(base + 0x85); \
+  PR(base + 0x95) = (PR(base + 0x95) & 0xF0) | 0x0C; \
+  PHY_SET_F0_0F(base + 0xA5); \
+  phy_set_60_07_pair(base + 0x85); \
+  PHY_SET_F0_0F(base + 0x96); \
+  PHY_SET_E0_11(base + 0xA7); \
+  PR(base + 0x8B) = (PR(base + 0x8B) & 0xC0) | 0x0A; \
+  PR(base + 0x84) = (PR(base + 0x84) & 0x8F) | 0x40; \
+  PR(base + 0xA4) &= 0x8F; \
+  PR(base + 0x89) = (PR(base + 0x89) & 0x0F) | 0x90; \
+  PHY_SET_BIT7(base + 0x99); \
+  PHY_SET_BIT7(base + 0xA9); \
+  PR(base + 0x82) = (PR(base + 0x82) & 0x1F) | 0xA0; \
+  PR(base + 0x92) = (PR(base + 0x92) & 0x1F) | 0x20; \
+  PHY_SET_F0_0D(base + 0xC6); \
+  phy_set_0e_clr_next(base + 0xCC); \
+} while (0)
+
 static void usb4_phy_rx_descriptor_load(void) {  /* 8e31 */
   REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0xF8) | 0x03;
   REG_PHY_PLL_CTRL = (REG_PHY_PLL_CTRL & 0xC7) | 0x28;
@@ -512,107 +568,19 @@ static void usb4_phy_rx_descriptor_load(void) {  /* 8e31 */
   SB_WR(SB_PHY_CFG_49, 0xA0);
 
   REG_PHY_LINK_CTRL_C21F = (REG_PHY_LANEA_RATE_START_C2A8 & 0x3F) | 0x40;
-  PHY_SET_NIB_HI7(0xC2C5);
-  REG_PHY_LANEA_C2A1 = (REG_PHY_LANEA_C2A1 & 0x9F) | 0x60;
-  PHY_SET_BIT0(0xC28C); PHY_SET_BIT0(0xC29C); PHY_SET_BIT0(0xC2AC);
-  REG_PHY_LANEA_C2BC &= 0xFE;
-  REG_PHY_LANEA_C28C &= 0xFD;
-  PHY_SET_BIT1(0xC29C); PHY_SET_BIT1(0xC2AC);
-  REG_PHY_LANEA_C2BC &= 0xFD;
-  REG_PHY_ORIENT_C2C3 = (REG_PHY_ORIENT_C2C3 & 0xC3) | 0x1C;
-  REG_PHY_LANEA_RATE_DESC_C2C9 = (REG_PHY_LANEA_RATE_DESC_C2C9 & 0x80) | 0x41;
-  phy_set_e0_07_pair(0xC2A5);
-  phy_clr_lo4(0xC2CA);
-  PHY_SET_HI3_60(0xC287);
-  PHY_SET_NIB_HI7(0xC294);
-  PHY_SET_HI3_60(0xC2A2);
-  PHY_SET_LO_0B(0xC2C5);
-  PHY_SET_F3_04(0xC293);
-  PHY_SET_FC_02(0xC2CE);
-  REG_PHY_LANEA_C2CE = (REG_PHY_LANEA_C2CE & 0xE3) | 0x14;
+  USB4_PHY_LANE_SERDES_INIT(0xC200);
   REG_PHY_LANEA_C2CE = (REG_PHY_LANEB_RATE_START_C328 & 0x3F) | 0x40;
 
-  PHY_SET_NIB_HI7(0xC345);
-  REG_PHY_LANEB_C321 = (REG_PHY_LANEB_C321 & 0x9F) | 0x60;
-  PHY_SET_BIT0(0xC30C); PHY_SET_BIT0(0xC31C); PHY_SET_BIT0(0xC32C);
-  REG_PHY_LANEB_C33C &= 0xFE;
-  REG_PHY_LANEB_C30C &= 0xFD;
-  PHY_SET_BIT1(0xC31C); PHY_SET_BIT1(0xC32C);
-  REG_PHY_LANEB_C33C &= 0xFD;
-  REG_VENDOR_CTRL_C343 = (REG_VENDOR_CTRL_C343 & 0xC3) | 0x1C;
-  REG_PHY_LANEB_RATE_DESC_C349 = (REG_PHY_LANEB_RATE_DESC_C349 & 0x80) | 0x41;
-  phy_set_e0_07_pair(0xC325);
-  phy_clr_lo4(0xC34A);
-  PHY_SET_HI3_60(0xC307);
-  PHY_SET_NIB_HI7(0xC314);
-  PHY_SET_HI3_60(0xC322);
-  PHY_SET_LO_0B(0xC345);
-  PHY_SET_F3_04(0xC313);
-  PHY_SET_FC_02(0xC34E);
-  REG_PHY_LANEB_C34E = (REG_PHY_LANEB_C34E & 0xE3) | 0x14;
+  USB4_PHY_LANE_SERDES_INIT(0xC280);
   REG_PHY_LINK_CTRL_C21D = (REG_PHY_LINK_CTRL_C21D & 0x3F) | 0x80;
 
   REG_BUF_DESC_STAT0_HI = 0; REG_BUF_DESC_STAT0_LO = 0;
   REG_BUF_DESC_STAT1_HI = 0; REG_BUF_DESC_STAT1_LO = 0;
   REG_BUF_DESC_STAT2_HI = 0; REG_BUF_DESC_STAT2_LO = 0;
 
-  REG_PHY_LANEA_C290 &= 0x9F;
-  REG_PHY_LANEA_C2A0 &= 0x9F;
-  PHY_SET_E0_0A(0xC282);
-  REG_PHY_LANEA_C292 = (REG_PHY_LANEA_C292 & 0xE0) | 0x09;
-  PHY_SET_E0_0A(0xC2A2);
-  PHY_SET_E0_03(0xC290);
-  PHY_SET_E0_03(0xC2A0);
-  PHY_SET_E0_08(0xC291);
-  PHY_SET_E0_08(0xC2A1);
-  REG_PHY_LANEA_C2DB = (REG_PHY_LANEA_C2DB & 0xE0) | 0x1B;
-  REG_PHY_STATUS = (REG_PHY_STATUS & 0xF0) | 0x05;
-  PHY_SET_F0_07(0xC294);
-  PHY_SET_F0_0F(0xC285);
-  REG_PHY_LANEA_C295 = (REG_PHY_LANEA_C295 & 0xF0) | 0x0C;
-  PHY_SET_F0_0F(0xC2A5);
-  phy_set_60_07_pair(0xC285);
-  PHY_SET_F0_0F(0xC296);
-  PHY_SET_E0_11(0xC2A7);
-  REG_PHY_LANEA_C28B = (REG_PHY_LANEA_C28B & 0xC0) | 0x0A;
-  REG_PHY_STATUS = (REG_PHY_STATUS & 0x8F) | 0x40;
-  REG_PHY_LANEA_C2A4 &= 0x8F;
-  REG_PHY_LANEA_C289 = (REG_PHY_LANEA_C289 & 0x0F) | 0x90;
-  PHY_SET_BIT7(0xC299);
-  PHY_SET_BIT7(0xC2A9);
-  REG_PHY_LANEA_C282 = (REG_PHY_LANEA_C282 & 0x1F) | 0xA0;
-  REG_PHY_LANEA_C292 = (REG_PHY_LANEA_C292 & 0x1F) | 0x20;
-  PHY_SET_F0_0D(0xC2C6);
-  phy_set_0e_clr_next(0xC2CC);
+  USB4_PHY_LANE_EQ_TRIM(0xC200);
 
-  REG_PHY_LANEB_C310 &= 0x9F;
-  REG_PHY_LANEB_C320 &= 0x9F;
-  PHY_SET_E0_0A(0xC302);
-  REG_PHY_LANEB_C312 = (REG_PHY_LANEB_C312 & 0xE0) | 0x09;
-  PHY_SET_E0_0A(0xC322);
-  PHY_SET_E0_03(0xC310);
-  PHY_SET_E0_03(0xC320);
-  PHY_SET_E0_08(0xC311);
-  PHY_SET_E0_08(0xC321);
-  REG_PHY_LANEB_C35B = (REG_PHY_LANEB_C35B & 0xE0) | 0x1B;
-  REG_PHY_LANEB_C304 = (REG_PHY_LANEB_C304 & 0xF0) | 0x05;
-  PHY_SET_F0_07(0xC314);
-  PHY_SET_F0_0F(0xC305);
-  REG_PHY_LANEB_C315 = (REG_PHY_LANEB_C315 & 0xF0) | 0x0C;
-  PHY_SET_F0_0F(0xC325);
-  phy_set_60_07_pair(0xC305);
-  PHY_SET_F0_0F(0xC316);
-  PHY_SET_E0_11(0xC327);
-  REG_PHY_LANEB_C30B = (REG_PHY_LANEB_C30B & 0xC0) | 0x0A;
-  REG_PHY_LANEB_C304 = (REG_PHY_LANEB_C304 & 0x8F) | 0x40;
-  REG_PHY_LANEB_C324 &= 0x8F;
-  REG_PHY_LANEB_C309 = (REG_PHY_LANEB_C309 & 0x0F) | 0x90;
-  PHY_SET_BIT7(0xC319);
-  PHY_SET_BIT7(0xC329);
-  REG_PHY_LANEB_C302 = (REG_PHY_LANEB_C302 & 0x1F) | 0xA0;
-  REG_PHY_LANEB_C312 = (REG_PHY_LANEB_C312 & 0x1F) | 0x20;
-  PHY_SET_F0_0D(0xC346);
-  phy_set_0e_clr_next(0xC34C);
+  USB4_PHY_LANE_EQ_TRIM(0xC280);
 
   REG_BUF_DESC_BASE0_HI = 0x01;
   REG_BUF_DESC_BASE0_LO = 0x60; REG_BUF_DESC_SIZE0_HI = 0x00;
