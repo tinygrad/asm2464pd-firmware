@@ -525,7 +525,6 @@ void main(void) {
   }
 
   if (IS_USB4()) {
-    is_usb2 = 1; // sideband access
     usb4_policy_enable();
   } else {
     usb_init_controller(0);
@@ -553,13 +552,10 @@ void main(void) {
         U4_CRITICAL_EXIT();
       }
       /* After the 1s timeout commits USB4 mode on a USB3-only host (where PD
-       * never arrives), reinit PCIe/USB for USB3 mode.  Uses XDATA 0x09FA
-       * (stock fw's u4_route_mode) which is set ONLY by the 1s timeout, not
-       * by PD.  Cleared after reinit so it doesn't persist. */
-      if (XDATA_REG8V(0x09FA) == 0x04 && !usb4_usb_inited) {
+       * never arrives), reinit PCIe/USB for USB3 mode.  Gated on !pd_seen
+       * so the USB4 card never enters this path. */
+      if (u4_entered_usb_mode && !usb4_usb_inited && !u4_boot.pd_seen) {
         usb4_usb_inited = 1;
-        XDATA_REG8V(0x09FA) = 0;
-        is_usb2 = 0;
         USB4_REINIT_USB3_AFTER_RESET_FALLBACK();
         usb_phy_tune();
         usb_init_controller(0);
@@ -614,7 +610,7 @@ void main(void) {
       { static __xdata uint8_t pd_settle = 0;
         if (!u4_boot.pd_seen) {
           if (pd_settle < 12) { pd_settle++; }
-          else if (kicks < 8) { pd_drive_hard_reset(); kicks++; pd_settle = 0; }
+          else if (kicks < 8) { pd_attach_hard_reset(); kicks++; pd_settle = 0; }
         }
       }
     }

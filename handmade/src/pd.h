@@ -178,6 +178,9 @@ static void pd_int1_enable_group(void) {
   REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0xF8) | 0x06;
   REG_CPU_CTRL_CA60 = (REG_CPU_CTRL_CA60 & 0xF7) | 0x08;
   REG_INT_STATUS_C800 |= 0x01;
+  /* Timer/Link Power Control strobe (stock fw pd_int1_enable_group). */
+  REG_TIMER_CTRL_CC3B |= 0x01;
+  REG_TIMER_CTRL_CC3B = (uint8_t)((REG_TIMER_CTRL_CC3B & 0xFD) | 0x02);
 }
 
 /* Top-level keystone bring-up: enable INT1, set the USB4 mode policy, init PD PHY + state. */

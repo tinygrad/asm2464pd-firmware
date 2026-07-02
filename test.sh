@@ -959,7 +959,7 @@ REMOTE_EOF
 scp -q /tmp/_flash_cap_multi.sh "$NUC:flash_cap.sh"
 echo "[test] targets: $TARGETS  capture=${SECS}s  smoke_timeout=$SMOKE_TIMEOUT  stock_fw=$STOCK_FW"
 ssh_rc=0
-ssh "$NUC" "chmod +x ~/flash_cap.sh && env STOCK_FW='$STOCK_FW' AMD_PCI_ID='$AMD_PCI_ID' STOCK_USBDEV='$STOCK_USBDEV' PCI_ENUM_TRIES='$PCI_ENUM_TRIES' PCI_ENUM_DELAY='$PCI_ENUM_DELAY' timeout --foreground '$RUN_TIMEOUT' ~/flash_cap.sh '$SECS' '$TARGET' '$USB3_FTDI' '$USB4_FTDI' '$USB3_BUS' '$USB4_BUS' '$SMOKE_TIMEOUT' '$FLASH_TIMEOUT' '$SIDEBAND_TIMEOUT' '$USB4_SIDEBAND_MIN_MV' '$USB4_SIDEBAND_MAX_MV' '$VERBOSE'" || ssh_rc=$?
+ssh "$NUC" "chmod +x ~/flash_cap.sh && env STOCK_FW='$STOCK_FW' AMD_PCI_ID='$AMD_PCI_ID' STOCK_USBDEV='$STOCK_USBDEV' PCI_ENUM_TRIES='$PCI_ENUM_TRIES' PCI_ENUM_DELAY='$PCI_ENUM_DELAY' USB4_ENUM_TRIES='$USB4_ENUM_TRIES' timeout --foreground '$RUN_TIMEOUT' ~/flash_cap.sh '$SECS' '$TARGET' '$USB3_FTDI' '$USB4_FTDI' '$USB3_BUS' '$USB4_BUS' '$SMOKE_TIMEOUT' '$FLASH_TIMEOUT' '$SIDEBAND_TIMEOUT' '$USB4_SIDEBAND_MIN_MV' '$USB4_SIDEBAND_MAX_MV' '$VERBOSE'" || ssh_rc=$?
 
 FAIL="$ssh_rc"
 for label in usb3 usb4; do
