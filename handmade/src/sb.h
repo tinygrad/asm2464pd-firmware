@@ -182,7 +182,7 @@ static void sb_rom_descriptor_load(void) {
   SB_WR(SB_PORT_SVC, 0x04); SB_WR(SB_PORT_SVC, 0x08);
   SB_WR(SB_PORT_SVC, 0x10); SB_WR(SB_PORT_SVC, 0x20);
   SB_WR(SB_PORT_SVC, 0x40); SB_WR(SB_PORT_SVC, 0x80);
-  SB_WR(SB_BOND_EVENT, 0x08); SB_WR(SB_BOND_EVENT, 0x40);
+  SB_WR(SB_BOND_EVENT, BOND_EVT_L0_FAIL); SB_WR(SB_BOND_EVENT, BOND_EVT_L1_FAIL);
   u4_sb.transport_edge_toggle = SB_RD(SB_TRANSPORT_STAT) & 0x01;
   u4_sb.link_edge_toggle = SB_RD(SB_LINK_EDGE_STAT) & 0x01;
   u4_sb.active_port_rr = (uint8_t)((SB_RD(SB_TRANSPORT_STAT) & 0x06) >> 1);
@@ -207,7 +207,7 @@ static void sb_block_init(void) {
 
   SB_WR(SB_CONNECT_EVENT, 0x01); SB_WR(SB_CONNECT_EVENT, 0x02);
   SB_WR(SB_ROUTEROP_EVENT, 0x02);
-  SB_WR(SB_BOND_EVENT, 0x01);
+  SB_WR(SB_BOND_EVENT, BOND_EVT_BONDED);
   SB_CLR(SB_CONNECT_STATE, 0x01); SB_WR(SB_CONNECT_STATE, (SB_RD(SB_CONNECT_STATE) & 0xFD) | 0x02);
   SB_CLR(SB_EVENT_CLR_29, 0x08);
   SB_CLR(SB_EVENT_CLR_2B, 0x08);
@@ -218,11 +218,11 @@ static void sb_block_init(void) {
   SB_WR(SB_LINK_EDGE(1), 0x08);
   SB_CLR(SB_EVENT_CLR_82, 0x08);
   SB_CLR(SB_EVENT_CLR_84, 0x08);
-  SB_WR(SB_CL0_EVENT, 0x01); SB_WR(SB_CL0_EVENT, 0x02);
-  SB_WR(SB_BOND_EVENT, 0x04); SB_WR(SB_BOND_EVENT, 0x20);
+  SB_WR(SB_CL0_EVENT, CL0_EVT_L0); SB_WR(SB_CL0_EVENT, CL0_EVT_L1);
+  SB_WR(SB_BOND_EVENT, BOND_EVT_L0_ABR2); SB_WR(SB_BOND_EVENT, BOND_EVT_L1_ABR2);
   SB_CLR(SB_EVENT_CLR_9F, 0x03);
   SB_CLR(SB_EVENT_CLR_67, 0x24);
-  SB_WR(SB_CL0_EVENT, 0x10); SB_WR(SB_CL0_EVENT, 0x20);
+  SB_WR(SB_CL0_EVENT, CL0_EVT_L0_TRAIN); SB_WR(SB_CL0_EVENT, CL0_EVT_L1_TRAIN);
   SB_CLR(SB_EVENT_CLR_9F, 0x30);
   u4_sb.conn_consequence_done = 0;
 
@@ -1506,34 +1506,27 @@ static void sb_router_event_handler(void) {
     }
   }
 
-  if (SB_RD(SB_BOND_EVENT) & 0x01) {
-    SB_WR(SB_BOND_EVENT, 0x01);
+  if (SB_RD(SB_BOND_EVENT) & BOND_EVT_BONDED) {
+    SB_WR(SB_BOND_EVENT, BOND_EVT_BONDED);
     uart_puts("\r\nLane Bonded\r\n");
     sb_lane_bonded_consequence();
   }
 
-  if (SB_RD(SB_ROUTEROP_EVENT) & 0x02) {
+  if (SB_RD(SB_ROUTEROP_EVENT) & ROUTEROP_EVT_PENDING) {
     sb_routerop_pending();
     SB_WR(SB_ROUTEROP_EVENT, 0x02);
   }
 
-  if (SB_RD(SB_CL0_EVENT) & 0x01) {
-    SB_WR(SB_CL0_EVENT, 0x01);
-    uart_puts("\r\nL0:CL0 ");
-    uart_puthex(SB_RD(SB_LANE_CL(0)) & 0x0F);
-    SB_WR(SB_CL0_ACK, (uint8_t)((SB_RD(SB_CL0_ACK) & 0xFE) | 0x01));
-    if (!(u4_work_buf[WB_LANE_EN] & 0x02) || ((SB_RD(SB_LANE_CL(1)) & 0x0F) == 2)) {
-      sb_set_d4_peer_cl0();
-    }
-  }
-
-  if (SB_RD(SB_CL0_EVENT) & 0x02) {
-    SB_WR(SB_CL0_EVENT, 0x02);
-    uart_puts("\r\nL1:CL0 ");
-    uart_puthex(SB_RD(SB_LANE_CL(1)) & 0x0F);
-    SB_WR(SB_CL0_ACK, (uint8_t)((SB_RD(SB_CL0_ACK) & 0xFD) | 0x02));
-    if (!(u4_work_buf[WB_LANE_EN] & 0x01) || ((SB_RD(SB_LANE_CL(0)) & 0x0F) == 2)) {
-      sb_set_d4_peer_cl0();
+  { uint8_t lane;
+    for (lane = 0; lane < 2; lane++) {
+      uint8_t bit = (uint8_t)(1u << lane);
+      if (!(SB_RD(SB_CL0_EVENT) & bit)) continue;
+      SB_WR(SB_CL0_EVENT, bit);
+      uart_puts(lane == 0 ? "\r\nL0:CL0 " : "\r\nL1:CL0 ");
+      uart_puthex(SB_RD(SB_LANE_CL(lane)) & 0x0F);
+      SB_WR(SB_CL0_ACK, (uint8_t)((SB_RD(SB_CL0_ACK) & ~bit) | bit));
+      if (!(u4_work_buf[WB_LANE_EN] & (uint8_t)(1u << (lane ^ 1))) || ((SB_RD(SB_LANE_CL(lane ^ 1)) & 0x0F) == 2))
+        sb_set_d4_peer_cl0();
     }
   }
 

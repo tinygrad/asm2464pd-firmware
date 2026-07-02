@@ -654,15 +654,11 @@ static void u4lb_tunnel_pwron_train(void) {
 }
 
 static void u4lb_pcie_lane_slot_mask(uint8_t newmask) {  /* d702 */
-  __xdata uint8_t slot;
-  slot = (uint8_t)(P1_RD(P1_PCIE_LANE_SLOT(0)) & 0x7F);
-  P1_WR(P1_PCIE_LANE_SLOT(0), (uint8_t)(((newmask & 0x01) ? 0x80 : 0x00) | slot));
-  slot = (uint8_t)(P1_RD(P1_PCIE_LANE_SLOT(1)) & 0x7F);
-  P1_WR(P1_PCIE_LANE_SLOT(1), (uint8_t)(((newmask & 0x02) ? 0x80 : 0x00) | slot));
-  slot = (uint8_t)(P1_RD(P1_PCIE_LANE_SLOT(2)) & 0x7F);
-  P1_WR(P1_PCIE_LANE_SLOT(2), (uint8_t)(((newmask & 0x04) ? 0x80 : 0x00) | slot));
-  slot = (uint8_t)(P1_RD(P1_PCIE_LANE_SLOT(3)) & 0x7F);
-  P1_WR(P1_PCIE_LANE_SLOT(3), (uint8_t)(((newmask & 0x08) ? 0x80 : 0x00) | slot));
+  uint8_t i, slot;
+  for (i = 0; i < 4; i++) {
+    slot = P1_RD(P1_PCIE_LANE_SLOT(i)) & 0x7F;
+    P1_WR(P1_PCIE_LANE_SLOT(i), (uint8_t)(((newmask & (1u << i)) ? 0x80 : 0x00) | slot));
+  }
 }
 
 static void u4lb_pcie_lane_ramp(uint8_t target) {  /* c089 */
