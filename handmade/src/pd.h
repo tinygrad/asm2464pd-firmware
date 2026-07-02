@@ -10,6 +10,7 @@
 #define PR(a) XDATA_REG8V(a)
 
 static void pd_rx_message_dispatch(void);
+static void pd_tx_buf_clear(void);
 
 #define PD_WAIT_LIMIT 0x4000u
 
@@ -45,6 +46,12 @@ static void pd_wait(volatile __xdata uint8_t *reg, uint8_t mask, uint8_t set) {
   uint16_t iters = 0;
   if (set) { while (!(*reg & mask) && ++iters < PD_WAIT_LIMIT); }
   else     { while ( (*reg & mask) && ++iters < PD_WAIT_LIMIT); }
+}
+
+/* Bounded wait for the PD command engine to go idle (no pending op, not busy). */
+static void pd_wait_engine_idle(void) {
+  uint16_t guard;
+  for (guard = 0; ((REG_CMD_STATUS_E402 & 0x0E) || (REG_CMD_BUSY_STATUS & 0x01)) && guard < 0x4000; guard++);
 }
 
 /* RDO/CRC timing constants for the PD engine. */
@@ -142,7 +149,7 @@ static void pd_drive_hard_reset(void) {
     return;
   }
   uart_puts("][Drive_HardRst]");
-  { uint8_t i; for (i = 0; i < PD_MSG_STRIDE; i++) PR(PD_TX_BASE + i) = 0; }
+  pd_tx_buf_clear();
   pd_internal_state_init();
   REG_PHY_EVENT_E40F = 0xFF; REG_PHY_INT_STATUS_E410 = 0xFF;
   REG_CMD_CONFIG &= ~0x0E;
@@ -154,7 +161,7 @@ static void pd_drive_hard_reset(void) {
   REG_CMD_CTRL_E403 = 0x00; REG_CMD_CFG_E404 = 0x40;
   REG_CMD_CFG_E405 = (REG_CMD_CFG_E405 & 0xF8) | 0x05;
   REG_CMD_STATUS_E402 = (REG_CMD_STATUS_E402 & 0x1F) | 0x20;
-  for (guard = 0; ((REG_CMD_STATUS_E402 & 0x0E) || (REG_CMD_BUSY_STATUS & 0x01)) && guard < 0x4000; guard++);
+  pd_wait_engine_idle();
   REG_CMD_BUSY_STATUS |= 0x01;
   for (guard = 0; (REG_CMD_BUSY_STATUS & 0x01) && guard < 0x4000; guard++);
 }
@@ -301,7 +308,7 @@ static uint16_t pd_rx_ptr(void) {
 
 /* Send the message staged in E420-E43F and bump the TX MessageID. */
 static void pd_tx_commit_engine(void) {
-  { uint16_t guard; for (guard = 0; ((REG_CMD_STATUS_E402 & 0x0E) || (REG_CMD_BUSY_STATUS & 0x01)) && guard < 0x4000; guard++); }
+  pd_wait_engine_idle();
   REG_CMD_CTRL_E403 = u4_pd.tx_msg_len;
   REG_CMD_BUSY_STATUS = (REG_CMD_BUSY_STATUS & 0xFE) | 0x01;
   { uint16_t guard; for (guard = 0; (REG_CMD_BUSY_STATUS & 0x01) && guard < 0x4000; guard++); }
