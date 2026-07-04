@@ -35,31 +35,16 @@ static void u4lb_desc_engine_clear(uint8_t commit_hi2) {  /* e711 */
   P12_WR(DE_CTRL, (uint8_t)(P12_RD(DE_CTRL) & 0xC0));
   DE_WR_CLEAR();
 }
-static void u4lb_engine_kick_wait(void) {
-  uint16_t g;
-  P12_WR(DE_KICK, 0x01);
-  for (g = 0; (P12_RD(DE_KICK) & 0x01) && g < 0x2000; g++) { }
-}
-static void u4lb_sb_desc_commit(void) {
-  uint8_t commit = (uint8_t)((P12_RD(DE_COMMIT) & 0x7F) | 0x80);
-  P12_WR(DE_COMMIT, commit);
-  u4lb_engine_kick_wait();
-  u4lb_desc_engine_clear(commit);
-}
 static void u4lb_desc_commit_noset(uint8_t ctrl_low6) {  /* e890 */
-  uint8_t commit = (uint8_t)(P12_RD(DE_COMMIT) & 0x7F);
   (void)ctrl_low6;
-  P12_WR(DE_COMMIT, commit);
-  u4lb_engine_kick_wait();
-  u4lb_desc_engine_clear(commit);
+  P12_WR(DE_COMMIT, (uint8_t)(P12_RD(DE_COMMIT) & 0x7F));
+  P12_WR(DE_KICK, 0x01);
+  { uint16_t g; for (g = 0; (P12_RD(DE_KICK) & 0x01) && g < 0x2000; g++) { } }
+  u4lb_desc_engine_clear(0);
 }
 static void u4lb_desc_commit_reg35(uint8_t val) {  /* e7f8 */
-  uint8_t commit;
   P12_WR(DE_CTRL, val);
-  commit = (uint8_t)((P12_RD(DE_COMMIT) & 0x7F) | 0x80);
-  P12_WR(DE_COMMIT, commit);
-  u4lb_engine_kick_wait();
-  u4lb_desc_engine_clear(commit);
+  (void)u4c_sb_desc_commit();
 }
 static void u4lb_desc_apply_lanemask(void) {  /* e00c */
   uint8_t m = (uint8_t)((u4lb_desc0_lanemask != 0) ? 1 : 0);
@@ -107,7 +92,7 @@ static void u4lb_desc_emit_routerop(void) {  /* c3ce */
     u4lb_desc1          = u4_cfg.routerop_desc2; P12_WR(DE_WR(1), u4_cfg.routerop_desc2);
     u4lb_desc2          = u4_cfg.routerop_desc3; P12_WR(DE_WR(2), u4_cfg.routerop_desc3);
     u4lb_desc3          = u4_cfg.msg_type;       P12_WR(DE_WR(3), u4_cfg.msg_type);
-    if ((uint8_t)(u4lb_desc_set_mode ^ 2) == 0) u4lb_sb_desc_commit();
+    if ((uint8_t)(u4lb_desc_set_mode ^ 2) == 0) u4c_sb_desc_commit();
     else                                       u4lb_desc_emit_lanes((uint8_t)(u4lb_desc_set_mode ^ 2), u4lb_desc_set_mode);
   }
 }
@@ -495,8 +480,7 @@ static void u4lb_transport_reinit(uint8_t skip_lane) {  /* b031 */
   P1_WR(P1_USB4_TUNNEL_EVENT_STATUS_1508, 0x08);
 
   P12_WR(DE_CTRL, (uint8_t)(P12_RD(DE_CTRL) & 0xC0));
-  P12_WR(DE_WR(0), 0x00); P12_WR(DE_WR(1), 0x00);
-  P12_WR(DE_WR(2), 0x00); P12_WR(DE_WR(3), 0x00);
+  DE_WR_CLEAR();
   u4lb_desc0_lanemask = 0; u4lb_desc1 = 0; u4lb_desc2 = 0; u4lb_desc3 = 0;
   u4c_desc_engine_reset();
   u4c_seed_workbuf();
@@ -590,10 +574,7 @@ static void u4lb_pcie_link_enable(void) {  /* e4ea */
   }
   u4lb_cpu_ext_kick();
   u4lb_pcie_tunnel_arm();
-  REG_PCIE_PERST_CTRL = (uint8_t)(REG_PCIE_PERST_CTRL & 0xFE);
-  REG_PCIE_PERST_CTRL = (uint8_t)(REG_PCIE_PERST_CTRL & 0xFD);
-  REG_PCIE_PERST_CTRL = (uint8_t)(REG_PCIE_PERST_CTRL & 0xFB);
-  REG_PCIE_PERST_CTRL = (uint8_t)(REG_PCIE_PERST_CTRL & 0xF7);
+  REG_PCIE_PERST_CTRL &= 0xF0;
   u4lb_rxpll_cfg_trigger();
 }
 
@@ -948,8 +929,7 @@ static void u4lb_phy_cl_orient_strobe(uint8_t sel, uint8_t cc) {  /* ea7c */
 }
 
 static void u4lb_sb_op_kick_drain(uint8_t v) {  /* 8992 */
-  SB_WR(SB_DESC_CMD, v);
-  SB_WR(SB_DESC_COUNT_GO, (uint8_t)((SB_RD(SB_DESC_COUNT_GO) & 0x80) | 0x03));
+  u4lb_sb_op_kick(v);
   u4lb_sb_op_run_drain(1);
 }
 
