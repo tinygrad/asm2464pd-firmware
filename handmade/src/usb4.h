@@ -467,15 +467,6 @@ static __code const uint8_t u4_phy_rx_init_tab[324][4] = {
   {0x7a,0x0b,0xc0,0x1c}, {0x7a,0x2a,0xf0,0x06}, {0x7b,0x0b,0xc0,0x1c}, {0x7b,0x2a,0xf0,0x06},
 };
 
-/* Banked PHY register access: select XDATA page 1 (DPX=1) around the access.
- * Same DPX dance as sb.h's P1_RD/P1_WR; kept local to the PHY table loader. */
-static uint8_t PG_RD(uint16_t addr) {
-  uint8_t v; DPX = 0x01; v = XDATA_REG8V(addr); DPX = 0x00; return v;
-}
-static void PG_WR(uint16_t addr, uint8_t v) {
-  DPX = 0x01; XDATA_REG8V(addr) = v; DPX = 0x00;
-}
-
 /* Read-modify-write a page-0 register: reg = (reg & mask) | or_val. The
  * PHY_SET_* helpers below are the specific (mask, or_val) pairs from stock. */
 #define RMW(a, m, o)   PR(a) = (PR(a) & (uint8_t)(m)) | (uint8_t)(o)
@@ -638,7 +629,7 @@ static void usb4_phy_rx_descriptor_load(void) {  /* 8e31 */
 static void usb4_phy_serdes_arm(void) {  /* db0d */
   REG_PHY_LINK_CTRL_C21B = (REG_PHY_LINK_CTRL_C21B & 0x3F) | 0xC0;
   REG_LINK_CTRL = (REG_LINK_CTRL & 0xF7) | 0x08;
-  PG_WR(0x1262, PG_RD(0x1262) & 0xEF);
+  P1_WR(0x1262, P1_RD(0x1262) & 0xEF);
   SB_WR(SB_ROUTE_GATE, (SB_RD(SB_ROUTE_GATE) & 0xBF) | 0x40);
   SB_WR(SB_SERDES_CTRL, SB_RD(SB_SERDES_CTRL) & 0xFE);
   SB_SET(SB_USB_MODE, 0x80);
@@ -654,7 +645,7 @@ static void usb4_phy_rx_table_apply(void) {  /* ef1e */
   uint16_t i;
   for (i = 0; i < (uint16_t)(sizeof(u4_phy_rx_init_tab) / 4); i++) {
     uint16_t addr = ((uint16_t)u4_phy_rx_init_tab[i][0] << 8) | u4_phy_rx_init_tab[i][1];
-    PG_WR(addr, (uint8_t)((PG_RD(addr) & u4_phy_rx_init_tab[i][2]) | u4_phy_rx_init_tab[i][3]));
+    P1_WR(addr, (uint8_t)((P1_RD(addr) & u4_phy_rx_init_tab[i][2]) | u4_phy_rx_init_tab[i][3]));
   }
 }
 
