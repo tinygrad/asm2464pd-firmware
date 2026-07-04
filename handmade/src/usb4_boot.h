@@ -49,7 +49,7 @@ static void usb4_state_prepare(void) {
 }
 
 static void usb4_policy_enable(void) {
-  usb4_phy_arm();
+  /* usb4_phy_arm is already called at boot — don't call it twice. */
   pd_keystone_init();
   usb4_phy_rx_arm();
   usb4_routerop_init();

@@ -446,13 +446,14 @@ void int0_isr(void) __interrupt(0) {
       }
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
-        uart_puts("[USB2 fallback]\n");
-        // fallback to USB2
-        is_usb2 = 1;
-        // without this, USB2 is flaky
-        REG_CPU_MODE = CPU_MODE_USB2;
-        // enable USB high speed mode
-        REG_USB_PHY_CTRL_91C0 = 0x10;
+        if (!IS_USB4()) {
+          uart_puts("[USB2 fallback]\n");
+          is_usb2 = 1;
+          REG_CPU_MODE = CPU_MODE_USB2;
+          REG_USB_PHY_CTRL_91C0 = 0x10;
+        }
+        /* In USB4 mode, SS_FAIL is expected — the SS link goes through
+         * the tunnel, not the direct USB3 PHY.  Just ack the event. */
       }
       REG_BUF_CFG_9300 = ep;
       uart_puts("[LINK EVENT ");
@@ -503,15 +504,12 @@ void main(void) {
   flash_init();
 
   USB4_SELECT_BOOT_MODE(usb4_reset_fallback);
+  u4_entered_usb_mode = 0;  /* clear XDATA-persistent flag from prior boot */
 
   if (IS_USB4()) {
-    pcie_power_off();
-    /* PD interrupt routing must be enabled before PHY ready wait
-     * (stock fw boot_hw_init_main: pd_int1_enable_group before PHY ready). */
-    pd_int1_enable_group();
+    /* Sideband block power + tunnel adapter enable (boot_phy_bringup_early +
+     * pcie_tunnel_adapter_enable).  Must come before usb_pipe_engine_init. */
     usb4_state_prepare();
-    /* Wait for PHY/clock ready before USB init (stock fw boot_hw_init_main). */
-    { uint8_t b; do { b = REG_PHY_EXT_B3; } while ((b & 0x30) == 0); }
     /* USB PIPE init + PHY arm (stock fw boot_usb4_vs_usb3_mode_decision). */
     usb_pipe_engine_init();
     usb4_phy_arm();
@@ -534,6 +532,11 @@ void main(void) {
 
   if (IS_USB4()) {
     usb4_policy_enable();
+    /* Clear USB interrupt global mask — usb4_mode_entry_commit does this
+     * when called from the 1s timeout, but the timeout fires too late
+     * (after PD/tunnel are up).  Clear it at boot so the USB function
+     * can enumerate as soon as the host connects. */
+    REG_USB_INT_MASK_9090 &= 0x7F;
   } else {
     usb_init_controller(0);
   }
@@ -572,14 +575,23 @@ void main(void) {
         pcie_apply_x2_rxphy_tuning();
         pcie_power_on();
       }
-      /* On the USB4 card, after PD connects and Enter_USB is accepted,
-       * start the USB function (stock fw does this from its main loop USB
-       * enum state machine).  Deferred from boot so the USB function
-       * doesn't try SS before the USB4 tunnel is up. */
-      if (u4_pd.enter_usb_accepted && !usb4_usb_inited) {
+      /* On the USB4 card, after the sideband connection is fully established
+       * (sb_asserted), do the RX PLL reset to connect the USB function to
+       * the USB4 tunnel (stock fw usb_ss_link_train_engine / rst_rx_pll). */
+      if (u4_boot.sb_asserted && !usb4_usb_inited) {
         usb4_usb_inited = 1;
-        usb_pipe_engine_init();
-        usb_init_controller(0);
+        /* RX PLL reset + PHY link mode switch to USB4 tunnel path.
+         * The USB function was already configured at boot by usb_pipe_engine_init.
+         * Just need to switch the PHY link to tunnel mode (4) and reset RX PLL. */
+        uart_puts("[RstRxpll...]");
+        { uint8_t b = REG_PHY_RXPLL_RESET; REG_PHY_RXPLL_RESET = b | 0x04; }
+        phy_cc10_cmd_wait(0, 2, 0);
+        REG_PHY_RXPLL_RESET = 0;
+        phy_cc10_cmd_wait(0, 2, 0);
+        uart_puts("[Done]");
+        boot_phy_set_link_mode(4);
+        REG_POWER_STATUS &= ~0x40;
+        uart_puts("[CDRV ok]");
       }
       if (u4_boot.pd_seen && !u4_pd.enter_usb_accepted && !u4_boot.sb_asserted) {
         if (u4_pd.usb3_fallback_flag || usb4_fallback_ticks >= 12) {
@@ -624,7 +636,7 @@ void main(void) {
       else             { sleep(500); }
       /* Give the host a settle window before each Hard Reset kick. Repeated immediate kicks can keep
        * power-cycling the device before the PD contract completes. */
-      { static __xdata uint8_t pd_settle = 0;
+      { static uint8_t pd_settle = 0;
         if (!u4_boot.pd_seen) {
           if (pd_settle < 12) { pd_settle++; }
           else if (kicks < 8) { pd_attach_hard_reset(); kicks++; pd_settle = 0; }

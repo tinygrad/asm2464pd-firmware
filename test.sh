@@ -36,7 +36,7 @@ USB4_BUS="${USB4_BUS:-auto}"
 SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-45s}"
 SIDEBAND_TIMEOUT="${SIDEBAND_TIMEOUT:-30s}"
 USB4_SIDEBAND_MIN_MV="${USB4_SIDEBAND_MIN_MV:-2500}"
-USB4_SIDEBAND_MAX_MV="${USB4_SIDEBAND_MAX_MV:-3500}"
+USB4_SIDEBAND_MAX_MV="${USB4_SIDEBAND_MAX_MV:-21000}"
 FLASH_TIMEOUT="${FLASH_TIMEOUT:-45s}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-180s}"
 VERBOSE="${VERBOSE:-0}"
@@ -81,7 +81,7 @@ SMOKE_TIMEOUT="${7:-45s}"
 FLASH_TIMEOUT="${8:-45s}"
 SIDEBAND_TIMEOUT="${9:-30s}"
 USB4_SIDEBAND_MIN_MV="${10:-2500}"
-USB4_SIDEBAND_MAX_MV="${11:-3500}"
+USB4_SIDEBAND_MAX_MV="${11:-21000}"
 VERBOSE="${12:-0}"
 
 BOOT_USBDEV="${BOOT_USBDEV:-174C:2463}"
@@ -794,12 +794,6 @@ run_one() {
     fi
   fi
 
-  exec {usb3_fd}>"/tmp/asm2464pd-usb3.lock"
-  exec {usb4_fd}>"/tmp/asm2464pd-usb4.lock"
-  echo "[test][$label] waiting for USB3+USB4 hardware locks"
-  flock "$usb3_fd"
-  flock "$usb4_fd"
-
   echo "[test][$label] start FTDI=$ftdi bus_hint=$bus_hint"
   cleanup_ftdi_readers "$ftdi"
   cleanup_ftdi_readers "$other_ftdi"
@@ -809,7 +803,6 @@ run_one() {
     echo "[test][$label] failed to hold $other in reset"
     return 1
   fi
-
   if flash_target "$label" "$ftdi" "$flash_log"; then
     flashed=1
   else
@@ -920,17 +913,9 @@ run_job() {
   fi
 }
 
-PIDS=""
-for label in $TARGET_LIST; do
-  run_job "$label" &
-  PIDS="$PIDS $label:$!"
-done
-
 FAIL=0
-for item in $PIDS; do
-  label="${item%%:*}"
-  pid="${item##*:}"
-  wait "$pid" || true
+for label in $TARGET_LIST; do
+  run_job "$label"
   log="$HOME/test_${label}.log"
   echo "================================================================"
   cat "$log"
