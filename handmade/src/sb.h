@@ -944,10 +944,7 @@ static void u4c_pcie_tunnel_ramp_tail(void) {  /* bcd7 */
     REG_CPU_MODE_NEXT &= 0xEF;
     sb_pcie_width_ramp(0x0F);
     if (u4_connect_gate & 0x10) {
-      uint16_t g = 0;
-      while (((REG_UART_TFBF & 0x1F) != 0x10) && ++g < 0x0800);
-      g = 0;
-      while (((REG_UART_STATUS & 0x07) != 0x00) && ++g < 0x0800);
+      u4c_uart_drain_wait();
       REG_CPU_MODE &= 0xFE;
       REG_LINK_WIDTH_E710 = (REG_LINK_WIDTH_E710 & 0xE0) | 0x1F;
     }
