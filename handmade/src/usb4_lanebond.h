@@ -423,10 +423,10 @@ static void u4lb_pcie_link_bringup(void) {  /* df61 */
 }
 
 static void u4lb_pcie_tunnel_reset(void) {  /* ed44 */
-  REG_PCIE_TUNNEL_CTRL = (uint8_t)((REG_PCIE_TUNNEL_CTRL & 0xFE) | 0x01);
-  REG_PCIE_TUNNEL_CTRL = (uint8_t)((REG_PCIE_TUNNEL_CTRL & 0xFD) | 0x02);
-  REG_PCIE_TUNNEL_CTRL &= 0xFE;
-  REG_PCIE_TUNNEL_CTRL &= 0xFD;
+  REG_PCIE_TUNNEL_CTRL |= 0x01;
+  REG_PCIE_TUNNEL_CTRL |= 0x02;
+  REG_PCIE_TUNNEL_CTRL &= ~0x01;
+  REG_PCIE_TUNNEL_CTRL &= ~0x02;
   REG_PCIE_CTRL_B402 = (uint8_t)((REG_PCIE_CTRL_B402 & 0xF7) | 0x08);
   REG_PCIE_CTRL_B402 &= 0xFD;
   u4lb_pcie_link_bringup();
@@ -582,12 +582,9 @@ static void u4lb_phy_mode3_seed(void) {  /* e0d9 */
   REG_PHY_CDR_SEED_C214 = 0x26;
 }
 static void u4lb_link_phy_reconfig(void) {  /* d90e */
-  uint8_t v = P1_RD(P1_LINK_PHY_CFG_1267);
-  P1_WR(P1_LINK_PHY_CFG_1267, (uint8_t)((v & 0xFD) | 0x02));
-  v = P1_RD(P1_LINK_PHY_CFG_1267);
-  P1_WR(P1_LINK_PHY_CFG_1267, (uint8_t)(v & 0xFB));
-  v = P1_RD(P1_LINK_PHY_CFG_1267);
-  P1_WR(P1_LINK_PHY_CFG_1267, (uint8_t)((v & 0xF7) | 0x08));
+  P1_SET(P1_LINK_PHY_CFG_1267, 0x02);
+  P1_CLR(P1_LINK_PHY_CFG_1267, 0x04);
+  P1_SET(P1_LINK_PHY_CFG_1267, 0x08);
   if (u4_connect_gate & 0x02) {
     u4lb_phy_mode3_seed();
   }
@@ -880,28 +877,20 @@ static uint8_t u4lb_routerop_poll(void) {  /* eda0 */
 }
 
 static uint8_t u4lb_send_routerop(void) {  /* e461 */
+  uint8_t is_e1cb;
   if (u4_sb.routerop_push_token != 0) return 0;
   if (u4_sb.route_enable_latch == 0) {
-    sb_tx_flag = 0;
-    sb_tx_cmd  = (uint8_t)(u4_sb.route_enable_latch | 0x01);
-    sb_tx_byte0 = 0x0D;
-    sb_tx_byte1 = 0x04;
-    sb_routerop_tx(0);
-    return 1;
-  }
-  if (u4_sb.coldboot_seed_gate != 0) {
-    sb_tx_flag = 0;
-    sb_tx_cmd  = 0x00;
-    sb_tx_byte0 = 0x0D;
-    sb_tx_byte1 = 0x04;
-    sb_routerop_tx(1);
-    return 1;
+    is_e1cb = 0;
+  } else if (u4_sb.coldboot_seed_gate != 0) {
+    is_e1cb = 1;
+  } else {
+    is_e1cb = 0;
   }
   sb_tx_flag = 0;
-  sb_tx_cmd  = (uint8_t)(u4_sb.route_enable_latch | 0x01);
+  sb_tx_cmd  = is_e1cb ? 0x00 : (uint8_t)(u4_sb.route_enable_latch | 0x01);
   sb_tx_byte0 = 0x0D;
   sb_tx_byte1 = 0x04;
-  sb_routerop_tx(0);
+  sb_routerop_tx(is_e1cb);
   return 1;
 }
 
