@@ -526,9 +526,6 @@ static void u4lb_save_b402_clr(void) {  /* e84d */
   u4_boot.pcie_ctrl_shadow = (uint8_t)(REG_PCIE_CTRL_B402 & 0x02);
   u4_boot.pcie_ctrl_shadow = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFD);
 }
-static void u4lb_restore_b402(void) {  /* e85c */
-  if (u4_boot.pcie_ctrl_shadow) u4_boot.pcie_ctrl_shadow = (uint8_t)((REG_PCIE_CTRL_B402 & 0xFD) | 0x02);
-}
 
 static void u4lb_pcie_tunnel_pwron(void) {  /* e76b */
   uint8_t gate = u4lb_p1_desc_query(0x04);
@@ -543,7 +540,7 @@ static void u4lb_pcie_tunnel_pwron(void) {  /* e76b */
       REG_PCIE_LANE_CTRL_C659 = (uint8_t)(REG_PCIE_CTRL_B402 & 0xFE);
       REG_PCIE_LANE_CTRL_C659 = (uint8_t)((REG_PCIE_CTRL_B402 & 0xFE) | 0x01);
     }
-    u4lb_restore_b402();
+    if (u4_boot.pcie_ctrl_shadow) u4_boot.pcie_ctrl_shadow = (uint8_t)((REG_PCIE_CTRL_B402 & 0xFD) | 0x02);
   }
 }
 

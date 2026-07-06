@@ -231,10 +231,6 @@ static void cc_sb_reconnect_event(void) {  /* cc23 */
 }
 
 /* Type-C error-recovery (diagnostic print only). */
-static void cc_state_full_reset(void) {
-  uart_puts("[Error_Recovery]\n");
-}
-
 /* CC81 |= 4 then drive a hard reset. */
 static void pd_attach_hard_reset(void) {  /* cc81 */
   REG_CPU_INT_CTRL = 0x04;
@@ -252,10 +248,6 @@ static void cc_role_reset_default(void) {  /* cc99 */
 }
 
 /* CCF9.1 sub-demux on 0x0A9D (copied from 0x0B1B). */
-static void cc_routerop_desc_copy(void) {  /* ccf9 */
-  u4_cfg.routerop_desc0 = u4_p12.cc_subdemux_src;
-}
-
 /* INT1 timer-tick PD/USB4 policy-engine tick: services the 6 CC per-channel event regs (bit1=event). */
 static void cc_pd_timer_tick(void) {
   if (REG_TIMER3_CSR & 0x02) {                 /* CC23.1: re-init / SB-reconnect */
@@ -267,7 +259,7 @@ static void cc_pd_timer_tick(void) {
     if (substate == 0x0E || substate == 0x0D) {      /* Data_Reset / Enter_USB pending */
       REG_CPU_INT_CTRL = 0x02;
       if (u4_pd.role_state != 0) pd_queue_ctrl_msg(0x3B);
-      cc_state_full_reset();
+      uart_puts("[Error_Recovery]\n");
     } else {
       pd_attach_hard_reset();
       REG_CPU_INT_CTRL = 0x02;
@@ -291,7 +283,7 @@ static void cc_pd_timer_tick(void) {
   }
   if (REG_CPU_EXT_STATUS & 0x02) {                 /* CCF9.1 */
     REG_CPU_EXT_STATUS = 0x02;
-    cc_routerop_desc_copy();
+    u4_cfg.routerop_desc0 = u4_p12.cc_subdemux_src;
   }
 }
 

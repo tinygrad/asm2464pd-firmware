@@ -150,12 +150,8 @@ static __code const uint8_t branchA_gate_rom[0x13] = {
   0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00, 0x01,0x01,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x01
 };
 
-static void u4c_drom_window_load(void) {
-  mem_copy((void __xdata *)P1_USB4_DROM_SHADOW_0240, usb4_drom_window, sizeof(usb4_drom_window));
-}
-
 static void sb_rom_descriptor_load(void) {
-  u4c_drom_window_load();
+  mem_copy((void __xdata *)P1_USB4_DROM_SHADOW_0240, usb4_drom_window, sizeof(usb4_drom_window));
   mem_copy(u4_work_buf, drom_identity, 0x64);
   u4_work_buf[0x4] = u4_cfg.product_pid_lo;
   u4_work_buf[0x5] = u4_cfg.product_pid_hi;
@@ -252,10 +248,6 @@ static void sb_block_init(void) {
   SB_WR(SB_KEYSTONE_BA, 0x3F);
   SB_WR(SB_KEYSTONE_BD, 0x3F);
 
-}
-
-static void sb_pcie_width_ramp(uint8_t width) {
-  REG_PCIE_LINK_STATE = width; REG_PCIE_LINK_STATE_HI_B435 = width; REG_PCIE_LANE_CONFIG = width; REG_PCIE_LANE_CONFIG_HI_B437 = width;
 }
 
 #define ENG_DESC_WR_HI80(cur, v) do { \
@@ -936,7 +928,9 @@ static void u4c_route_mode_regs(void) {  /* d556 */
 static void u4c_pcie_tunnel_ramp_tail(void) {  /* bcd7 */
   if (u4_cfg.route_mode & 0x81) {
     REG_CPU_MODE_NEXT &= 0xEF;
-    sb_pcie_width_ramp(0x0F);
+    { uint8_t width = 0x0F;
+      REG_PCIE_LINK_STATE = width; REG_PCIE_LINK_STATE_HI_B435 = width; REG_PCIE_LANE_CONFIG = width; REG_PCIE_LANE_CONFIG_HI_B437 = width;
+    }
     if (u4_connect_gate & 0x10) {
       u4c_uart_drain_wait();
       REG_CPU_MODE &= 0xFE;
@@ -1316,10 +1310,6 @@ static void sb_channel_connect_service(void) {
   }
 }
 
-static void sb_set_d4_peer_cl0(void) {
-  SB_WR(SB_PEER_CL0, (uint8_t)((SB_RD(SB_PEER_CL0) & 0xDF) | 0x20));
-}
-
 static void sb_routerop_tx(uint8_t is_e1cb) {  /* a5d8 */
   sb_service_transport_edges();
   SBTX_WR(SBTX_DESC_TYPE, sb_tx_byte0);
@@ -1502,7 +1492,7 @@ static void sb_router_event_handler(void) {
       uart_puthex(SB_RD(SB_LANE_CL(lane)) & 0x0F);
       SB_WR(SB_CL0_ACK, (uint8_t)((SB_RD(SB_CL0_ACK) & ~bit) | bit));
       if (!(u4_work_buf[WB_LANE_EN] & (uint8_t)(1u << (lane ^ 1))) || ((SB_RD(SB_LANE_CL(lane ^ 1)) & 0x0F) == 2))
-        sb_set_d4_peer_cl0();
+        SB_WR(SB_PEER_CL0, (uint8_t)((SB_RD(SB_PEER_CL0) & 0xDF) | 0x20));
     }
   }
 
