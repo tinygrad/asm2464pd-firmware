@@ -84,7 +84,7 @@ static void flash_clear_io_modes(void) {
 static uint8_t flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_bytes, uint16_t data_len, uint8_t write_buf) {
   uint8_t ok;
   uint8_t read_buf = !write_buf && data_len;
-  if (addr_bytes > 3 || data_len > FLASH_BUFFER_SIZE) return 0;
+  if (addr_bytes > 7 || data_len > FLASH_BUFFER_SIZE) return 0;
   if (!flash_poll_busy()) return 0;
   if (!write_buf && data_len) {
     flash_clear_dma_status();
@@ -119,7 +119,7 @@ static uint8_t flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_bytes, uint16_
   REG_FLASH_BUF_OFFSET_LO = 0;
   REG_FLASH_BUF_OFFSET_HI = 0;
   REG_FLASH_CMD = cmd;
-  REG_FLASH_ADDR_LEN = addr_bytes;
+  REG_FLASH_ADDR_LEN = (REG_FLASH_ADDR_LEN & FLASH_ADDR_LEN_MASK) | addr_bytes;
   REG_FLASH_ADDR_LO = addr & 0xFF;
   REG_FLASH_ADDR_MD = (addr >> 8) & 0xFF;
   REG_FLASH_ADDR_HI = (addr >> 16) & 0xFF;

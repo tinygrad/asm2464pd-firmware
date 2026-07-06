@@ -1630,8 +1630,8 @@
 #define REG_FLASH_ADDR_HI       XDATA_REG8(0xC8AB)  /* SPI addr[23:16] */
 #define REG_FLASH_ADDR_LEN      XDATA_REG8(0xC8AC)  /* SPI address mode control */
 #define   FLASH_ADDR_LEN_MASK     0xFC  // Bits 2-7 (stock code reads & masks these)
-#define   FLASH_ADDR_LEN_NOADDR   0x00  // No address bytes sent (bits 0-1 = 0)
-#define   FLASH_ADDR_LEN_3BYTE    0x03  // 3 address bytes sent (bits 0-1 = 0x03)
+#define   FLASH_ADDR_LEN_NOADDR   0x04  // No address bytes sent (bits 0-1 = 0, bit 2 = controller mode)
+#define   FLASH_ADDR_LEN_3BYTE    0x07  // 3 address bytes sent (bits 0-1 = 0x03, bit 2 = controller mode)
 #define REG_FLASH_MODE          XDATA_REG8(0xC8AD)
 #define   FLASH_MODE_ENABLE       0x01  // Bit 0: Flash mode enable
 #define REG_FLASH_BUF_OFFSET    XDATA_REG16(0xC8AE)
