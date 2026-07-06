@@ -477,7 +477,6 @@ void int1_isr(void) __interrupt(1) {
   if (REG_CPU_EXEC_STATUS_2 & CPU_EXEC_STATUS_2_INT) { REG_CPU_EXEC_STATUS_2 = CPU_EXEC_STATUS_2_INT; }
   if (IS_USB4() && (REG_INT_PCIE_NVME & INT_PCIE_NVME_STATUS)) pd_rx_isr();
   if (IS_USB4()) usb4_int_demux();
-  if (REG_INT_SYSTEM & INT_SYSTEM_TIMER) { }
   DPX = saved_dpx;
 }
 
