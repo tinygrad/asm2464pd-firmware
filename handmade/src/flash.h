@@ -22,8 +22,10 @@ static void flash_poll_busy(void) {
 /* Issue a flash command. addr_len: 0x04 = no address byte; 0x07 = 24-bit
  * address. data_len: bytes the controller will clock in / out via the
  * 0x7000 buffer. */
-static void flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_len, uint16_t data_len) {
-  REG_FLASH_MODE = 0;
+static void flash_cmd_ex(uint8_t cmd, uint32_t addr, uint8_t addr_len, uint16_t data_len, uint8_t write_buf) {
+  REG_FLASH_CON = 0;
+  if (write_buf) REG_FLASH_MODE |= FLASH_MODE_ENABLE;
+  else           REG_FLASH_MODE &= ~FLASH_MODE_ENABLE;
   REG_FLASH_BUF_OFFSET_LO = 0;
   REG_FLASH_BUF_OFFSET_HI = 0;
   REG_FLASH_CMD = cmd;
@@ -31,12 +33,19 @@ static void flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_len, uint16_t dat
   REG_FLASH_ADDR_LO = addr & 0xFF;
   REG_FLASH_ADDR_MD = (addr >> 8) & 0xFF;
   REG_FLASH_ADDR_HI = (addr >> 16) & 0xFF;
-  REG_FLASH_DATA_PAGE_CNT = (data_len >> 8) & 0xFF;
-  REG_FLASH_DATA_BYTE_OFS = data_len & 0xFF;
+  REG_FLASH_DATA_LEN_LO = data_len & 0xFF;
+  REG_FLASH_DATA_LEN_HI = (data_len >> 8) & 0xFF;
   REG_FLASH_CSR = 0x01;
   flash_poll_busy();
-  REG_FLASH_MODE = 0; REG_FLASH_MODE = 0;
-  REG_FLASH_MODE = 0; REG_FLASH_MODE = 0;
+  REG_FLASH_MODE = 0;
+}
+
+static void flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_len, uint16_t data_len) {
+  flash_cmd_ex(cmd, addr, addr_len, data_len, 0);
+}
+
+static void flash_cmd_write(uint8_t cmd, uint32_t addr, uint8_t addr_len, uint16_t data_len) {
+  flash_cmd_ex(cmd, addr, addr_len, data_len, 1);
 }
 
 /* OTP layout (programmed by provisioning scripts): 4-byte serial +

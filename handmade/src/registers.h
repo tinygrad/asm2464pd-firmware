@@ -1621,6 +1621,7 @@
 #define REG_FLASH_DATA_PAGE_CNT XDATA_REG8(0xC8A3)  /* Transfer length: page count (256 bytes per page) */
 #define REG_FLASH_DATA_BYTE_OFS XDATA_REG8(0xC8A4)  /* Transfer length: byte offset within page */
 #define REG_FLASH_DATA_LEN      REG_FLASH_DATA_PAGE_CNT  /* Legacy alias */
+#define REG_FLASH_DATA_LEN_LO   REG_FLASH_DATA_PAGE_CNT  /* Legacy alias */
 #define REG_FLASH_DATA_LEN_HI   REG_FLASH_DATA_BYTE_OFS  /* Legacy alias */
 #define REG_FLASH_DIV           XDATA_REG8(0xC8A6)  /* SPI clock divider */
 #define REG_FLASH_CSR           XDATA_REG8(0xC8A9)  /* Write 0x01 to trigger transaction */

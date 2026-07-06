@@ -47,26 +47,40 @@ static uint8_t flash_read(uint32_t addr, __xdata uint8_t *buf, uint16_t len) {
   return 1;
 }
 
+static uint8_t flash_wait_wip(void) {
+  uint32_t timeout = 0x000FFFFFUL;
+  do {
+    flash_cmd(0x05, 0, 0x04, 1);
+    if (!(FLASH_BUF[0] & 0x01)) return 1;
+  } while (--timeout);
+  return 0;
+}
+
+static uint8_t flash_clear_bp(void) {
+  uint8_t attempt;
+  for (attempt = 0; attempt < 5; attempt++) {
+    FLASH_BUF[0] = 0; FLASH_BUF[1] = 0; FLASH_BUF[2] = 0; FLASH_BUF[3] = 0;
+    flash_cmd(0x06, 0, 0x04, 0);
+    flash_cmd_write(0x01, 0, 0x04, 1);
+    if (!flash_wait_wip()) continue;
+    flash_cmd(0x05, 0, 0x04, 1);
+    if (!(FLASH_BUF[0] & 0x1C)) return 1;
+  }
+  return 0;
+}
+
 static uint8_t flash_erase_sector(uint32_t addr) {
+  if (!flash_clear_bp()) return 0;
   flash_cmd(0x06, 0, 0x04, 0);
   flash_cmd(0x20, addr, 0x07, 0);
-  return 1;
+  return flash_wait_wip();
 }
 
 static uint8_t flash_program_page(uint32_t addr, uint16_t len) {
+  if (!flash_clear_bp()) return 0;
   flash_cmd(0x06, 0, 0x04, 0);
-  REG_FLASH_MODE |= 0x01;
-  REG_FLASH_CMD = 0x02;
-  REG_FLASH_ADDR_LEN = 0x07;
-  REG_FLASH_ADDR_LO = addr & 0xFF;
-  REG_FLASH_ADDR_MD = (addr >> 8) & 0xFF;
-  REG_FLASH_ADDR_HI = (addr >> 16) & 0xFF;
-  REG_FLASH_DATA_PAGE_CNT = (len >> 8) & 0xFF;
-  REG_FLASH_DATA_BYTE_OFS = len & 0xFF;
-  REG_FLASH_CSR = 0x01;
-  { uint16_t g; for (g = 0; (REG_FLASH_CSR & 0x01) && g < 0x4000; g++); }
-  REG_FLASH_MODE = 0;
-  return 1;
+  flash_cmd_write(0x02, addr, 0x07, len);
+  return flash_wait_wip();
 }
 
 /* ---- code write ---- */
