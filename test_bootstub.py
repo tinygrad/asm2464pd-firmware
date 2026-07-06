@@ -66,8 +66,6 @@ def dfu_set_addr(dev, addr):
 
 def dfu_write(dev, data):
     dev.ctrl_transfer(0x40, 0xB2, len(data) & 0xFF, (len(data) >> 8) & 0xFF, data, timeout=5000)
-    # wait for status IN
-    dev.ctrl_transfer(0xC0, 0xB3, 0, 0, 0, timeout=5000)
 
 
 def dfu_reset(dev):
