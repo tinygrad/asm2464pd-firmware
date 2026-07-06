@@ -178,10 +178,7 @@ static void sb_rom_descriptor_load(void) {
   SB_WR(SB_CONNECT_EVENT, 0x04);
   SB_WR(SB_CONN_EDGE(0), 0x08);
   SB_WR(SB_CONN_EDGE(1), 0x08);
-  SB_WR(SB_PORT_SVC, 0x01); SB_WR(SB_PORT_SVC, 0x02);
-  SB_WR(SB_PORT_SVC, 0x04); SB_WR(SB_PORT_SVC, 0x08);
-  SB_WR(SB_PORT_SVC, 0x10); SB_WR(SB_PORT_SVC, 0x20);
-  SB_WR(SB_PORT_SVC, 0x40); SB_WR(SB_PORT_SVC, 0x80);
+  { uint8_t b; for (b = 1; b; b <<= 1) SB_WR(SB_PORT_SVC, b); }
   SB_WR(SB_BOND_EVENT, BOND_EVT_L0_FAIL); SB_WR(SB_BOND_EVENT, BOND_EVT_L1_FAIL);
   u4_sb.transport_edge_toggle = SB_RD(SB_TRANSPORT_STAT) & 0x01;
   u4_sb.link_edge_toggle = SB_RD(SB_LINK_EDGE_STAT) & 0x01;
@@ -802,10 +799,7 @@ static void u4c_cs_ce20(uint16_t desc_addr, uint8_t val) {
   u4lb_desc2 = XDATA_REG8V(0x0B36);
   u4lb_desc3 = XDATA_REG8V(0x0B37);
   u4lb_desc_emit_lanes((uint8_t)(P12_RD(DE_CTRL) & 0x3F), 1);
-  XDATA_REG8V(0x0B34) = 0;
-  XDATA_REG8V(0x0B35) = 0;
-  XDATA_REG8V(0x0B36) = 0;
-  XDATA_REG8V(0x0B37) = 0;
+  mem_set((void __xdata *)0x0B34, 0, 4);
 }
 
 static void u4c_identity_desc_emit_stock(void) {  /* c270 */
@@ -1127,32 +1121,20 @@ static void sb_connect_desc_dispatch(uint8_t desc4e_off, uint8_t desc752_off) { 
   }
 }
 static void sb_service_transport_edges(void) {
-  if (SB_RD(SB_CONN_EDGE(0)) & 0x08) {
-    if (u4_sb.transport_edge_toggle == 0) {
-      u4_sb.active_plane_port = 0; sb_connect_desc_dispatch(0x28, 0x18);
-      SB_EDGE_ACK(SB_CONN_EDGE(0));
-      u4_sb.transport_edge_toggle = 1;
-    }
-  }
-  if (SB_RD(SB_CONN_EDGE(1)) & 0x08) {
-    if (u4_sb.transport_edge_toggle == 1) {
-      u4_sb.active_plane_port = 1; sb_connect_desc_dispatch(0x2A, 0x19);
-      SB_EDGE_ACK(SB_CONN_EDGE(1));
-      u4_sb.transport_edge_toggle = 0;
-    }
-  }
-  if (SB_RD(SB_LINK_EDGE(0)) & 0x08) {
-    if (u4_sb.link_edge_toggle == 0) {
-      u4_sb.active_plane_port = 2; sb_connect_desc_dispatch(0x81, 0x08);
-      SB_EDGE_ACK(SB_LINK_EDGE(0));
-      u4_sb.link_edge_toggle = 1;
-    }
-  }
-  if (SB_RD(SB_LINK_EDGE(1)) & 0x08) {
-    if (u4_sb.link_edge_toggle == 1) {
-      u4_sb.active_plane_port = 3; sb_connect_desc_dispatch(0x83, 0x09);
-      SB_EDGE_ACK(SB_LINK_EDGE(1));
-      u4_sb.link_edge_toggle = 0;
+  static __code const uint16_t edge_regs[4] = {SB_CONN_EDGE(0), SB_CONN_EDGE(1), SB_LINK_EDGE(0), SB_LINK_EDGE(1)};
+  uint8_t i;
+  for (i = 0; i < 4; i++) {
+    if (SB_RD(edge_regs[i]) & 0x08) {
+      uint8_t toggle = (i < 2) ? u4_sb.transport_edge_toggle : u4_sb.link_edge_toggle;
+      if (toggle == (i & 1)) {
+        static __code const uint8_t dispatch_a[4] = {0x28, 0x2A, 0x81, 0x83};
+        static __code const uint8_t dispatch_b[4] = {0x18, 0x19, 0x08, 0x09};
+        u4_sb.active_plane_port = i;
+        sb_connect_desc_dispatch(dispatch_a[i], dispatch_b[i]);
+        SB_EDGE_ACK(edge_regs[i]);
+        if (i < 2) u4_sb.transport_edge_toggle = (uint8_t)(1 - (i & 1));
+        else       u4_sb.link_edge_toggle = (uint8_t)(1 - (i & 1));
+      }
     }
   }
 }
