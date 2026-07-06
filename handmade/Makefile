@@ -110,7 +110,7 @@ wrapped: $(BUILD_DIR)/firmware_wrapped.bin
 # ===== Bootstub =====
 # Separate binary at CODE 0x0000-0x23FF. Loads userfw from flash to CODE 0x2400+.
 
-BOOTSTUB_CFLAGS = -mmcs51 --model-large --opt-code-size --std-c99 --no-xinit-opt -I$(SRC_DIR)
+BOOTSTUB_CFLAGS = -mmcs51 --model-small --opt-code-size --std-c99 --no-xinit-opt -I$(SRC_DIR)
 BOOTSTUB_LDFLAGS = --code-loc 0x0000 --code-size 0x2400 --xram-loc 0x0000 --xram-size 0x5FF8 --iram-size 0x100
 
 BOOTSTUB_CRT0_OBJ = $(OBJ_DIR)/crt0_bootstub.rel

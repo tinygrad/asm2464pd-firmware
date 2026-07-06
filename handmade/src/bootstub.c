@@ -34,6 +34,11 @@ typedef struct {
 
 static void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
 static void uart_puts(__code const char *s) { while (*s) uart_putc(*s++); }
+static void uart_puthex(uint8_t val) {
+  static __code const char hex[] = "0123456789ABCDEF";
+  uart_putc(hex[val >> 4]);
+  uart_putc(hex[val & 0x0F]);
+}
 
 /* ---- flash ---- */
 
@@ -161,6 +166,12 @@ static void usb_handle_get_descriptor(uint8_t type, uint8_t idx, uint16_t wLen) 
 
 static void usb_init_controller(void) {
   REG_POWER_ENABLE = (REG_POWER_ENABLE & 0x7F) | 0x80;
+  REG_CPU_CTRL_CA81 = 0x0E;
+  REG_CPU_MODE_NEXT = 0x21;
+  REG_HDDPC_CTRL |= 0x20;
+  REG_PCIE_LANE_CTRL_C659 |= 0x01;
+  /* Wait for PHY/clock ready */
+  { uint8_t b; do { b = REG_PHY_EXT_B3; } while ((b & 0x30) == 0); }
   REG_USB_PHY_CTRL_91D1 = 0x0F;
   REG_BUF_CFG_9300 = 0x0C;
   REG_BUF_CFG_9301 = 0xC0;
@@ -169,17 +180,41 @@ static void usb_init_controller(void) {
   REG_USB_EP_CFG1 = 0x0F;
   REG_USB_PHY_CTRL_91C1 = 0xF0;
   REG_BUF_CFG_9303 = 0x33;
+  REG_BUF_CFG_9304 = 0x3F;
+  REG_BUF_CFG_9305 = 0x40;
   REG_USB_CONFIG = 0xE0;
   REG_USB_EP0_CFG = 0xF0;
   REG_USB_MODE = 0x01;
+  REG_USB_EP_MGMT = 0x00;
   REG_USB_MSC_CTRL = 0x01;
+  REG_USB_MSC_STATUS &= ~0x01;
   REG_USB_PHY_CTRL_91C3 &= ~0x20;
   REG_USB_PHY_CTRL_91C0 |= 0x01;
   REG_USB_PHY_CTRL_91C0 &= ~0x01;
+  REG_POWER_STATUS &= ~0x40;
+  REG_INT_STATUS_C800 = 0x01;
+  REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x12;  /* enable USB + system interrupts */
+  REG_INT_USB_STATUS = 0x01;  /* enable USB interrupt gate */
+  REG_USB_DATA_L = 0x00;
+  /* PHY link-up arm */
+  REG_TIMER0_CSR = 0x04;
+  REG_TIMER0_CSR = 0x02;
+  REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x04;
+  REG_TIMER0_THRESHOLD_HI = 0x01;
+  REG_TIMER0_THRESHOLD_LO = 0x8F;
+  REG_TIMER0_CSR = 0x01;
+  { uint16_t spin = 0;
+    while (!((REG_PHY_COMPLETION_E318 & 0x10) || (REG_TIMER0_CSR & 0x02)) && ++spin < 0xFFFF); }
+  uart_puts("[PHY ");
+  uart_puthex(REG_PHY_COMPLETION_E318);
+  uart_puts(" 91C0=");
+  uart_puthex(REG_USB_PHY_CTRL_91C0);
+  uart_puts("]\n");
+  REG_TIMER0_CSR = 0x04;
+  REG_TIMER0_CSR = 0x02;
 }
 
 static void usb_attach_controller(void) {
-  REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
 }
 
 /* ---- code write ---- */
@@ -303,10 +338,21 @@ static void handle_setup(void) {
 
 static void dfu_loop(void) {
   uart_puts("[DFU]\n");
+  uart_puts("[USB init]\n");
   is_usb2 = 0;
   usb_init_controller();
+  uart_puts("[USB attach]\n");
   IE = 0x80;
   usb_attach_controller();
+  uart_puts("[USB loop]\n");
+  { uint16_t spin = 0;
+    while (spin < 0x2000) {
+      uint8_t s = REG_USB_PERIPH_STATUS;
+      uint8_t i = REG_INT_USB_STATUS;
+      if (s || (i & 0x01)) { uart_puts("[P="); uart_puthex(s); uart_puts(" I="); uart_puthex(i); uart_puts("]\n"); break; }
+      spin++;
+    }
+  }
   xfer_op = XOP_NONE;
   xfer_addr = 0;
 
