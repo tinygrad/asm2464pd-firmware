@@ -155,7 +155,7 @@ static void sb_rom_descriptor_load(void) {
   mem_copy(u4_work_buf, drom_identity, 0x64);
   u4_work_buf[0x4] = u4_cfg.product_pid_lo;
   u4_work_buf[0x5] = u4_cfg.product_pid_hi;
-  if (!(u4_cfg.mode_flag & 0x80)) u4_work_buf[0x1B] &= ~0x02;
+  if (!(u4_cfg.mode_flag & MODE_FLAG_VDM_ACK)) u4_work_buf[0x1B] &= ~0x02;
   mem_copy(sb_lane_desc, lane_descriptor_rom, 0x10);
   mem_copy(sb_width_lut, width_lut_rom, 0x13);
   mem_copy(sb_branchA_gate, branchA_gate_rom, 0x13);
@@ -920,7 +920,7 @@ static void u4c_descriptor_load_stock(void) {  /* b779 */
 }
 
 static void u4c_route_mode_regs(void) {  /* d556 */
-  if (u4_cfg.mode_flag & 0x80) {
+  if (u4_cfg.mode_flag & MODE_FLAG_VDM_ACK) {
     PR(0x0247) = u4_p12.data_lo; PR(0x0248) = u4_p12.data_hi;
   }
 }

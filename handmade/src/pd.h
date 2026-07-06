@@ -638,7 +638,7 @@ static void vdm_build_discover_id(void) {
   REG_CMD_LBA_0 = VDM_VID_LO;
   REG_CMD_LBA_1 = VDM_VID_HI;
   REG_CMD_LBA_2 = (sop == 2) ? 0x40 : 0x00;
-  if (u4_pd.role_state == 0 && (u4_cfg.mode_flag & 0x80))
+  if (u4_pd.role_state == 0 && (u4_cfg.mode_flag & MODE_FLAG_VDM_ACK))
     REG_CMD_LBA_3 = 0x54;
   else
     REG_CMD_LBA_3 = 0x50;
@@ -666,7 +666,7 @@ static void vdm_build_discover_id(void) {
 
 /* Discover_SVIDs responder: ACK with SVID 0x8087, else NAK. */
 static void vdm_build_discover_svids(void) {
-  if (((uint8_t)~u4_routerop_svid_hi | u4_routerop_port) == 0 && (u4_cfg.mode_flag & 0x80)) {
+  if (((uint8_t)~u4_routerop_svid_hi | u4_routerop_port) == 0 && (u4_cfg.mode_flag & MODE_FLAG_VDM_ACK)) {
     pd_tx_set_sop_header(2, 0x0F);
     pd_vdm_hdr_build(1, 2);
     REG_CMD_LBA_0 = 0x00;
@@ -681,7 +681,7 @@ static void vdm_build_discover_svids(void) {
 
 /* Discover_Modes responder: ACK TBT3 mode for SVID 0x8087, else NAK. */
 static void vdm_build_discover_modes(void) {
-  if (u4_routerop_svid_hi == 0x80 && u4_routerop_port == 0x87 && (u4_cfg.mode_flag & 0x80)) {
+  if (u4_routerop_svid_hi == 0x80 && u4_routerop_port == 0x87 && (u4_cfg.mode_flag & MODE_FLAG_VDM_ACK)) {
     pd_tx_set_sop_header(2, 0x0F);
     pd_vdm_hdr_build(1, 3);
     REG_CMD_ISSUE = VDM_TBT_SVID_LO;
@@ -699,7 +699,7 @@ static void vdm_build_discover_modes(void) {
 /* Device-side USB4 mode-entry latch. */
 static uint8_t usb4_mode_entry_commit(void) {
   uint8_t mode_flags = u4_cfg.mode_flag;
-  if (mode_flags & 0x40) {
+  if (mode_flags & MODE_FLAG_FULL_COMMIT) {
     u4_mode_entry_class = 3;
     u4_mode_entry_param = 1;
     REG_POWER_EVENT_92E1 = 0x10;
@@ -707,7 +707,7 @@ static uint8_t usb4_mode_entry_commit(void) {
     return 4;
   }
   u4_mode_entry_class = 1;
-  u4_mode_entry_param = ((mode_flags & 0x81) == 0) ? 0x0D : 0x05;
+  u4_mode_entry_param = ((mode_flags & (MODE_FLAG_VDM_ACK | MODE_FLAG_ROUTE_MASK)) == 0) ? 0x0D : 0x05;
   return 1;
 }
 
@@ -720,10 +720,10 @@ static void vdm_handle_enter_mode(void) {
   sb_tx_byte0 = u4_routerop_svid_hi;
   sb_tx_byte1 = u4_routerop_op_len;
   u4_pd.confirm_input_cd = (uint8_t)(enter_mode_flags >> 7);
-  u4_pd.confirm_input_ce = (uint8_t)((enter_mode_flags & 0x40) >> 6);
+  u4_pd.confirm_input_ce = (uint8_t)((enter_mode_flags & MODE_FLAG_FULL_COMMIT) >> 6);
   u4_pd.confirm_input_cf = (uint8_t)(enter_mode_flags & 0x07);
 
-  if (u4_routerop_port == 0x87 && u4_routerop_svid_hi == 0x80 && (u4_cfg.mode_flag & 0x80) && u4_pd.role_state == 0) {
+  if (u4_routerop_port == 0x87 && u4_routerop_svid_hi == 0x80 && (u4_cfg.mode_flag & MODE_FLAG_VDM_ACK) && u4_pd.role_state == 0) {
     pd_tx_set_sop_header(1, 0x0F);
     pd_vdm_hdr_build(1, 4);
     u4_pd.tx_msg_len = 6;
@@ -759,7 +759,7 @@ static void pd_handle_enter_usb(void) {
   pd_tx_buf_clear();
 
   mode_flags = u4_cfg.mode_flag;
-  if ((mode_flags & 0x03) == 0) {
+  if ((mode_flags & MODE_FLAG_ROUTE_MASK) == 0) {
     REG_CMD_CFG_E405 &= 0xF8;
     u4_cfg.route_mode = 4;
     usb4_mode_entry_commit();
