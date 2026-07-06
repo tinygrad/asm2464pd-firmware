@@ -14,17 +14,10 @@ __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs
 __sfr __at(0xA8) IE;
 __sfr __at(0x88) TCON;
 
-#define IE_EA   0x80
 #define IE_EX1  0x04
 #define IE_ET0  0x02
 #define IE_EX0  0x01
 
-/* Briefly mask all interrupts around a main-loop sideband critical section
- * (the sideband service must not race the USB4 INT1 handler). */
-#define U4_CRITICAL_ENTER()  (IE &= (uint8_t)~IE_EA)
-#define U4_CRITICAL_EXIT()   (IE |= IE_EA)
-
-// blocking version: void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
 void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {
@@ -548,9 +541,9 @@ void main(void) {
        * The 1s DMA timeout arms the USB4 mode entry fallback for USB3-only hosts
        * where PD never arrives.  Once PD is seen, INT1 services cc_pd_timer_tick. */
       if (!u4_boot.pd_seen) {
-        U4_CRITICAL_ENTER();
+        CRITICAL_ENTER();
         cc_pd_timer_tick();
-        U4_CRITICAL_EXIT();
+        CRITICAL_EXIT();
       }
       /* After the 1s timeout commits USB4 mode on a USB3-only host (where PD
        * never arrives), reinit PCIe/USB for USB3 mode.  Gated on !pd_seen
@@ -592,7 +585,7 @@ void main(void) {
         }
       }
       if (u4_sb.conn_consequence_done) {
-        U4_CRITICAL_ENTER();
+        CRITICAL_ENTER();
         if (u4_sb.state != U4FSM_IDLE) {
           uint16_t cur = u4lb_read_lane_width_cnt();
           uint16_t snap = ((uint16_t)u4_sb.walk_throttle_snap_hi << 8) | u4_sb.walk_throttle_snap_lo;  /* 0x076A:0x076B */
@@ -604,19 +597,19 @@ void main(void) {
           }
         }
         if (u4_sb.routerop_resp_armed != 0) sb_routerop_response(u4lb_routerop_poll());
-        U4_CRITICAL_EXIT();
+        CRITICAL_EXIT();
       }
 
-      U4_CRITICAL_ENTER();
+      CRITICAL_ENTER();
       sb_connect_reservice();
       u4c_native_routerop_service();
-      U4_CRITICAL_EXIT();
+      CRITICAL_EXIT();
 
       if (SB_RD(0x26) & 0x02) {
-        U4_CRITICAL_ENTER();
+        CRITICAL_ENTER();
         sb_routerop_pending();
         if (SB_RD(0x26) & 0x02) SB_WR(0x26, 0x02);   // W1C SB[0x26].1 after response, like a066
-        U4_CRITICAL_EXIT();
+        CRITICAL_EXIT();
       }
 
       if (u4_sb.conn_consequence_done) {
