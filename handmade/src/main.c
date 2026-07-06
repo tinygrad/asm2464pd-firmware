@@ -41,6 +41,7 @@ static void sleep(uint16_t milliseconds) {
 
 static uint8_t is_usb2;
 static uint32_t __xdata usb4_skip_magic;
+#define USB4_SKIP_MAGIC 0x5AA55AA5UL
 
 /* Streaming PCIe state — configured via 0xF0 control message */
 static uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming transfer */
@@ -52,7 +53,6 @@ static uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming t
 #include "sb.h"
 #include "usb4.h"
 #include "usb4_lanebond.h"
-#include "usb4_boot.h"
 
 /* Hardware status packet */
 typedef struct {
@@ -471,7 +471,83 @@ void int0_isr(void) __interrupt(0) {
 
 /* INT1 / EX1: the PD / USB4 / system interrupt aggregate (C806/C80A/EC06). */
 void int1_isr(void) __interrupt(1) {
-  USB4_INT1_BODY();
+  uint8_t saved_dpx = DPX;
+  DPX = 0x00;
+  if (IS_USB4() && (REG_INT_SYSTEM & INT_SYSTEM_EVENT)) cc_pd_timer_tick();
+  if (REG_CPU_EXEC_STATUS_2 & CPU_EXEC_STATUS_2_INT) { REG_CPU_EXEC_STATUS_2 = CPU_EXEC_STATUS_2_INT; }
+  if (IS_USB4() && (REG_INT_PCIE_NVME & INT_PCIE_NVME_STATUS)) pd_rx_isr();
+  if (IS_USB4()) usb4_int_demux();
+  if (REG_INT_SYSTEM & INT_SYSTEM_TIMER) { }
+  DPX = saved_dpx;
+}
+
+static uint8_t boot_mode_flags_usb4_policy(void) {
+  if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return USB4_MODE_USB3_DIRECT;
+  return USB4_MODE_FLAGS;
+}
+
+static void usb4_state_prepare(void) {
+  boot_phy_bringup_early();
+  u4_phy_state_seed();
+  u4_cfg.dp_alt_mode = 3;
+  u4_cfg.cap20g_gate0 = 1; u4_cfg.cap20g_gate1 = 1;
+  u4_cfg.sb_desc_profile = 3; u4_cfg.lane_gate_sel = 3;
+  u4_cfg.product_pid_lo = 0x63;
+  u4_cfg.product_pid_hi = 0x24;
+  u4_cfg.tunnel_cfg_hi = 0x21;
+  u4_cfg.tunnel_cfg_lo = 0x1B;
+  u4_cfg.tunnel_cfg_mode = 0x63;
+  u4_cfg.tunnel_credits = 0x24;
+  pcie_tunnel_adapter_enable();
+  u4lb_phy_connect_dma_kick();
+  mem_set((void __xdata *)&u4_routerop_mbox_state, 0, U4_ROUTEROP_MBOX_CLEAR_LEN);
+  u4_sb.active_port_rr = 0;
+  u4_sb.route_up_trigger = 0; u4_sb.lane_bonded_flag = 0;
+  u4_sb.transport_edge_toggle = 0; u4_sb.link_edge_toggle = 0; u4_sb.active_plane_port = 0;
+  u4_sb.conn_consequence_done = 0; u4_sb.state = U4FSM_IDLE;
+  u4_sb.conn_routing_substate = CONNRT_PRINT_STATUS; lb_loop1_state[0] = LP1_PARKED; lb_loop1_state[1] = LP1_PARKED;
+  lb_loop2_state[0] = LP2_CL_IDLE; lb_loop2_state[1] = LP2_CL_IDLE; u4_sb.route_enable_latch = 0;
+  u4_sb.connect_present = 0; u4_sb.lane_width_cnt_hi = 0; u4_sb.lane_width_cnt_lo = 0;
+  u4_sb.connect_descriptor = 0; u4_sb.tx_command_desc = 0;
+  u4_pd.connect_oneshot_suppress = 0;
+  u4_boot.pcie_ctrl_shadow = 0;
+  u4_boot.pd_seen = 0;
+  u4_boot.sb_asserted = 0;
+  u4_boot.tunnel_up_done = 0;
+}
+
+static void usb4_policy_enable(void) {
+  pd_keystone_init();
+  usb4_phy_rx_arm();
+  usb4_routerop_init();
+  REG_INT_ENABLE = (uint8_t)((REG_INT_ENABLE & 0xBF) | 0x40);
+  P1_WR(0x0000, (uint8_t)(P1_RD(0x0000) & 0xFD));
+  REG_INT_CTRL = (uint8_t)((REG_INT_CTRL & 0xFD) | 0x02);
+  u4lb_transport_reinit(0);
+  P1_WR(P1_USB4_BOOT_TAIL_CTRL_1602, (uint8_t)(P1_RD(P1_USB4_BOOT_TAIL_CTRL_1602) & 0xFE));
+  P1_WR(P1_USB4_BOOT_TAIL_EVENT_1603, 0x01);
+  P1_WR(P1_USB4_BOOT_TAIL_CTRL_1602, (uint8_t)(P1_RD(P1_USB4_BOOT_TAIL_CTRL_1602) & 0xFD));
+  P1_WR(P1_USB4_BOOT_TAIL_EVENT_1603, 0x02);
+  P1_WR(P1_USB4_CFG_ENABLE_121E, (uint8_t)(P1_RD(P1_USB4_CFG_ENABLE_121E) | 0x01));
+}
+
+static void usb4_fallback_to_usb3(void) {
+  uart_puts("[USB4 fallback]\n");
+  usb4_skip_magic = USB4_SKIP_MAGIC;
+  REG_CPU_RESET = CPU_RESET_TRIGGER;
+  while (1) { }
+}
+
+static void usb4_reinit_usb3_after_reset_fallback(void) {
+  usb4_skip_magic = USB4_SKIP_MAGIC;
+  usb_pipe_engine_init();
+  REG_CPU_MODE = CPU_MODE_USB3;
+  REG_CPU_MODE_NEXT &= 0x1F;
+  REG_CPU_CTRL_CA81 &= 0xFE;
+  boot_phy_set_link_mode(0);
+  boot_phy_lane_power(0x0F);
+  boot_phy_set_lane_width(0x0F);
+  u4lb_pcie_set_link_width(PCIE_LINK_WIDTH_x2);
 }
 
 void main(void) {
@@ -486,7 +562,20 @@ void main(void) {
   // flash controller — needed for the USB serial OTP read on enumeration
   flash_init();
 
-  USB4_SELECT_BOOT_MODE(usb4_reset_fallback);
+  if (usb4_skip_magic == USB4_SKIP_MAGIC) {
+    usb4_skip_magic = 0;
+    u4_cfg.mode_flag = USB4_MODE_USB3_DIRECT;
+    usb4_reset_fallback = 1;
+  } else {
+    u4_cfg.mode_flag = boot_mode_flags_usb4_policy();
+  }
+  uart_puts("[Mode ");
+  uart_puthex(u4_cfg.mode_flag);
+  uart_puts(" S");
+  uart_puthex(REG_FLASH_READY_STATUS);
+  uart_puts(" C");
+  uart_puthex(REG_FLASH_BUF_BYTE(0));
+  uart_puts("]\n");
   u4_entered_usb_mode = 0;  /* clear XDATA-persistent flag from prior boot */
 
   if (IS_USB4()) {
@@ -500,7 +589,7 @@ void main(void) {
     usb_phy_tune();
 
     if (usb4_reset_fallback) {
-      USB4_REINIT_USB3_AFTER_RESET_FALLBACK();
+      usb4_reinit_usb3_after_reset_fallback();
     }
 
     // PCIe TLP engine values that don't change + tuning
@@ -550,7 +639,7 @@ void main(void) {
        * so the USB4 card never enters this path. */
       if (u4_entered_usb_mode && !usb4_usb_inited && !u4_boot.pd_seen) {
         usb4_usb_inited = 1;
-        USB4_REINIT_USB3_AFTER_RESET_FALLBACK();
+        usb4_reinit_usb3_after_reset_fallback();
         usb_phy_tune();
         usb_init_controller(0);
         REG_PCIE_TLP_CTRL   = 0x01;
