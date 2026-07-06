@@ -85,9 +85,7 @@ static void boot_phy_set_link_mode(uint8_t mode) {  /* dd42 */
 
 static void boot_phy_reset_pulse(uint8_t enable) {  /* e57d/e764 */
   if (enable & 0x01) {
-    REG_PHY_TIMER_CTRL_E764 &= 0xFD;
-    REG_PHY_TIMER_CTRL_E764 &= 0xFE;
-    REG_PHY_TIMER_CTRL_E764 &= 0xF7;
+    REG_PHY_TIMER_CTRL_E764 &= 0xF4;
     REG_PHY_TIMER_CTRL_E764 = (REG_PHY_TIMER_CTRL_E764 & 0xFB) | 0x04;
   }
 }
@@ -224,10 +222,9 @@ static void usb4_connect_u4(void) {
 static void sb_router_event_handler(void);
 
 static uint8_t u4rop_underflow(void) {
-  if (u4_rop_limit[3] != u4_rop_cfg_addr[3]) return u4_rop_limit[3] < u4_rop_cfg_addr[3];
-  if (u4_rop_limit[2] != u4_rop_cfg_addr[2]) return u4_rop_limit[2] < u4_rop_cfg_addr[2];
-  if (u4_rop_limit[1] != u4_rop_cfg_addr[1]) return u4_rop_limit[1] < u4_rop_cfg_addr[1];
-  if (u4_rop_limit[0] != u4_rop_cfg_addr[0]) return u4_rop_limit[0] < u4_rop_cfg_addr[0];
+  int8_t i;
+  for (i = 3; i >= 0; i--)
+    if (u4_rop_limit[i] != u4_rop_cfg_addr[i]) return u4_rop_limit[i] < u4_rop_cfg_addr[i];
   return 0;
 }
 
@@ -283,14 +280,9 @@ static void cm_routerop_mailbox(void) {
     u4_routerop_mbox_opcode = op;
     if (op == 0xE2) {
       if (REG_ROUTEROP_CFG_EA81 == 0x50 || REG_ROUTEROP_CFG_EA81 == 0x51) {
-        u4_rop_cfg_addr[0] = XDATA_REG8V(0xEA82);
-        u4_rop_cfg_addr[1] = XDATA_REG8V(0xEA83);
-        u4_rop_cfg_addr[2] = XDATA_REG8V(0xEA84);
-        u4_rop_cfg_addr[3] = XDATA_REG8V(0xEA85);
-        u4_rop_limit[0] = u4_rop_cfg_addr[3];
-        u4_rop_limit[1] = u4_rop_cfg_addr[3];
-        u4_rop_limit[2] = u4_rop_cfg_addr[3];
-        u4_rop_limit[3] = u4_rop_cfg_addr[3];
+        uint8_t i;
+        for (i = 0; i < 4; i++) u4_rop_cfg_addr[i] = XDATA_REG8V(0xEA82 + i);
+        for (i = 0; i < 4; i++) u4_rop_limit[i] = u4_rop_cfg_addr[3];
         u4rop_read_flash_resp();
         if (!u4rop_underflow() &&
             (u4_rop_limit[0] != u4_rop_cfg_addr[0] || u4_rop_limit[1] != u4_rop_cfg_addr[1] ||
@@ -680,10 +672,10 @@ static void usb4_routerop_init(void) {
 #define U4C_SET_BIT1(a)   PR(a) = (PR(a) & 0xFD) | 0x02  /* bcfe */
 #define U4C_SET_BIT0(a)   PR(a) = (PR(a) & 0xFE) | 0x01  /* bceb */
 #define U4C_SET_BIT2(a)   PR(a) = (PR(a) & 0xFB) | 0x04  /* bd5e */
-static void u4c_clr_bits6_5(uint16_t a) { PR(a) &= 0xDF; PR(a) &= 0xBF; }  /* bd2a */
+static void u4c_clr_bits6_5(uint16_t a) { PR(a) &= 0x9F; }  /* bd2a */
 static void u4c_lane_timers_on(void) { REG_TIMER_ENABLE_B = (REG_TIMER_ENABLE_B & 0xFD) | 0x02; REG_TIMER_ENABLE_A = (REG_TIMER_ENABLE_A & 0xFD) | 0x02; }  /* bcf2 */
 static void u4c_timer_cc3b_clr1(void) { REG_TIMER_CTRL_CC3B &= 0xFD; }  /* bd41 */
-static void u4c_lane_timers_off(void) { REG_TIMER_ENABLE_B &= 0xFD; REG_TIMER_ENABLE_A &= 0xFD; }  /* bd14 */
+/* u4c_lane_timer_gate(1) is u4c_lane_timer_gate(1) */
 
 static uint8_t u4c_link_go(void) {  /* bd6c */
   REG_CPU_LINK_CTRL_CA00 = (REG_CPU_LINK_CTRL_CA00 & 0xC0) | 0x07;
@@ -730,7 +722,7 @@ static void u4c_link_mode_apply(uint8_t mode) {  /* 8a89 */
     if (config & 0x01) {
       U4C_SET_BIT5(0xE40B);
       U4C_SET_BIT5(0xC698);
-      u4c_lane_timers_off();
+      u4c_lane_timer_gate(1);
       U4C_SET_BIT0(0xCAC4);
       REG_PHY_POLL_E751 = 0x01;
       U4C_SET_BIT7(0xE313);
@@ -795,7 +787,7 @@ static void u4c_link_mode_apply(uint8_t mode) {  /* 8a89 */
         u4_cfg.routerop_desc0 = (REG_LINK_STATUS_E716 & 0xFC) | 0x03;
         u4_cfg.routerop_desc1 = (REG_CPU_CTRL_CC3E & 0xFD);
         U4C_SET_BIT0(0xCA81);
-        u4c_lane_timers_off();
+        u4c_lane_timer_gate(1);
       }
       descr_arg = (u4_cfg.route_mode >> 1 & 1) ? 2 : 1;
     } else if (u4_cfg.routerop_desc0 == 0x01) {
