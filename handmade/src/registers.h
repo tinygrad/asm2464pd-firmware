@@ -84,7 +84,6 @@
  * Also doubles as the SPI flash controller's data buffer for read/write
  * (see flash.h).
  */
-#define REG_FLASH_BUF_BYTE(off) XDATA_REG8(FLASH_BUFFER_BASE + (off))
 #define FLASH_BUF               ((__xdata uint8_t *)FLASH_BUFFER_BASE)
 
 // Flash buffer control registers (0x7041, 0x78AF-0x78B2)
@@ -2381,8 +2380,6 @@
 #define REG_SYS_CTRL_E774       XDATA_REG8(0xE774)  /* System control */
 #define REG_SYS_CTRL_E77C       XDATA_REG8(0xE77C)  /* System control */
 #define REG_SYS_CTRL_E780       XDATA_REG8(0xE780)  /* System control */
-#define REG_FLASH_READY_STATUS  XDATA_REG8(0xE795)
-#define   FLASH_READY_USB4_MODE   0x20  /* Stock prerequisite for PD/USB4 config; not sufficient by itself. */
 #define REG_PHY_LINK_CTRL       XDATA_REG8(0xE7E3)
 #define   PHY_LINK_CTRL_BIT6      0x40  // Bit 6: PHY link control flag
 #define   PHY_LINK_CTRL_BIT7      0x80  // Bit 7: PHY link ready
