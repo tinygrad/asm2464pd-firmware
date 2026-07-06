@@ -481,11 +481,6 @@ void int1_isr(void) __interrupt(1) {
   DPX = saved_dpx;
 }
 
-static uint8_t boot_mode_flags_usb4_policy(void) {
-  if (!(REG_FLASH_READY_STATUS & FLASH_READY_USB4_MODE)) return USB4_MODE_USB3_DIRECT;
-  return USB4_MODE_FLAGS;
-}
-
 static void usb4_state_prepare(void) {
   boot_phy_bringup_early();
   u4_phy_state_seed();
@@ -551,7 +546,6 @@ static void usb4_reinit_usb3_after_reset_fallback(void) {
 }
 
 void main(void) {
-  uint8_t usb4_reset_fallback = 0;
 
   // without this, UART has parity
   REG_UART_LCR &= ~LCR_PARITY_MASK;
@@ -565,34 +559,22 @@ void main(void) {
   if (usb4_skip_magic == USB4_SKIP_MAGIC) {
     usb4_skip_magic = 0;
     u4_cfg.mode_flag = USB4_MODE_USB3_DIRECT;
-    usb4_reset_fallback = 1;
   } else {
-    u4_cfg.mode_flag = boot_mode_flags_usb4_policy();
+    u4_cfg.mode_flag = USB4_MODE_FLAGS;
   }
   uart_puts("[Mode ");
   uart_puthex(u4_cfg.mode_flag);
-  uart_puts(" S");
-  uart_puthex(REG_FLASH_READY_STATUS);
-  uart_puts(" C");
-  uart_puthex(REG_FLASH_BUF_BYTE(0));
   uart_puts("]\n");
-  u4_entered_usb_mode = 0;  /* clear XDATA-persistent flag from prior boot */
+  u4_entered_usb_mode = 0;
 
   if (IS_USB4()) {
-    /* Sideband block power + tunnel adapter enable (boot_phy_bringup_early +
-     * pcie_tunnel_adapter_enable).  Must come before usb_pipe_engine_init. */
     usb4_state_prepare();
-    /* USB PIPE init + PHY arm (stock fw boot_usb4_vs_usb3_mode_decision). */
     usb_pipe_engine_init();
     usb4_phy_arm();
   } else {
     usb_phy_tune();
+    usb4_reinit_usb3_after_reset_fallback();
 
-    if (usb4_reset_fallback) {
-      usb4_reinit_usb3_after_reset_fallback();
-    }
-
-    // PCIe TLP engine values that don't change + tuning
     REG_PCIE_TLP_CTRL   = 0x01;
     REG_PCIE_TLP_LENGTH = 0x20;
     pcie_apply_x2_rxphy_tuning();
