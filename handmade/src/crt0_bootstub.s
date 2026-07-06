@@ -10,22 +10,22 @@ __reset:
     ljmp    __sdcc_program_startup
 
     .org    0x0003
-    ljmp    0x2403
+    ljmp    0x4003
 
     .org    0x000B
-    ljmp    0x240B
+    ljmp    0x400B
 
     .org    0x0013
-    ljmp    0x2413
+    ljmp    0x4013
 
     .org    0x001B
-    ljmp    0x241B
+    ljmp    0x401B
 
     .org    0x0023
-    ljmp    0x2423
+    ljmp    0x4023
 
     .org    0x002B
-    ljmp    0x242B
+    ljmp    0x402B
 
     .area   HOME    (CODE)
 __sdcc_program_startup:

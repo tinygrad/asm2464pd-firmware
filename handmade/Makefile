@@ -137,13 +137,21 @@ bootstub: $(BOOTSTUB_BIN)
 	@ls -la $(BOOTSTUB_BIN)
 
 # ===== Userfw image (bootstub-loaded) =====
-APP_LDFLAGS = --code-loc 0x2400 --code-size 0xE000 --xram-loc 0x0B60 --xram-size 0xA0 --iram-size 0x100
+APP_LDFLAGS = --code-loc 0x4000 --code-size 0xC000 --xram-loc 0x0B60 --xram-size 0xA0 --iram-size 0x100
 APP_HEX = $(BUILD_DIR)/firmware_userfw.ihx
 APP_BIN = $(BUILD_DIR)/firmware_userfw.bin
 APP_IMAGE = $(BUILD_DIR)/firmware_image.bin
 
-$(APP_HEX): $(CRT0_OBJ) $(MAIN_OBJ) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(APP_LDFLAGS) $(CRT0_OBJ) $(MAIN_OBJ) -o $@
+APP_CRT0_SRC = $(SRC_DIR)/crt0_userfw.s
+APP_CRT0_OBJ = $(OBJ_DIR)/crt0_userfw.rel
+
+$(APP_CRT0_OBJ): $(APP_CRT0_SRC) | $(OBJ_DIR)
+	$(AS) -l -o -s $<
+	mv $(SRC_DIR)/crt0_userfw.rel $(APP_CRT0_OBJ)
+	-mv $(SRC_DIR)/crt0_userfw.lst $(OBJ_DIR)/ 2>/dev/null || true
+
+$(APP_HEX): $(APP_CRT0_OBJ) $(MAIN_OBJ) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(APP_LDFLAGS) $(APP_CRT0_OBJ) $(MAIN_OBJ) -o $@
 
 $(APP_BIN): $(APP_HEX)
 	@objcopy -I ihex -O binary $< $@ 2>/dev/null || sdobjcopy -I ihex -O binary $< $@

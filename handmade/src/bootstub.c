@@ -20,10 +20,10 @@ __sfr __at(0xA8) IE;
 #define DFU_COOKIE          (*(__xdata volatile uint32_t *)0x5FF8)
 #define DFU_COOKIE_MAGIC    0xDF0BC0DEUL
 
-#define USERFW_FLASH_OFFSET   0x4000UL
+#define USERFW_FLASH_OFFSET   0x4104UL
 #define USERFW_HEADER_SIZE    0x40UL
 #define USERFW_HEADER_CRC_LEN 0x20U
-#define USERFW_CODE_BASE      0x2400
+#define USERFW_CODE_BASE      0x4000
 #define USERFW_BODY_LIMIT     0xE000UL
 #define USERFW_FLASH_END      (USERFW_FLASH_OFFSET + USERFW_HEADER_SIZE + USERFW_BODY_LIMIT)
 #define SECTOR_SIZE           0x1000UL
@@ -223,16 +223,17 @@ static void dfu_loop(void) {
         REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
         handle_setup();
       } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
-        REG_USB_DMA_TRIGGER = USB_DMA_RECV;
-        REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
-      } else if ((phase & USB_CTRL_PHASE_DATA_IN) || (phase & USB_CTRL_PHASE_STAT_IN)) {
+        /* On USB 3.0, STAT_OUT fires for the status phase of host-to-device
+         * transfers. Process deferred writes/erases here. */
         uint8_t r = XOP_NONE;
         if (xfer_op == XOP_WRITE) {
+          REG_USB_DMA_TRIGGER = USB_DMA_RECV;  /* receive DATA_OUT into buffer */
           uint32_t addr = xfer_op_addr;
           uint16_t len = xfer_op_len;
           xfer_op = XOP_NONE;
           __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
-          if (!flash_wren()) { uart_puts("[W-FAIL]\n"); }
+          if (!flash_unlock()) { uart_puts("[U-FAIL]\n"); }
+          else if (!flash_wren()) { uart_puts("[W-FAIL]\n"); }
           else {
             uint16_t i;
             for (i = 0; i < len; i++) FLASH_BUF[i] = buf[i];
@@ -255,9 +256,13 @@ static void dfu_loop(void) {
         }
         if (r == 1) usb_send_zlp();
         else if (xfer_op == XOP_NONE) {
-          if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
-          REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
+          REG_USB_DMA_TRIGGER = USB_DMA_RECV;
+          REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
         }
+      } else if ((phase & USB_CTRL_PHASE_DATA_IN) || (phase & USB_CTRL_PHASE_STAT_IN)) {
+        /* DATA_IN on USB 2.0, STAT_IN on USB 3.0 — for device-to-host transfers */
+        if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
+        REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
       } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
         REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
       }
@@ -295,6 +300,17 @@ void main(void) {
     dfu_loop();
   }
 
+  /* Check if flash is mapped to CODE space by reading from CODE 0x4000 */
+  {
+    __code uint8_t *p = (__code uint8_t *)0x4000;
+    uart_puts("[C4:");
+    uart_puthex(p[0]);
+    uart_puthex(p[1]);
+    uart_puthex(p[2]);
+    uart_puthex(p[3]);
+    uart_puts("]\n");
+  }
+
   if (hdr.body_len > USERFW_BODY_LIMIT) {
     uart_puts("[BS bad-size]\n");
     dfu_loop();
@@ -306,12 +322,11 @@ void main(void) {
   }
 
   uint32_t base = USERFW_FLASH_OFFSET + sizeof(hdr);
-  if (hdr.body_len && !load_region(base, USERFW_CODE_BASE, hdr.body_len)) {
-    uart_puts("[BS load-fail]\n");
-    dfu_loop();
-  }
+  /* Userfw is executed directly from flash — no code_write needed */
+  (void)base; (void)load_region;
 
   DFU_COOKIE = 0;
   uart_puts("[BS->APP]\n");
-  __asm ljmp 0x2400 __endasm;
+  timer_delay_ms(1000);
+  __asm ljmp 0x4000 __endasm;
 }
