@@ -244,13 +244,15 @@ static void handle_usb_control(void) {
       REG_NVME_CMD_PARAM   = slot_sel;
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF3) {
-      /* 0xF3: PCIe power control.
-       *   wValue low bit 0 = 0 power off, 1 power on. */
-      if (wValL & 0x01) {
-        pcie_power_on();
-      } else {
-        pcie_power_off();
+      if (wValL == 0xF4) {
+        usb_send_zlp();
+        XDATA_REG8V(0x5FF8) = 0xDE; XDATA_REG8V(0x5FF9) = 0xC0;
+        XDATA_REG8V(0x5FFA) = 0x0B; XDATA_REG8V(0x5FFB) = 0xDF;
+        REG_CPU_RESET = CPU_RESET_TRIGGER;
+        return;
       }
+      if (wValL & 0x01) pcie_power_on();
+      else pcie_power_off();
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
