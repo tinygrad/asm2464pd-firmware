@@ -1,10 +1,15 @@
 #ifndef USB4_STATE_H
 #define USB4_STATE_H
 
-#define USB4_MODE_FLAGS 0x87u  /* Stock USB4 tunnel route + VDM-ACK policy. */
-#define USB4_MODE_MASK  0x83u  /* Nonzero for the USB4/PD path; 0x04 is direct USB3. */
-#define USB4_MODE_USB3_DIRECT 0x04u  /* mode_flag for the plain USB3 path (clear of USB4_MODE_MASK). */
-#define IS_USB4()       (u4_cfg.mode_flag & USB4_MODE_MASK)
+/* u4_cfg.mode_flag bitfield layout:
+ *   bits 0-1: route mode (0=router, 1=host, 2=device, 3=both)
+ *   bit 2:    USB3 direct mode (no USB4 tunnel)
+ *   bit 6:    full mode-entry commit (power event + USB int mask clear)
+ *   bit 7:    VDM-ACK policy enabled
+ */
+#define USB4_MODE_FLAGS 0x87u  /* route=3, vdm-ack=1, full-commit=1 */
+#define USB4_MODE_USB3_DIRECT 0x04u
+#define IS_USB4()       (u4_cfg.mode_flag & 0x83u)
 
 typedef enum {
     U4FSM_IDLE       = 0x00,
