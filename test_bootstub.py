@@ -61,7 +61,7 @@ def dfu_erase(dev, addr, length):
 
 
 def dfu_set_addr(dev, addr):
-    dev.ctrl_transfer(0x40, 0xB1, addr & 0xFF, (addr >> 8) & 0xFF, None, timeout=1000)
+    dev.ctrl_transfer(0x40, 0xB1, addr & 0xFFFF, (addr >> 16) & 0xFF, None, timeout=1000)
 
 
 def dfu_write(dev, data):

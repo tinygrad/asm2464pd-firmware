@@ -24,7 +24,7 @@ __sfr __at(0xA8) IE;
 #define USERFW_HEADER_SIZE    0x40UL
 #define USERFW_HEADER_CRC_LEN 0x20U
 #define USERFW_CODE_BASE      0x2400
-#define USERFW_BODY_LIMIT     0xDC10UL
+#define USERFW_BODY_LIMIT     0xE000UL
 #define USERFW_FLASH_END      (USERFW_FLASH_OFFSET + USERFW_HEADER_SIZE + USERFW_BODY_LIMIT)
 #define SECTOR_SIZE           0x1000UL
 #define USERFW_ERASE_END      ((USERFW_FLASH_END + (SECTOR_SIZE - 1)) & ~(SECTOR_SIZE - 1))
@@ -36,52 +36,6 @@ typedef struct {
   uint32_t crc;
   uint8_t  _pad[28];
 } userfw_hdr_t;
-
-/* ---- flash ---- */
-
-static uint8_t flash_read(uint32_t addr, __xdata uint8_t *buf, uint16_t len) {
-  flash_cmd(0x03, addr, 0x07, len);
-  __xdata uint8_t *p = buf;
-  uint16_t i;
-  for (i = 0; i < len; i++) p[i] = FLASH_BUF[i];
-  return 1;
-}
-
-static uint8_t flash_wait_wip(void) {
-  uint32_t timeout = 0x000FFFFFUL;
-  do {
-    flash_cmd(0x05, 0, 0x04, 1);
-    if (!(FLASH_BUF[0] & 0x01)) return 1;
-  } while (--timeout);
-  return 0;
-}
-
-static uint8_t flash_clear_bp(void) {
-  uint8_t attempt;
-  for (attempt = 0; attempt < 5; attempt++) {
-    FLASH_BUF[0] = 0; FLASH_BUF[1] = 0; FLASH_BUF[2] = 0; FLASH_BUF[3] = 0;
-    flash_cmd(0x06, 0, 0x04, 0);
-    flash_cmd_write(0x01, 0, 0x04, 1);
-    if (!flash_wait_wip()) continue;
-    flash_cmd(0x05, 0, 0x04, 1);
-    if (!(FLASH_BUF[0] & 0x1C)) return 1;
-  }
-  return 0;
-}
-
-static uint8_t flash_erase_sector(uint32_t addr) {
-  if (!flash_clear_bp()) return 0;
-  flash_cmd(0x06, 0, 0x04, 0);
-  flash_cmd(0x20, addr, 0x07, 0);
-  return flash_wait_wip();
-}
-
-static uint8_t flash_program_page(uint32_t addr, uint16_t len) {
-  if (!flash_clear_bp()) return 0;
-  flash_cmd(0x06, 0, 0x04, 0);
-  flash_cmd_write(0x02, addr, 0x07, len);
-  return flash_wait_wip();
-}
 
 /* ---- code write ---- */
 
@@ -233,7 +187,15 @@ static void handle_setup(void) {
   } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB3) {
     uint16_t n = (wLen > 64) ? 64 : wLen;
     if (n == 0) { usb_send_zlp(); return; }
-    if (!flash_read(xfer_addr, scratch, n)) { stall_ep0(); return; }
+    uart_puts("[RD a=");
+    uart_puthex((uint8_t)(xfer_addr >> 16));
+    uart_puthex((uint8_t)(xfer_addr >> 8));
+    uart_puthex((uint8_t)xfer_addr);
+    uart_puts(" n=");
+    uart_puthex((uint8_t)n);
+    uart_puts("]\n");
+    if (!flash_read(xfer_addr, scratch, n)) { uart_puts("[F]\n"); stall_ep0(); return; }
+    uart_puts("[OK]\n");
     __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
     uint16_t i;
     for (i = 0; i < n; i++) buf[i] = scratch[i];

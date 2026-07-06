@@ -19,7 +19,7 @@ import zlib
 MAGIC      = b"A24F"
 HDR_SIZE   = 0x40
 HASH_OFF   = 0x20
-BODY_MAX   = 0xDC10   # CODE 0x2400-0xFFFF (matches USERFW_BODY_LIMIT in bootstub.c)
+BODY_MAX   = 0xE000   # CODE 0x2400-0xFFFF (matches USERFW_BODY_LIMIT in bootstub.c)
 GITVERSION_SIZE = 24
 
 
