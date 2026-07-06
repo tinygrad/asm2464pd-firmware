@@ -9,13 +9,17 @@
 
 /*=== USB device identification ===*/
 #define USB_VID                 0xADD1
+#ifndef USB_PID
 #define USB_PID                 0x0001
+#endif
 #define USB_BCD_DEVICE          0x0001
 #define USB_LANG_ID             0x0409   /* US English */
 
 /* String descriptors */
 #define USB_STR_MFG             "tiny"
+#ifndef USB_STR_PRODUCT
 #define USB_STR_PRODUCT         "custom v0.1"
+#endif
 
 #define USB_STR_IDX_LANG        0
 #define USB_STR_IDX_MFG         1

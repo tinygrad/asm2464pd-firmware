@@ -5,7 +5,14 @@
  * into DFU mode where the host can re-flash via USB EP0 control transfers. */
 
 #include "types.h"
+#include "util.h"
 #include "registers.h"
+
+#define BOOTSTUB 1
+#define USB_PID                 0xB007
+#define USB_STR_PRODUCT         "bootstub"
+#include "usb.h"
+#include "flash.h"
 
 __sfr __at(0x87) PCON;
 __sfr __at(0xA8) IE;
@@ -30,7 +37,39 @@ typedef struct {
   uint8_t  _pad[28];
 } userfw_hdr_t;
 
-/* ---- UART ---- */
+/* ---- flash ---- */
+
+static uint8_t flash_read(uint32_t addr, __xdata uint8_t *buf, uint16_t len) {
+  flash_cmd(0x03, addr, 0x07, len);
+  __xdata uint8_t *p = buf;
+  uint16_t i;
+  for (i = 0; i < len; i++) p[i] = FLASH_BUF[i];
+  return 1;
+}
+
+static uint8_t flash_erase_sector(uint32_t addr) {
+  flash_cmd(0x06, 0, 0x04, 0);
+  flash_cmd(0x20, addr, 0x07, 0);
+  return 1;
+}
+
+static uint8_t flash_program_page(uint32_t addr, uint16_t len) {
+  flash_cmd(0x06, 0, 0x04, 0);
+  REG_FLASH_MODE |= 0x01;
+  REG_FLASH_CMD = 0x02;
+  REG_FLASH_ADDR_LEN = 0x07;
+  REG_FLASH_ADDR_LO = addr & 0xFF;
+  REG_FLASH_ADDR_MD = (addr >> 8) & 0xFF;
+  REG_FLASH_ADDR_HI = (addr >> 16) & 0xFF;
+  REG_FLASH_DATA_PAGE_CNT = (len >> 8) & 0xFF;
+  REG_FLASH_DATA_BYTE_OFS = len & 0xFF;
+  REG_FLASH_CSR = 0x01;
+  { uint16_t g; for (g = 0; (REG_FLASH_CSR & 0x01) && g < 0x4000; g++); }
+  REG_FLASH_MODE = 0;
+  return 1;
+}
+
+/* ---- code write ---- */
 
 static void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
 static void uart_puts(__code const char *s) { while (*s) uart_putc(*s++); }
@@ -40,210 +79,42 @@ static void uart_puthex(uint8_t val) {
   uart_putc(hex[val & 0x0F]);
 }
 
-static void rmw(uint16_t addr, uint8_t and_mask, uint8_t or_val) {
-  XDATA_REG8(addr) = (XDATA_REG8(addr) & and_mask) | or_val;
+static void timer_delay_ms(uint16_t ms) {
+  uint16_t threshold = 2 * ms;
+  REG_TIMER1_CSR = 0x04; REG_TIMER1_CSR = 0x02;
+  REG_TIMER1_DIV = (REG_TIMER1_DIV & 0xF8) | 0x04;
+  REG_TIMER1_THRESHOLD_HI = threshold >> 8;
+  REG_TIMER1_THRESHOLD_LO = threshold & 0xFF;
+  REG_TIMER1_CSR = 0x01;
+  { uint32_t g = 0; while (!(REG_TIMER1_CSR & 0x02) && ++g < 4000000UL); }
+  REG_TIMER1_CSR = 0x04; REG_TIMER1_CSR = 0x02;
 }
 
-static void usb_serdes_tune_lane(uint16_t base) {
-  rmw(base + 0x02, 0x1F, 0xA0); rmw(base + 0x03, 0xF3, 0x00);
-  rmw(base + 0x04, 0x8F, 0x40); rmw(base + 0x05, 0x0F, 0x60);
-  rmw(base + 0x06, 0xF0, 0x07); rmw(base + 0x07, 0x1F, 0x60);
-  rmw(base + 0x09, 0x0F, 0x90); rmw(base + 0x0B, 0xC0, 0x0A);
-  rmw(base + 0x0C, 0xFD, 0x00); rmw(base + 0x10, 0xE0, 0x03);
-  rmw(base + 0x11, 0xE0, 0x08); rmw(base + 0x12, 0x1F, 0x20);
-  rmw(base + 0x13, 0xF3, 0x04); rmw(base + 0x14, 0xFF, 0x06);
-  rmw(base + 0x15, 0xF0, 0x0C); rmw(base + 0x16, 0xF0, 0x0F);
-  rmw(base + 0x17, 0x1F, 0x40); rmw(base + 0x19, 0x0F, 0x80);
-  rmw(base + 0x1A, 0xF0, 0x0E); rmw(base + 0x1B, 0xC0, 0x00);
-  rmw(base + 0x1C, 0xFD, 0x02); rmw(base + 0x20, 0xE0, 0x03);
-  rmw(base + 0x21, 0xE0, 0x08); rmw(base + 0x22, 0xE0, 0x0A);
-  rmw(base + 0x23, 0xFC, 0x02); rmw(base + 0x24, 0xF0, 0x07);
-  rmw(base + 0x25, 0xF0, 0x0F); rmw(base + 0x26, 0xF0, 0x0B);
-  rmw(base + 0x27, 0x1F, 0x40); rmw(base + 0x29, 0x0F, 0x80);
-  rmw(base + 0x2A, 0xFF, 0x01); rmw(base + 0x2B, 0xC0, 0x00);
-  rmw(base + 0x2C, 0xFD, 0x02); rmw(base + 0x3C, 0xFD, 0x00);
-  rmw(base + 0x43, 0xC3, 0x1C); rmw(base + 0x45, 0xF0, 0x0B);
-  rmw(base + 0x46, 0xF0, 0x0D); rmw(base + 0x49, 0x80, 0x41);
-  rmw(base + 0x4A, 0xFE, 0x00); rmw(base + 0x4C, 0xF1, 0x0E);
-  rmw(base + 0x4E, 0xFF, 0x40); rmw(base + 0x5B, 0xE0, 0x1B);
-}
-
-static void usb_phy_tune(void) {
-  usb_serdes_tune_lane(0xC280);
-  usb_serdes_tune_lane(0xC300);
-}
-
-/* ---- flash ---- */
-
-static void flash_init(void) {
-  REG_CPU_EXEC_STATUS_2 = 0x04;
-  REG_FLASH_DIV = 4;
-}
-
-static uint8_t flash_wait_done(void) {
-  uint16_t g;
-  for (g = 0; (REG_FLASH_CSR & 0x01) && g < 0x4000; g++);
-  return !(REG_FLASH_CSR & 0x01);
-}
-
-static uint8_t flash_read(uint32_t addr, __xdata uint8_t *buf, uint16_t len) {
-  REG_FLASH_MODE = (REG_FLASH_MODE & 0xF0) | 0x02;
-  REG_FLASH_ADDR_HI = (uint8_t)(addr >> 16);
-  REG_FLASH_ADDR_MD = (uint8_t)(addr >> 8);
-  REG_FLASH_ADDR_LO = (uint8_t)addr;
-  REG_FLASH_DATA_PAGE_CNT = (uint8_t)(len >> 8);
-  REG_FLASH_DATA_BYTE_OFS = (uint8_t)len;
-  REG_FLASH_CSR = 0x01;
-  if (!flash_wait_done()) return 0;
-  __xdata uint8_t *p = buf;
-  uint16_t i;
-  for (i = 0; i < len; i++) p[i] = FLASH_BUF[i];
-  return 1;
-}
-
-static uint8_t flash_unlock(void) {
-  REG_FLASH_CSR = 0x06;
-  flash_wait_done();
-  return (REG_FLASH_CSR & 0x04) != 0;
-}
-
-static uint8_t flash_erase_sector(uint32_t addr) {
-  REG_FLASH_MODE = (REG_FLASH_MODE & 0xF0) | 0x08;
-  REG_FLASH_ADDR_HI = (uint8_t)(addr >> 16);
-  REG_FLASH_ADDR_MD = (uint8_t)(addr >> 8);
-  REG_FLASH_ADDR_LO = (uint8_t)addr;
-  REG_FLASH_CSR = 0x01;
-  return flash_wait_done();
-}
-
-static uint8_t flash_program_page(uint32_t addr, uint16_t len) {
-  REG_FLASH_MODE = (REG_FLASH_MODE & 0xF0) | 0x04;
-  REG_FLASH_ADDR_HI = (uint8_t)(addr >> 16);
-  REG_FLASH_ADDR_MD = (uint8_t)(addr >> 8);
-  REG_FLASH_ADDR_LO = (uint8_t)addr;
-  REG_FLASH_DATA_PAGE_CNT = (uint8_t)(len >> 8);
-  REG_FLASH_DATA_BYTE_OFS = (uint8_t)len;
-  REG_FLASH_CSR = 0x01;
-  return flash_wait_done();
-}
-
-/* ---- USB (EP0 only, polled) ---- */
-
-#define USB_VID 0xADD1
-#define USB_PID 0xB007
-
-static uint8_t is_usb2;
-
-static void usb_send_zlp(void) {
+static void usb_init_endpoint_state(void) {
   REG_USB_EP0_LEN_H = 0; REG_USB_EP0_LEN_L = 0;
-  REG_USB_DMA_TRIGGER = USB_DMA_SEND;
-  REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
-}
-
-static void usb_send_data(uint16_t len) {
-  REG_USB_EP0_LEN_H = (uint8_t)(len >> 8);
-  REG_USB_EP0_LEN_L = (uint8_t)(len & 0xFF);
-  REG_USB_DMA_TRIGGER = USB_DMA_SEND;
-  REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN;
-}
-
-static void usb_handle_set_address(uint8_t addr) {
-  REG_USB_INT_MASK_9090 = 0x80 | (addr & 0x7F);
-  REG_USB_EP_CTRL_91D0 = 0x02;
-  usb_send_zlp();
-}
-
-static __code const uint8_t usb_dev_desc[] = {
-  0x12, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x09,
-  USB_VID & 0xFF, USB_VID >> 8, USB_PID & 0xFF, USB_PID >> 8,
-  0x01, 0x00, 0x01, 0x02, 0x00, 0x01
-};
-
-static __code const uint8_t usb_cfg_desc[] = {
-  0x09, 0x02, 0x12, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
-  0x09, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00
-};
-
-static __code const uint8_t usb_bos_desc[] = {
-  0x05, 0x0F, 0x16, 0x00,
-  0x07, 0x10, 0x02, 0x02, 0x00, 0x00, 0x00,
-  0x0A, 0x10, 0x03, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x00, 0x00
-};
-
-static __code const char usb_str_mfg[] = "tiny";
-static __code const char usb_str_product[] = "bootstub";
-
-static void usb_send_string(__code const char *s, uint8_t max_len) {
-  uint8_t n = 0;
-  while (s[n] && n < max_len) n++;
-  __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
-  buf[0] = 2 + 2 * n;
-  buf[1] = 0x03;
-  uint8_t i;
-  for (i = 0; i < n; i++) { buf[2 + 2*i] = s[i]; buf[2 + 2*i + 1] = 0; }
-  usb_send_data(2 + 2 * n);
-}
-
-static void usb_handle_get_descriptor(uint8_t type, uint8_t idx) {
-  __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
-  if (type == 1) {
-    uint8_t i;
-    for (i = 0; i < sizeof(usb_dev_desc); i++) buf[i] = usb_dev_desc[i];
-    usb_send_data(sizeof(usb_dev_desc));
-  } else if (type == 2) {
-    uint8_t i;
-    for (i = 0; i < sizeof(usb_cfg_desc); i++) buf[i] = usb_cfg_desc[i];
-    usb_send_data(sizeof(usb_cfg_desc));
-  } else if (type == 15) {
-    uint8_t i;
-    for (i = 0; i < sizeof(usb_bos_desc); i++) buf[i] = usb_bos_desc[i];
-    usb_send_data(sizeof(usb_bos_desc));
-  } else if (type == 3) {
-    if (idx == 0) { buf[0] = 4; buf[1] = 0x03; buf[2] = 0x09; buf[3] = 0x04; usb_send_data(4); }
-    else if (idx == 1) usb_send_string(usb_str_mfg, 30);
-    else if (idx == 2) usb_send_string(usb_str_product, 30);
-    else usb_send_zlp();
-  } else {
-    usb_send_zlp();
-  }
-}
-
-static void usb_init_controller(void) {
-  REG_POWER_ENABLE = (REG_POWER_ENABLE & 0x7F) | 0x80;
-  REG_CPU_CTRL_CA81 = 0x0E;
-  REG_CPU_MODE_NEXT = 0x21;
-  REG_HDDPC_CTRL |= 0x20;
-  REG_PCIE_LANE_CTRL_C659 |= 0x01;
-  REG_USB_PHY_CTRL_91D1 = 0x0F;
-  REG_BUF_CFG_9300 = 0x0C;
-  REG_BUF_CFG_9301 = 0xC0;
-  REG_BUF_CFG_9302 = 0xBF;
-  REG_USB_CTRL_PHASE = 0x1F;
+  REG_USB_DMA_TRIGGER = 0; REG_USB_CTRL_PHASE = 0x1F;
+  REG_USB_MSC_CFG = 0; REG_USB_DATA_L = 0; REG_USB_DATA_H = 0;
+  REG_USB_EP_MGMT = 0; REG_USB_INT_MASK_9090 = 0x80;
   REG_USB_EP_CFG1 = 0x0F;
-  REG_USB_PHY_CTRL_91C1 = 0xF0;
-  REG_BUF_CFG_9303 = 0x33;
-  REG_BUF_CFG_9304 = 0x3F;
-  REG_BUF_CFG_9305 = 0x40;
-  REG_USB_CONFIG = 0xE0;
-  REG_USB_EP0_CFG = 0xF0;
+  REG_USB_EP_CFG2 = 0x02; REG_USB_EP_CFG2 = 0x01;
+  { uint8_t p = REG_USB_EP_READY; if (p) REG_USB_EP_READY = p; }
   REG_USB_MODE = 0x01;
-  REG_USB_EP_MGMT = 0x00;
-  REG_USB_MSC_CTRL = 0x01;
-  REG_USB_MSC_STATUS &= ~0x01;
-  REG_USB_PHY_CTRL_91C3 &= ~0x20;
-  REG_USB_PHY_CTRL_91C0 |= 0x01;
-  REG_USB_PHY_CTRL_91C0 &= ~0x01;
-  REG_POWER_STATUS &= ~0x40;
-  REG_INT_STATUS_C800 = 0x01;
-  REG_INT_USB_STATUS = 0x01;
-  REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x12;
-  REG_USB_DATA_L = 0x00;
+}
+
+static uint8_t usb_wait_ep0_dma_idle(void) {
+  uint16_t t = 0xFFFF;
+  do { if (REG_USB_DMA_TRIGGER == 0) return 1; } while (--t);
+  return 0;
 }
 
 static void usb_attach_controller(void) {
+  REG_USB_POWER_CYCLE = 0;
+  timer_delay_ms(25);
+  REG_USB_POWER_CYCLE = 0x01;
+  timer_delay_ms(25);
 }
 
-/* ---- code write ---- */
+static uint8_t is_usb2;
 
 static void code_write(uint16_t addr, uint8_t val) {
   uint8_t old = PCON;
@@ -330,7 +201,7 @@ static void handle_setup(void) {
   if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
     usb_handle_set_address(wValL);
   } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-    usb_handle_get_descriptor(wValH, wValL);
+    usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
   } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
     usb_send_zlp();
   } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
@@ -365,21 +236,12 @@ static void handle_setup(void) {
 static void dfu_loop(void) {
   uart_puts("[DFU]\n");
   usb_phy_tune();
-  uart_puts("[USB init]\n");
+  usb_pipe_engine_init();
+  usb4_phy_arm();
   is_usb2 = 0;
-  usb_init_controller();
-  uart_puts("[USB attach]\n");
+  usb_init_controller(0);
   IE = 0x80;
   usb_attach_controller();
-  uart_puts("[USB loop]\n");
-  { uint16_t spin = 0;
-    while (spin < 0x2000) {
-      uint8_t s = REG_USB_PERIPH_STATUS;
-      uint8_t i = REG_INT_USB_STATUS;
-      if (s || (i & 0x01)) { uart_puts("[P="); uart_puthex(s); uart_puts(" I="); uart_puthex(i); uart_puts("]\n"); break; }
-      spin++;
-    }
-  }
   xfer_op = XOP_NONE;
   xfer_addr = 0;
 
@@ -446,8 +308,8 @@ void main(void) {
   REG_UART_LCR &= ~LCR_PARITY_MASK;
   uart_puts("\n[BS]\n");
 
+  usb_init_endpoint_state();
   flash_init();
-  flash_unlock();
 
   if (DFU_COOKIE == DFU_COOKIE_MAGIC) {
     DFU_COOKIE = 0;
