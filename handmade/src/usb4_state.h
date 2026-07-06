@@ -6,9 +6,9 @@
 #define MODE_FLAG_USB3_DIRECT  0x04u  /* bit 2: USB3 direct mode (no USB4 tunnel) */
 #define MODE_FLAG_FULL_COMMIT  0x40u  /* bit 6: full mode-entry commit (power event + USB int mask clear) */
 #define MODE_FLAG_VDM_ACK      0x80u  /* bit 7: VDM-ACK policy enabled */
-#define USB4_MODE_FLAGS        (MODE_FLAG_ROUTE_MASK | MODE_FLAG_FULL_COMMIT | MODE_FLAG_VDM_ACK)
+#define USB4_MODE_FLAGS        (MODE_FLAG_ROUTE_MASK | MODE_FLAG_USB3_DIRECT | MODE_FLAG_VDM_ACK)
 #define USB4_MODE_USB3_DIRECT  MODE_FLAG_USB3_DIRECT
-#define IS_USB4()              (u4_cfg.mode_flag & (MODE_FLAG_ROUTE_MASK | MODE_FLAG_USB3_DIRECT))
+#define IS_USB4()              (u4_cfg.mode_flag & (MODE_FLAG_ROUTE_MASK | MODE_FLAG_VDM_ACK))
 
 typedef enum {
     U4FSM_IDLE       = 0x00,
