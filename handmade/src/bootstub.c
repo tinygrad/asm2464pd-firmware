@@ -178,6 +178,7 @@ static void handle_setup(void) {
     xfer_addr = ((uint32_t)REG_USB_SETUP_WIDX_L << 16) | ((uint16_t)wValH << 8) | wValL;
     usb_send_zlp();
   } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB2) {
+    uart_puts("[B2]\n");
     if (wLen == 0 || wLen > 64) { stall_ep0(); return; }
     if (!dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) { stall_ep0(); return; }
     if ((uint16_t)(xfer_addr & 0xFF) + wLen > 0x100) { stall_ep0(); return; }
@@ -187,15 +188,7 @@ static void handle_setup(void) {
   } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB3) {
     uint16_t n = (wLen > 64) ? 64 : wLen;
     if (n == 0) { usb_send_zlp(); return; }
-    uart_puts("[RD a=");
-    uart_puthex((uint8_t)(xfer_addr >> 16));
-    uart_puthex((uint8_t)(xfer_addr >> 8));
-    uart_puthex((uint8_t)xfer_addr);
-    uart_puts(" n=");
-    uart_puthex((uint8_t)n);
-    uart_puts("]\n");
-    if (!flash_read(xfer_addr, scratch, n)) { uart_puts("[F]\n"); stall_ep0(); return; }
-    uart_puts("[OK]\n");
+    if (!flash_read(xfer_addr, scratch, n)) { stall_ep0(); return; }
     __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
     uint16_t i;
     for (i = 0; i < n; i++) buf[i] = scratch[i];
@@ -239,9 +232,14 @@ static void dfu_loop(void) {
           uint16_t len = xfer_op_len;
           xfer_op = XOP_NONE;
           __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
-          uint16_t i;
-          for (i = 0; i < len; i++) FLASH_BUF[i] = buf[i];
-          if (flash_program_page(addr, len)) { xfer_addr = addr + len; r = 1; }
+          if (!flash_wren()) { uart_puts("[W-FAIL]\n"); }
+          else {
+            uint16_t i;
+            for (i = 0; i < len; i++) FLASH_BUF[i] = buf[i];
+            if (!flash_cmd(FLASH_CMD_PAGE_PROGRAM, addr, FLASH_ADDR_LEN_3BYTE, len, 1)) { uart_puts("[C-FAIL]\n"); }
+            else if (!flash_wait_wip()) { uart_puts("[WIP-FAIL]\n"); }
+            else { xfer_addr = addr + len; r = 1; }
+          }
         } else if (xfer_op == XOP_ERASE) {
           xfer_op = XOP_NONE;
           __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;

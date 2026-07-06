@@ -17,21 +17,8 @@
 
 __xdata static uint8_t flash_unlocked;
 
-#ifdef BOOTSTUB
-static void flash_clear_dma_status(void) {
-  uint8_t v = REG_DMA_CHAN_CTRL2;
-  REG_DMA_CHAN_CTRL2 = v & (uint8_t)~DMA_CHAN_CTRL2_ACTIVE;
-  v = REG_DMA_STATUS;
-  REG_DMA_STATUS = v & (uint8_t)~(DMA_STATUS_DONE | DMA_STATUS_ERROR);
-  v = REG_DMA_STATUS2;
-  REG_DMA_STATUS2 = v & (uint8_t)~DMA_STATUS2_TRIGGER;
-}
-#endif
-
 static void flash_init(void) {
   REG_CPU_EXEC_STATUS_2 = 0x04;
-  // NOTE: this broke PCIe enumeration on 9060
-  //REG_CPU_CTRL_CA81 |= 0x01;
   REG_INT_AUX_STATUS = 0x02;
   REG_FLASH_DIV = 0x04;
 
@@ -48,8 +35,16 @@ static void flash_init(void) {
 #endif
 }
 
+#ifdef BOOTSTUB
+static void flash_clear_dma_status(void) {
+  REG_DMA_TRIGGER = 0;
+  REG_DMA_CHAN_CTRL2 = 0;
+  REG_DMA_STATUS = 0;
+  REG_DMA_STATUS2 = 0;
+}
+
 static uint8_t flash_poll_busy(void) {
-  uint16_t timeout = 0xFFFF;
+  uint32_t timeout = 0xFFFFFUL;
   do {
     if (!(REG_FLASH_CSR & 0x01)) return 1;
   } while (--timeout);
@@ -73,6 +68,7 @@ static void flash_clear_io_modes(void) {
   REG_FLASH_MODE &= (uint8_t)~0x40;
   REG_FLASH_MODE &= (uint8_t)~0x80;
 }
+#endif /* BOOTSTUB */
 
 /* Issue one SPI flash controller transaction.
  *
@@ -86,11 +82,13 @@ static void flash_clear_io_modes(void) {
  * non-deterministic. */
 #ifdef BOOTSTUB
 static uint8_t flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_bytes, uint16_t data_len, uint8_t write_buf) {
-  if (addr_bytes > 3 || data_len > FLASH_BUFFER_SIZE) return 0;
+  uint8_t ok;
+  uint8_t read_buf = !write_buf && data_len;
+  if (addr_bytes > 7 || data_len > FLASH_BUFFER_SIZE) return 0;
   if (!flash_poll_busy()) return 0;
   if (!write_buf && data_len) {
-    if (!flash_poll_dma_idle()) return 0;
     flash_clear_dma_status();
+    if (!flash_poll_dma_idle()) return 0;
   }
 
   REG_FLASH_CON = 0;
@@ -106,14 +104,12 @@ static uint8_t flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_bytes, uint16_
   REG_FLASH_DATA_LEN_HI = (data_len >> 8) & 0xFF;
   REG_FLASH_DATA_LEN_LO = data_len & 0xFF;
   REG_FLASH_CSR = 0x01;
-  if (!flash_poll_busy()) return 0;
-  if (!write_buf && data_len) {
-    if (!flash_poll_dma_idle()) return 0;
-  }
+  ok = flash_poll_busy();
+  if (ok && !write_buf && data_len) ok = flash_poll_dma_idle();
   REG_FLASH_MODE &= (uint8_t)~FLASH_MODE_ENABLE;
   flash_clear_io_modes();
   if (!write_buf && data_len) flash_clear_dma_status();
-  return 1;
+  return ok;
 }
 #else
 static uint8_t flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_bytes, uint16_t data_len, uint8_t write_buf) {
@@ -132,7 +128,7 @@ static uint8_t flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_bytes, uint16_
   REG_FLASH_CSR = 0x01;
   { uint16_t t = 0xFFFF; do { if (!(REG_FLASH_CSR & 0x01)) break; } while (--t); }
   REG_FLASH_MODE = 0;
-  return 1;
+  return !(REG_FLASH_CSR & 0x01);
 }
 #endif
 
