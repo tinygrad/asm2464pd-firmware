@@ -116,11 +116,6 @@ static void cc_ctrl_enable_events(void) {
   REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x10;
   REG_CPU_DMA_READY &= 0xEF;
   REG_CPU_DMA_READY = (REG_CPU_DMA_READY & 0xF8) | 0x04;
-  /* Arm the 1s DMA timer (stock fw func_e352: CC90|=5, CC92=0, CC93=0xC8, CC91=1). */
-  REG_CPU_DMA_CTRL_CC90 = (uint8_t)(REG_CPU_DMA_CTRL_CC90 | 0x05);
-  REG_CPU_DMA_DATA_LO = 0x00;
-  REG_CPU_DMA_DATA_HI = 0xC8;
-  REG_CPU_DMA_INT = 0x01;
 }
 
 /* Reset the PD policy-engine state block, set substate=init, seed timers, enable CC events. */
@@ -189,6 +184,11 @@ static void pd_keystone_init(void) {
   u4_cfg.mode_flag = USB4_MODE_FLAGS;
   cc_pd_phy_term_init();
   pd_internal_state_init();
+  /* Arm the 1s DMA timer once at boot (stock fw func_e352). */
+  REG_CPU_DMA_CTRL_CC90 = (uint8_t)(REG_CPU_DMA_CTRL_CC90 | 0x05);
+  REG_CPU_DMA_DATA_LO = 0x00;
+  REG_CPU_DMA_DATA_HI = 0xC8;
+  REG_CPU_DMA_INT = 0x01;
 }
 
 /* PD-interrupt handler: priority demux over the PD RX event registers E40F/E410, W1C-acking each. */
