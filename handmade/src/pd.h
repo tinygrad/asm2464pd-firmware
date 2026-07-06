@@ -68,21 +68,21 @@ static void pd_cmd_engine_cfg(void) {  /* da51 */
 }
 
 /* Program CC Rp/Rd termination and arm the PD command/RX engine so the host sees a sink attach. */
+static void pd_xfer_dma_run(uint8_t addr_hi) {
+  REG_XFER_DMA_CTRL &= 0xF8; REG_XFER_DMA_ADDR_LO = 0;
+  REG_XFER_DMA_ADDR_HI = addr_hi; REG_XFER_DMA_CMD = 0x01;
+  pd_wait(&REG_XFER_DMA_CMD, 0x02, 1);
+  REG_XFER_DMA_CMD = 0x02;
+}
 static void cc_pd_phy_term_init(void) {
   REG_CMD_CONFIG = (REG_CMD_CONFIG & 0xBF) | 0x40;
   REG_CMD_CFG_E40A = 0x0F;
   REG_CMD_CFG_E413 &= 0xFE;
   REG_CMD_CFG_E413 &= 0xFD;
   REG_CMD_CTRL_E400 &= 0x7F;
-  REG_XFER_DMA_CTRL &= 0xF8; REG_XFER_DMA_ADDR_LO = 0;
-  REG_XFER_DMA_ADDR_HI = 0x0A; REG_XFER_DMA_CMD = 0x01;
-  pd_wait(&REG_XFER_DMA_CMD, 0x02, 1);
-  REG_XFER_DMA_CMD = 0x02;
+  pd_xfer_dma_run(0x0A);
   REG_CMD_CONFIG = (REG_CMD_CONFIG & 0xFE) | 0x01;
-  REG_XFER_DMA_CTRL &= 0xF8; REG_XFER_DMA_ADDR_LO = 0;
-  REG_XFER_DMA_ADDR_HI = 0x3C; REG_XFER_DMA_CMD = 0x01;
-  pd_wait(&REG_XFER_DMA_CMD, 0x02, 1);
-  REG_XFER_DMA_CMD = 0x02;
+  pd_xfer_dma_run(0x3C);
   pd_wait(&REG_CMD_STATUS_E402, 0x08, 0);
   REG_CMD_CTRL_E409 &= 0xFE;
   REG_CMD_CTRL_E409 = (REG_CMD_CTRL_E409 & 0xBF) | 0x40;
