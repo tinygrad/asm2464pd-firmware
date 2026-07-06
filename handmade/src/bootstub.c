@@ -40,6 +40,39 @@ static void uart_puthex(uint8_t val) {
   uart_putc(hex[val & 0x0F]);
 }
 
+static void rmw(uint16_t addr, uint8_t and_mask, uint8_t or_val) {
+  XDATA_REG8(addr) = (XDATA_REG8(addr) & and_mask) | or_val;
+}
+
+static void usb_serdes_tune_lane(uint16_t base) {
+  rmw(base + 0x02, 0x1F, 0xA0); rmw(base + 0x03, 0xF3, 0x00);
+  rmw(base + 0x04, 0x8F, 0x40); rmw(base + 0x05, 0x0F, 0x60);
+  rmw(base + 0x06, 0xF0, 0x07); rmw(base + 0x07, 0x1F, 0x60);
+  rmw(base + 0x09, 0x0F, 0x90); rmw(base + 0x0B, 0xC0, 0x0A);
+  rmw(base + 0x0C, 0xFD, 0x00); rmw(base + 0x10, 0xE0, 0x03);
+  rmw(base + 0x11, 0xE0, 0x08); rmw(base + 0x12, 0x1F, 0x20);
+  rmw(base + 0x13, 0xF3, 0x04); rmw(base + 0x14, 0xFF, 0x06);
+  rmw(base + 0x15, 0xF0, 0x0C); rmw(base + 0x16, 0xF0, 0x0F);
+  rmw(base + 0x17, 0x1F, 0x40); rmw(base + 0x19, 0x0F, 0x80);
+  rmw(base + 0x1A, 0xF0, 0x0E); rmw(base + 0x1B, 0xC0, 0x00);
+  rmw(base + 0x1C, 0xFD, 0x02); rmw(base + 0x20, 0xE0, 0x03);
+  rmw(base + 0x21, 0xE0, 0x08); rmw(base + 0x22, 0xE0, 0x0A);
+  rmw(base + 0x23, 0xFC, 0x02); rmw(base + 0x24, 0xF0, 0x07);
+  rmw(base + 0x25, 0xF0, 0x0F); rmw(base + 0x26, 0xF0, 0x0B);
+  rmw(base + 0x27, 0x1F, 0x40); rmw(base + 0x29, 0x0F, 0x80);
+  rmw(base + 0x2A, 0xFF, 0x01); rmw(base + 0x2B, 0xC0, 0x00);
+  rmw(base + 0x2C, 0xFD, 0x02); rmw(base + 0x3C, 0xFD, 0x00);
+  rmw(base + 0x43, 0xC3, 0x1C); rmw(base + 0x45, 0xF0, 0x0B);
+  rmw(base + 0x46, 0xF0, 0x0D); rmw(base + 0x49, 0x80, 0x41);
+  rmw(base + 0x4A, 0xFE, 0x00); rmw(base + 0x4C, 0xF1, 0x0E);
+  rmw(base + 0x4E, 0xFF, 0x40); rmw(base + 0x5B, 0xE0, 0x1B);
+}
+
+static void usb_phy_tune(void) {
+  usb_serdes_tune_lane(0xC280);
+  usb_serdes_tune_lane(0xC300);
+}
+
 /* ---- flash ---- */
 
 static void flash_init(void) {
@@ -115,12 +148,13 @@ static void usb_send_data(uint16_t len) {
 }
 
 static void usb_handle_set_address(uint8_t addr) {
-  REG_USB_ADDR_CTRL = addr;
-  REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_IN;
+  REG_USB_INT_MASK_9090 = 0x80 | (addr & 0x7F);
+  REG_USB_EP_CTRL_91D0 = 0x02;
+  usb_send_zlp();
 }
 
 static __code const uint8_t usb_dev_desc[] = {
-  0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40,
+  0x12, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x09,
   USB_VID & 0xFF, USB_VID >> 8, USB_PID & 0xFF, USB_PID >> 8,
   0x01, 0x00, 0x01, 0x02, 0x00, 0x01
 };
@@ -128,6 +162,12 @@ static __code const uint8_t usb_dev_desc[] = {
 static __code const uint8_t usb_cfg_desc[] = {
   0x09, 0x02, 0x12, 0x00, 0x01, 0x01, 0x00, 0xC0, 0x00,
   0x09, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00
+};
+
+static __code const uint8_t usb_bos_desc[] = {
+  0x05, 0x0F, 0x16, 0x00,
+  0x07, 0x10, 0x02, 0x02, 0x00, 0x00, 0x00,
+  0x0A, 0x10, 0x03, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x00, 0x00
 };
 
 static __code const char usb_str_mfg[] = "tiny";
@@ -144,7 +184,7 @@ static void usb_send_string(__code const char *s, uint8_t max_len) {
   usb_send_data(2 + 2 * n);
 }
 
-static void usb_handle_get_descriptor(uint8_t type, uint8_t idx, uint16_t wLen) {
+static void usb_handle_get_descriptor(uint8_t type, uint8_t idx) {
   __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
   if (type == 1) {
     uint8_t i;
@@ -154,6 +194,10 @@ static void usb_handle_get_descriptor(uint8_t type, uint8_t idx, uint16_t wLen) 
     uint8_t i;
     for (i = 0; i < sizeof(usb_cfg_desc); i++) buf[i] = usb_cfg_desc[i];
     usb_send_data(sizeof(usb_cfg_desc));
+  } else if (type == 15) {
+    uint8_t i;
+    for (i = 0; i < sizeof(usb_bos_desc); i++) buf[i] = usb_bos_desc[i];
+    usb_send_data(sizeof(usb_bos_desc));
   } else if (type == 3) {
     if (idx == 0) { buf[0] = 4; buf[1] = 0x03; buf[2] = 0x09; buf[3] = 0x04; usb_send_data(4); }
     else if (idx == 1) usb_send_string(usb_str_mfg, 30);
@@ -170,8 +214,6 @@ static void usb_init_controller(void) {
   REG_CPU_MODE_NEXT = 0x21;
   REG_HDDPC_CTRL |= 0x20;
   REG_PCIE_LANE_CTRL_C659 |= 0x01;
-  /* Wait for PHY/clock ready */
-  { uint8_t b; do { b = REG_PHY_EXT_B3; } while ((b & 0x30) == 0); }
   REG_USB_PHY_CTRL_91D1 = 0x0F;
   REG_BUF_CFG_9300 = 0x0C;
   REG_BUF_CFG_9301 = 0xC0;
@@ -193,25 +235,9 @@ static void usb_init_controller(void) {
   REG_USB_PHY_CTRL_91C0 &= ~0x01;
   REG_POWER_STATUS &= ~0x40;
   REG_INT_STATUS_C800 = 0x01;
-  REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x12;  /* enable USB + system interrupts */
-  REG_INT_USB_STATUS = 0x01;  /* enable USB interrupt gate */
+  REG_INT_USB_STATUS = 0x01;
+  REG_INT_ENABLE = (REG_INT_ENABLE & 0xEF) | 0x12;
   REG_USB_DATA_L = 0x00;
-  /* PHY link-up arm */
-  REG_TIMER0_CSR = 0x04;
-  REG_TIMER0_CSR = 0x02;
-  REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x04;
-  REG_TIMER0_THRESHOLD_HI = 0x01;
-  REG_TIMER0_THRESHOLD_LO = 0x8F;
-  REG_TIMER0_CSR = 0x01;
-  { uint16_t spin = 0;
-    while (!((REG_PHY_COMPLETION_E318 & 0x10) || (REG_TIMER0_CSR & 0x02)) && ++spin < 0xFFFF); }
-  uart_puts("[PHY ");
-  uart_puthex(REG_PHY_COMPLETION_E318);
-  uart_puts(" 91C0=");
-  uart_puthex(REG_USB_PHY_CTRL_91C0);
-  uart_puts("]\n");
-  REG_TIMER0_CSR = 0x04;
-  REG_TIMER0_CSR = 0x02;
 }
 
 static void usb_attach_controller(void) {
@@ -304,7 +330,7 @@ static void handle_setup(void) {
   if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
     usb_handle_set_address(wValL);
   } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-    usb_handle_get_descriptor(wValH, wValL, wLen);
+    usb_handle_get_descriptor(wValH, wValL);
   } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
     usb_send_zlp();
   } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
@@ -338,6 +364,7 @@ static void handle_setup(void) {
 
 static void dfu_loop(void) {
   uart_puts("[DFU]\n");
+  usb_phy_tune();
   uart_puts("[USB init]\n");
   is_usb2 = 0;
   usb_init_controller();
