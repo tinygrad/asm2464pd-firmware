@@ -137,7 +137,7 @@ bootstub: $(BOOTSTUB_BIN)
 	@ls -la $(BOOTSTUB_BIN)
 
 # ===== Userfw image (bootstub-loaded) =====
-APP_LDFLAGS = --code-loc 0x4000 --code-size 0xC000 --xram-loc 0x0B60 --xram-size 0xA0 --iram-size 0x100
+APP_LDFLAGS = --code-loc 0x2430 --code-size 0xDBD0 --xram-loc 0x0B60 --xram-size 0xA0 --iram-size 0x100
 APP_HEX = $(BUILD_DIR)/firmware_userfw.ihx
 APP_BIN = $(BUILD_DIR)/firmware_userfw.bin
 APP_IMAGE = $(BUILD_DIR)/firmware_image.bin

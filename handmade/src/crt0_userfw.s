@@ -1,7 +1,8 @@
 ; crt0_userfw.s - Startup for bootstub-loaded userfw
 ;
-; The userfw lives in flash at 0x4000 and is executed directly from flash
-; (mapped to CODE space). Interrupt vectors are at 0x4000+.
+; The bootstub copies this image from flash to CODE 0x2400 using the
+; PCON bit 4 (MEMSEL) code_write mechanism. Interrupt vectors are at
+; 0x2400+ and the bootstub's crt0 trampolines to them.
 
     .module crt0_userfw
     .globl  _main
@@ -13,34 +14,34 @@
     ; Linker-computed stack base (start of SSEG, after all IDATA/overlay)
     .globl  __start__stack
 
-; Interrupt vectors — absolute at 0x4000 (where bootstub trampolines to)
+; Interrupt vectors — absolute at 0x2400 (where bootstub trampolines to)
     .area   VECTOR  (ABS,CODE)
 
-    .org    0x4000
+    .org    0x2400
 __reset:
     ljmp    __sdcc_program_startup
 
-    .org    0x4003
+    .org    0x2403
 __ext0_vector:
     ljmp    _int0_isr
 
-    .org    0x400B
+    .org    0x240B
 __timer0_vector:
-    reti
+    ljmp    _int1_isr
 
-    .org    0x4013
+    .org    0x2413
 __ext1_vector:
     ljmp    _int1_isr
 
-    .org    0x401B
+    .org    0x241B
 __timer1_vector:
     reti
 
-    .org    0x4023
+    .org    0x2423
 __serial_vector:
     reti
 
-    .org    0x402B
+    .org    0x242B
 __timer2_vector:
     reti
 
@@ -59,6 +60,7 @@ clear_ram_loop:
 
     ; Initialize DPX = 0 (bank 0)
     mov     0x96, #0x00
+    mov     0xA8, #0x00     ; IE = 0, main re-enables interrupts
 
     ; Jump to main
     ljmp    _main

@@ -84,7 +84,7 @@ static void flash_clear_io_modes(void) {
 static uint8_t flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_bytes, uint16_t data_len, uint8_t write_buf) {
   uint8_t ok;
   uint8_t read_buf = !write_buf && data_len;
-  if (addr_bytes > 7 || data_len > FLASH_BUFFER_SIZE) return 0;
+  if (addr_bytes > 3 || data_len > FLASH_BUFFER_SIZE) return 0;
   if (!flash_poll_busy()) return 0;
   if (!write_buf && data_len) {
     flash_clear_dma_status();

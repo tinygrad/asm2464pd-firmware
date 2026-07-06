@@ -20,10 +20,10 @@ __sfr __at(0xA8) IE;
 #define DFU_COOKIE          (*(__xdata volatile uint32_t *)0x5FF8)
 #define DFU_COOKIE_MAGIC    0xDF0BC0DEUL
 
-#define USERFW_FLASH_OFFSET   0x4104UL
+#define USERFW_FLASH_OFFSET   0x4000UL
 #define USERFW_HEADER_SIZE    0x40UL
 #define USERFW_HEADER_CRC_LEN 0x20U
-#define USERFW_CODE_BASE      0x4000
+#define USERFW_CODE_BASE      0x2400
 #define USERFW_BODY_LIMIT     0xE000UL
 #define USERFW_FLASH_END      (USERFW_FLASH_OFFSET + USERFW_HEADER_SIZE + USERFW_BODY_LIMIT)
 #define SECTOR_SIZE           0x1000UL
@@ -300,17 +300,6 @@ void main(void) {
     dfu_loop();
   }
 
-  /* Check if flash is mapped to CODE space by reading from CODE 0x4000 */
-  {
-    __code uint8_t *p = (__code uint8_t *)0x4000;
-    uart_puts("[C4:");
-    uart_puthex(p[0]);
-    uart_puthex(p[1]);
-    uart_puthex(p[2]);
-    uart_puthex(p[3]);
-    uart_puts("]\n");
-  }
-
   if (hdr.body_len > USERFW_BODY_LIMIT) {
     uart_puts("[BS bad-size]\n");
     dfu_loop();
@@ -322,11 +311,12 @@ void main(void) {
   }
 
   uint32_t base = USERFW_FLASH_OFFSET + sizeof(hdr);
-  /* Userfw is executed directly from flash — no code_write needed */
-  (void)base; (void)load_region;
+  if (hdr.body_len && !load_region(base, USERFW_CODE_BASE, hdr.body_len)) {
+    uart_puts("[BS load-fail]\n");
+    dfu_loop();
+  }
 
   DFU_COOKIE = 0;
   uart_puts("[BS->APP]\n");
-  timer_delay_ms(1000);
-  __asm ljmp 0x4000 __endasm;
+  __asm ljmp 0x2400 __endasm;
 }
