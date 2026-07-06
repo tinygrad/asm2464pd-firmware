@@ -2623,4 +2623,155 @@
 #define REG_ROUTEROP_ENGINE_CTRL_EC00      XDATA_REG8V(0xEC00)  /* USB4 router-op engine enable; bit0 = enable */
 #define REG_ROUTEROP_CFG_EC05              XDATA_REG8V(0xEC05)  /* router-op init config; bit0 cleared at e56f */
 
+//=============================================================================
+// Page-1 (DPX=1) register offsets
+//=============================================================================
+// These are OFFSETS ONLY. Access goes through the per-access banking macros in
+// sb.h (SB_RD/SB_WR, P12_RD/P12_WR, P1_RD/P1_WR) which toggle DPX around each
+// MOVX.
+
+/* ---- Sideband transport regs: SB_RD/SB_WR, 0x2800 window ---- */
+#define SB_ADP0_CTRL        0x00u
+#define SB_ADP1_CTRL        0x01u
+#define SB_ADP0_EN          0x04u
+#define SB_ROUTEROP_COMMIT  0x06u
+#define SB_DESC_COUNT_GO    0x0Cu
+#define SB_DESC_CMD         0x15u
+#define SB_USB_MODE         0x1Cu
+#define SB_CH_ROUTE_LO(p)   (0x20u + (p))
+#define SB_CH_ROUTE_HI(p)   (0x22u + (p))
+#define SB_TRANSPORT_STAT   0x24u
+#define SB_ROUTEROP_EVENT   0x26u
+#define SB_CONN_EDGE(p)     (0x28u + 2u*(p))
+#define SB_CONNECT_EVENT    0x2Cu
+#define SB_CONNECT_STATE    0x2Du
+#define SB_LINK_REINIT_50   0x50u
+#define SB_LINK_REINIT_5A   0x5Au
+#define SB_LANE_PRESENT(l)  ((l) ? 0x60u : 0x56u)
+#define SB_CONNECT_PRESENT_57 0x57u
+#define SB_CONNECT_PRESENT_61 0x61u
+#define SB_CL0_ACK          0x64u
+#define SB_BOND_EVENT       0x66u
+#define SB_LINK_EDGE(p)     (0x81u + 2u*(p))
+#define SB_CL0_EVENT        0x9Eu
+#define SB_LANE_CL(l)       (0xA0u + (l))
+#define SB_CH2_ROUTE_LO(l)  (0xA4u + (l))
+#define SB_CH2_ROUTE_HI(l)  (0xA6u + (l))
+#define SB_KEYSTONE_BA      0xBAu
+#define SB_KEYSTONE_BD      0xBDu
+#define SB_PORT_SVC         0xC9u
+#define SB_PEER_CL0         0xD4u
+#define SB_ROUTE_ACK        0xD8u
+#define SB_ROUTE_GATE       0xEDu
+#define SB_EVENT_CLEAR_F6   0xF6u
+#define SB_LANESEL          0x40u
+#define SB_RATE_STROBE      0x65u
+#define SB_RATE_HI(l)       (0x6Au + 2u*(l))
+#define SB_RATE_LO(l)       (0x6Bu + 2u*(l))
+#define SB_WIDTH_LO         0x74u
+#define SB_WIDTH_HI         0x75u
+
+#define SB_KEYSTONE_05      0x05u
+#define SB_OP_CTRL          0x0Fu
+#define SB_OP_TRIGGER       0x10u
+#define SB_PHY_CTRL_1D      0x1Du
+#define SB_EVENT_CLR_27     0x27u
+#define SB_EVENT_CLR_29     0x29u
+#define SB_EVENT_CLR_2B     0x2Bu
+#define SB_PHY_CFG_49       0x49u
+#define SB_MASK_53          0x53u
+#define SB_MASK_5D          0x5Du
+#define SB_EVENT_CLR_67     0x67u
+#define SB_LINK_EDGE_STAT   0x80u
+#define SB_EVENT_CLR_82     0x82u
+#define SB_EVENT_CLR_84     0x84u
+#define SB_DESC_CFG_8F      0x8Fu
+#define SB_CFG_94           0x94u
+#define SB_CFG_95           0x95u
+#define SB_CFG_96           0x96u
+#define SB_CFG_98           0x98u
+#define SB_CFG_99           0x99u
+#define SB_EVENT_CLR_9F     0x9Fu
+#define SB_EVENT_CLR_C4     0xC4u
+#define SB_EVENT_CLR_C8     0xC8u
+#define SB_EVENT_CLR_CF     0xCFu
+#define SB_SERDES_CTRL      0xCEu
+#define SB_LANE_CFG_D1      0xD1u
+
+#define BOND_EVT_BONDED     0x01u
+#define BOND_EVT_L0_ABR2    0x04u
+#define BOND_EVT_L0_FAIL    0x08u
+#define BOND_EVT_L1_ABR2    0x20u
+#define BOND_EVT_L1_FAIL    0x40u
+#define CL0_EVT_L0          0x01u
+#define CL0_EVT_L1          0x02u
+#define CL0_EVT_L0_TRAIN    0x10u
+#define CL0_EVT_L1_TRAIN    0x20u
+#define ROUTEROP_EVT_PENDING 0x02u
+#define ROUTEROP_EVT_L0_DIS  0x04u
+#define ROUTEROP_EVT_L1_DIS  0x10u
+
+/* ---- SB TX window: SBTX_RD/SBTX_WR, 0x2900 ---- */
+#define SBTX_DESC_TYPE      0x00u
+#define SBTX_DESC_DIR       0x01u
+#define SBTX_DESC_BODY      0x02u
+
+/* ---- Host connect descriptor plane: SBP2_RD, 0x2A00 + (port<<8) ---- */
+#define SBP2_DESC_TYPE      0x00u
+#define SBP2_DESC_LEN       0x01u
+#define SBP2_DESC_BODY      0x02u
+
+/* ---- Router config-space / descriptor engine: P12_RD/P12_WR, 0x1200 ---- */
+#define DE_LANESEL          0x34u
+#define DE_CTRL             0x35u
+#define DE_OPCODE           0x36u
+#define DE_COMMIT           0x37u
+#define DE_KICK             0x38u
+#define DE_WR(i)            (0x3Cu + (i))
+#define DE_RD(i)            (0x40u + (i))
+#define DE_TRANSPORT(i)     (0x4Cu + (i))
+#define DE_ENG_RESET_03     0x03u
+#define DE_ENG_DATA_BASE    0x12u
+#define DE_ENG_RESET_7A     0x7Au
+#define DE_ENG_RESET_8F     0x8Fu
+#define DE_ENG_RESET_90     0x90u
+#define DE_TRANSPORT_TRIG   0x58u
+
+/* ---- Raw page-1 tunnel/link/event regs: P1_RD/P1_WR ---- */
+#define P1_PORT_CTRL_0000   0x0000u
+#define P1_LANE_FLIP(i)     (0x0100u + (i))
+#define P1_ROUTE_ACK        0x0109u
+#define P1_LANE_EN_010B     0x010Bu
+#define P1_ADP_LINK_CFG_1206   0x1206u
+#define P1_DESC_CTRL_1235      0x1235u
+#define P1_DESC_CMD_1236       0x1236u
+#define P1_DESC_COMMIT_1237    0x1237u
+#define P1_DESC_RESULT_1243    0x1243u
+#define P1_LINK_PHY_CFG_1267   0x1267u
+#define P1_TUNNEL_PHY_1285     0x1285u
+#define P1_TUNNEL_PHY_CTRL_1334 0x1334u
+#define P1_TUNNEL_PHY_CFG_1335 0x1335u
+#define P1_TUNNEL_PHY_134D     0x134Du
+#define P1_XPORT_LANE_EVT_1404 0x1404u
+#define P1_XPORT_LANE_EVT_1405 0x1405u
+#define P1_XPORT_TRIG_1511     0x1511u
+#define P1_XPORT_RESET_1802    0x1802u
+#define P1_RXPLL_CFG_1808      0x1808u
+#define P1_PCIE_LINK_1835      0x1835u
+#define P1_PCIE_LANE_SLOT(l)   (0x78AFu + 0x100u*(l))
+#define P1_LINK_MODE_011F      0x011Fu
+#define P1_USB4_WIDTH_EVT_124E 0x124Eu
+#define P1_TUNNEL_CFG_4084     0x4084u
+#define P1_PCIE_PHY_408D       0x408Du
+#define P1_LINK_GEN_40B0       0x40B0u
+#define P1_TUNNEL_CFG_5084     0x5084u
+#define P1_PCIE_PHY_508D       0x508Du
+#define P1_PCIE_PHY_508F       0x508Fu
+#define P1_PCIE_PHY_5204       0x5204u
+#define P1_TUNNEL_CFG_6025     0x6025u
+#define P1_TUNNEL_CFG_6043     0x6043u
+#define P1_PCIE_PHY_7041       0x7041u
+#define P1_PCIE_PHY_7104       0x7104u
+#define P1_TUNNEL_PHY_2805     0x2805u
+
 #endif /* __REGISTERS_H__ */

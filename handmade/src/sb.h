@@ -1,7 +1,6 @@
 #ifndef SB_H
 #define SB_H
 
-#include "page1_regs.h"
 
 static void boot_phy_set_link_mode(uint8_t param);  /* dd42 */
 
