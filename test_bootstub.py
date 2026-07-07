@@ -46,6 +46,15 @@ def find_device(vid, pid, bus=None, timeout=10):
 
 def enter_dfu(dev):
     print("[dfu] entering DFU mode...")
+    # Detach kernel driver and set configuration to enable vendor requests
+    for cfg in dev:
+        for intf in cfg:
+            if dev.is_kernel_driver_active(intf.bInterfaceNumber):
+                dev.detach_kernel_driver(intf.bInterfaceNumber)
+    try:
+        dev.set_configuration()
+    except Exception:
+        pass
     try:
         dev.ctrl_transfer(0x40, 0xF3, 0xF4, 0, None, timeout=1000)
     except Exception:
