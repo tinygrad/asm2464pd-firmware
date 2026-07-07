@@ -305,7 +305,11 @@ static void dfu_loop(void) {
 /* ---- entry ---- */
 
 void main(void) {
+  /* Full UART re-init in case mask ROM changed baud rate */
+  REG_UART_LCR = 0x03;  /* 8N1, no parity */
   REG_UART_LCR &= ~LCR_PARITY_MASK;
+  /* Send 0x55 0x55 0x55 as a sync pattern before [BS] */
+  uart_putc(0x55); uart_putc(0x55); uart_putc(0x55);
   uart_puts("\n[BS]\n");
 
   usb_init_endpoint_state();

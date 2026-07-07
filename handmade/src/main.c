@@ -211,6 +211,15 @@ static void handle_usb_control(void) {
         DESC_BUF[vi] = val;
       }
       usb_send_data(rlen);
+    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE6) {
+      /* Vendor read CODE via control.  wValue=addr, wLength=size. */
+      uint16_t addr = ((uint16_t)wValH << 8) | wValL;
+      uint16_t maxlen = is_usb2 ? 64 : 512;
+      uint16_t rlen = (wLen > maxlen) ? maxlen : wLen;
+      __code uint8_t *p = (__code uint8_t *)addr;
+      uint16_t vi;
+      for (vi = 0; vi < rlen; vi++) DESC_BUF[vi] = p[vi];
+      usb_send_data(rlen);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xE5) {
       /* Vendor write XDATA via control.  wValue=addr, wIndex low=val.
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
@@ -526,6 +535,10 @@ void main(void) {
   uart_puts("]\n");
   u4_entered_usb_mode = 0;
 
+  // enable interrupts early so USB control requests (SET_CONFIGURATION, vendor)
+  // are handled during USB4 PD negotiation. EX0 = USB INT0, EX1 = PD/USB4 INT1.
+  IE = (uint8_t)(IE_EA | IE_EX0 | (IS_USB4() ? (IE_EX1 | IE_ET0) : 0));
+
   if (IS_USB4()) {
     usb4_state_prepare();
     usb_pipe_engine_init();
@@ -563,10 +576,6 @@ void main(void) {
   uint8_t usb4_fallback_ticks = 0;
   uint8_t usb4_usb_inited = 0;
   while (1) {
-  // enable interrupts early so USB control requests (SET_CONFIGURATION, vendor)
-  // are handled during USB4 PD negotiation. EX0 = USB INT0, EX1 = PD/USB4 INT1.
-  IE = (uint8_t)(IE_EA | IE_EX0 | (IS_USB4() ? (IE_EX1 | IE_ET0) : 0));
-
   if (IS_USB4()) {
       /* Poll cc_pd_timer_tick from the main loop when PD hasn't connected yet.
        * The 1s DMA timeout arms the USB4 mode entry fallback for USB3-only hosts
