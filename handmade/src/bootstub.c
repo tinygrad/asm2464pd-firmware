@@ -311,6 +311,17 @@ void main(void) {
   usb_init_endpoint_state();
   flash_init();
 
+  /* Check DFU cookie */
+  {
+    uint32_t cookie = DFU_COOKIE;
+    uart_puts("[CK:");
+    uart_puthex(cookie & 0xFF);
+    uart_puthex((cookie >> 8) & 0xFF);
+    uart_puthex((cookie >> 16) & 0xFF);
+    uart_puthex((cookie >> 24) & 0xFF);
+    uart_puts("]\n");
+  }
+
   if (DFU_COOKIE == DFU_COOKIE_MAGIC) {
     DFU_COOKIE = 0;
     dfu_loop();

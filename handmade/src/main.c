@@ -251,9 +251,7 @@ static void handle_usb_control(void) {
         XDATA_REG8V(0x5FFA) = 0x0B;
         XDATA_REG8V(0x5FF9) = 0xC0;
         XDATA_REG8V(0x5FF8) = 0xDE;
-        /* Soft reset: jump directly to bootstub at CODE 0x0000.
-         * XDATA (including DFU cookie) is preserved. */
-        __asm ljmp 0x0000 __endasm;
+        REG_CPU_RESET = CPU_RESET_TRIGGER;
         while (1);
       }
       if (wValL & 0x01) pcie_power_on();
@@ -556,10 +554,6 @@ void main(void) {
     usb_init_controller(0);
   }
 
-  // enable interrupts early so USB control requests (SET_CONFIGURATION, vendor)
-  // are handled during USB4 PD negotiation. EX0 = USB INT0, EX1 = PD/USB4 INT1.
-  IE = (uint8_t)(IE_EA | IE_EX0 | (IS_USB4() ? (IE_EX1 | IE_ET0) : 0));
-
   // INA231 power monitor: init in both modes so the 0xC0 hw_status vendor
   // request works over USB3 and over the USB4-tunneled USB function.
   i2c_init();
@@ -569,7 +563,11 @@ void main(void) {
   uint8_t usb4_fallback_ticks = 0;
   uint8_t usb4_usb_inited = 0;
   while (1) {
-    if (IS_USB4()) {
+  // enable interrupts early so USB control requests (SET_CONFIGURATION, vendor)
+  // are handled during USB4 PD negotiation. EX0 = USB INT0, EX1 = PD/USB4 INT1.
+  IE = (uint8_t)(IE_EA | IE_EX0 | (IS_USB4() ? (IE_EX1 | IE_ET0) : 0));
+
+  if (IS_USB4()) {
       /* Poll cc_pd_timer_tick from the main loop when PD hasn't connected yet.
        * The 1s DMA timeout arms the USB4 mode entry fallback for USB3-only hosts
        * where PD never arrives.  Once PD is seen, INT1 services cc_pd_timer_tick. */
