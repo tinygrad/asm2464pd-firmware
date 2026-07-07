@@ -1620,7 +1620,7 @@
 #define REG_FLASH_ADDR_MD       XDATA_REG8(0xC8A2)  /* SPI addr[15:8] */
 #define REG_FLASH_DATA_PAGE_CNT XDATA_REG8(0xC8A3)  /* Transfer length: page count (256 bytes per page) */
 #define REG_FLASH_DATA_BYTE_OFS XDATA_REG8(0xC8A4)  /* Transfer length: byte offset within page */
-#define REG_FLASH_DATA_LEN      REG_FLASH_DATA_BYTE_OFS  /* Legacy alias (low byte) */
+#define REG_FLASH_DATA_LEN      REG_FLASH_DATA_PAGE_CNT  /* Legacy alias */
 #define REG_FLASH_DATA_LEN_LO   REG_FLASH_DATA_BYTE_OFS  /* Legacy alias: low byte = byte offset */
 #define REG_FLASH_DATA_LEN_HI   REG_FLASH_DATA_PAGE_CNT  /* Legacy alias: high byte = page count */
 #define REG_FLASH_DIV           XDATA_REG8(0xC8A6)  /* SPI clock divider */
