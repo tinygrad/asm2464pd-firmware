@@ -159,6 +159,43 @@ static uint8_t dfu_range_ok(uint32_t addr, uint32_t len, uint32_t end) {
   return len <= (end - addr);
 }
 
+enum { XR_NOOP = 0, XR_OK, XR_STALL };
+
+/* Process a deferred write/erase after DATA_OUT payload has landed in DESC_BUF.
+ * Called from STAT_OUT (USB 3.0) or STAT_IN (USB 2.0). */
+static uint8_t run_deferred_xfer_op(void) {
+  if (!usb_wait_ep0_dma_idle()) return XR_STALL;
+  if (xfer_op == XOP_WRITE) {
+    uint32_t addr = xfer_op_addr;
+    uint16_t len = xfer_op_len;
+    xfer_op = XOP_NONE;
+    __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
+    if (!flash_unlock()) { uart_puts("[U-FAIL]\n"); return XR_STALL; }
+    if (!flash_wren()) { uart_puts("[W-FAIL]\n"); return XR_STALL; }
+    uint16_t i;
+    for (i = 0; i < len; i++) FLASH_BUF[i] = buf[i];
+    if (!flash_cmd(FLASH_CMD_PAGE_PROGRAM, addr, FLASH_ADDR_LEN_3BYTE, len, 1)) { uart_puts("[C-FAIL]\n"); return XR_STALL; }
+    if (!flash_wait_wip()) { uart_puts("[WIP-FAIL]\n"); return XR_STALL; }
+    xfer_addr = addr + len;
+    return XR_OK;
+  }
+  if (xfer_op == XOP_ERASE) {
+    xfer_op = XOP_NONE;
+    __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
+    uint32_t addr = *(__xdata uint32_t *)buf;
+    uint32_t len = *(__xdata uint32_t *)(buf + 4);
+    if (!(addr & (SECTOR_SIZE - 1)) && !(len & (SECTOR_SIZE - 1)) &&
+        dfu_range_ok(addr, len, USERFW_ERASE_END)) {
+      uint32_t off;
+      for (off = 0; off < len; off += SECTOR_SIZE)
+        if (!flash_erase_sector(addr + off)) return XR_STALL;
+      return XR_OK;
+    }
+    return XR_STALL;
+  }
+  return XR_NOOP;
+}
+
 static void handle_setup(void) {
   uint8_t bmReq = REG_USB_SETUP_BMREQ;
   uint8_t bReq = REG_USB_SETUP_BREQ;
@@ -173,15 +210,17 @@ static void handle_setup(void) {
   } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
     usb_send_zlp();
   } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
+    if (wLen != 8) { stall_ep0(); return; }
+    REG_USB_DMA_TRIGGER = USB_DMA_RECV;  /* arm DATA_OUT receive */
     xfer_op = XOP_ERASE;
   } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB1) {
     xfer_addr = ((uint32_t)REG_USB_SETUP_WIDX_L << 16) | ((uint16_t)wValH << 8) | wValL;
     usb_send_zlp();
   } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB2) {
-    uart_puts("[B2]\n");
     if (wLen == 0 || wLen > 64) { stall_ep0(); return; }
     if (!dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) { stall_ep0(); return; }
     if ((uint16_t)(xfer_addr & 0xFF) + wLen > 0x100) { stall_ep0(); return; }
+    REG_USB_DMA_TRIGGER = USB_DMA_RECV;  /* arm DATA_OUT receive */
     xfer_op_addr = xfer_addr;
     xfer_op_len = wLen;
     xfer_op = XOP_WRITE;
@@ -223,46 +262,28 @@ static void dfu_loop(void) {
         REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
         handle_setup();
       } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
-        /* On USB 3.0, STAT_OUT fires for the status phase of host-to-device
-         * transfers. Process deferred writes/erases here. */
-        uint8_t r = XOP_NONE;
-        if (xfer_op == XOP_WRITE) {
-          REG_USB_DMA_TRIGGER = USB_DMA_RECV;  /* receive DATA_OUT into buffer */
-          uint32_t addr = xfer_op_addr;
-          uint16_t len = xfer_op_len;
-          xfer_op = XOP_NONE;
-          __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
-          if (!flash_unlock()) { uart_puts("[U-FAIL]\n"); }
-          else if (!flash_wren()) { uart_puts("[W-FAIL]\n"); }
-          else {
-            uint16_t i;
-            for (i = 0; i < len; i++) FLASH_BUF[i] = buf[i];
-            if (!flash_cmd(FLASH_CMD_PAGE_PROGRAM, addr, FLASH_ADDR_LEN_3BYTE, len, 1)) { uart_puts("[C-FAIL]\n"); }
-            else if (!flash_wait_wip()) { uart_puts("[WIP-FAIL]\n"); }
-            else { xfer_addr = addr + len; r = 1; }
-          }
-        } else if (xfer_op == XOP_ERASE) {
-          xfer_op = XOP_NONE;
-          __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
-          uint32_t addr = *(__xdata uint32_t *)buf;
-          uint32_t len = *(__xdata uint32_t *)(buf + 4);
-          if (!(addr & (SECTOR_SIZE - 1)) && !(len & (SECTOR_SIZE - 1)) &&
-              dfu_range_ok(addr, len, USERFW_ERASE_END)) {
-            uint32_t off;
-            for (off = 0; off < len; off += SECTOR_SIZE)
-              if (!flash_erase_sector(addr + off)) break;
-            r = (off >= len) ? 1 : 0;
-          }
-        }
-        if (r == 1) usb_send_zlp();
-        else if (xfer_op == XOP_NONE) {
+        /* USB 3.0: STAT_OUT fires for host-to-device status phase. */
+        uint8_t r = run_deferred_xfer_op();
+        if (r == XR_OK) {
+          usb_send_zlp();
+        } else if (r == XR_STALL) {
+          stall_ep0();
+        } else if (r == XR_NOOP) {
           REG_USB_DMA_TRIGGER = USB_DMA_RECV;
           REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
         }
       } else if ((phase & USB_CTRL_PHASE_DATA_IN) || (phase & USB_CTRL_PHASE_STAT_IN)) {
-        /* DATA_IN on USB 2.0, STAT_IN on USB 3.0 — for device-to-host transfers */
-        if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
-        REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
+        /* USB 2.0: STAT_IN fires for host-to-device status phase (device sends ZLP).
+         * USB 2.0/3.0: DATA_IN fires for device-to-host data phase. */
+        uint8_t r = run_deferred_xfer_op();
+        if (r == XR_OK) {
+          usb_send_zlp();
+        } else if (r == XR_STALL) {
+          stall_ep0();
+        } else if (r == XR_NOOP) {
+          if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
+          REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
+        }
       } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
         REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
       }
