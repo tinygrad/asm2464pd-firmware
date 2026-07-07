@@ -44,7 +44,7 @@ def find_device(vid, pid, bus=None, timeout=10):
     return None
 
 
-def enter_dfu(dev):
+def enter_dfu(dev, ftdi_url=None):
     print("[dfu] entering DFU mode...")
     # Detach kernel driver and set configuration to enable vendor requests
     for cfg in dev:
@@ -60,6 +60,19 @@ def enter_dfu(dev):
     except Exception:
         pass  # device resets, transfer may fail
     usb.util.dispose_resources(dev)
+    # If FTDI URL provided, also trigger FTDI reset to force bootstub reload
+    if ftdi_url:
+        import time
+        time.sleep(1)
+        try:
+            from ftdi_debug import USBGPUDebug
+            with USBGPUDebug(ftdi_url) as dbg:
+                dbg.ftdi.set_cbus_gpio(dbg.CBUS_RESET)
+                time.sleep(0.5)
+                dbg.ftdi.set_cbus_gpio(0)
+                time.sleep(2)
+        except Exception as e:
+            print(f"[dfu] FTDI reset failed: {e}")
 
 
 def dfu_erase(dev, addr, length):
@@ -131,6 +144,7 @@ def main():
     ap.add_argument("--image", required=True, help="firmware_image.bin to flash")
     ap.add_argument("--bus", type=int, default=None, help="USB bus number")
     ap.add_argument("--bootstub", default=None, help="bootstub.bin to flash first (optional)")
+    ap.add_argument("--ftdi", default=None, help="FTDI URL for hardware reset to enter DFU mode")
     args = ap.parse_args()
 
     with open(args.image, "rb") as f:
@@ -148,9 +162,9 @@ def main():
             return 1
     else:
         # Enter DFU mode
-        enter_dfu(dev)
+        enter_dfu(dev, args.ftdi)
         print("[dfu] waiting for bootstub...")
-        dev = find_device(BS_VID, BS_PID, bus=args.bus, timeout=5)
+        dev = find_device(BS_VID, BS_PID, bus=args.bus, timeout=10)
         if dev is None:
             print("[dfu] bootstub did not enumerate")
             return 1

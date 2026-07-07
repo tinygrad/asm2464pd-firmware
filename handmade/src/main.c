@@ -151,7 +151,7 @@ static void handle_usb_control(void) {
     wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
     wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
 
-    if (!(bmReq & USB_SETUP_TYPE_VENDOR)) {
+    if (1) {
       uart_puts("[C ");
       uart_puthex(bmReq);
       uart_puts(" ");
@@ -246,10 +246,15 @@ static void handle_usb_control(void) {
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF3) {
       if (wValL == 0xF4) {
         usb_send_zlp();
-        XDATA_REG8V(0x5FF8) = 0xDE; XDATA_REG8V(0x5FF9) = 0xC0;
-        XDATA_REG8V(0x5FFA) = 0x0B; XDATA_REG8V(0x5FFB) = 0xDF;
-        REG_CPU_RESET = CPU_RESET_TRIGGER;
-        return;
+        { uint16_t t = 0xFFFF; do { if (REG_USB_DMA_TRIGGER == 0) break; } while (--t); }
+        XDATA_REG8V(0x5FFB) = 0xDF;
+        XDATA_REG8V(0x5FFA) = 0x0B;
+        XDATA_REG8V(0x5FF9) = 0xC0;
+        XDATA_REG8V(0x5FF8) = 0xDE;
+        /* Soft reset: jump directly to bootstub at CODE 0x0000.
+         * XDATA (including DFU cookie) is preserved. */
+        __asm ljmp 0x0000 __endasm;
+        while (1);
       }
       if (wValL & 0x01) pcie_power_on();
       else pcie_power_off();
@@ -551,7 +556,8 @@ void main(void) {
     usb_init_controller(0);
   }
 
-  // enable interrupts (EX1 = PD/USB4 INT1)
+  // enable interrupts early so USB control requests (SET_CONFIGURATION, vendor)
+  // are handled during USB4 PD negotiation. EX0 = USB INT0, EX1 = PD/USB4 INT1.
   IE = (uint8_t)(IE_EA | IE_EX0 | (IS_USB4() ? (IE_EX1 | IE_ET0) : 0));
 
   // INA231 power monitor: init in both modes so the 0xC0 hw_status vendor
