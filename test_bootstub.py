@@ -56,7 +56,7 @@ def enter_dfu(dev, ftdi_url=None):
     except Exception:
         pass
     try:
-        dev.ctrl_transfer(0x40, 0xF3, 0xF4, 0, None, timeout=1000)
+        dev.ctrl_transfer(0x40, 0xEC, 0, 0, None, timeout=1000)
     except Exception:
         pass  # device resets, transfer may fail
     usb.util.dispose_resources(dev)

@@ -18,6 +18,10 @@ __sfr __at(0x88) TCON;
 #define IE_ET0  0x02
 #define IE_EX0  0x01
 
+/* 0x5FF8-0x5FFF is reserved in the bootstub linker flags and survives CPU reset. */
+#define DFU_COOKIE              (*(__xdata volatile uint32_t *)0x5FF8)
+#define DFU_COOKIE_MAGIC        0xDF0BC0DEUL
+
 void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {
@@ -151,7 +155,7 @@ static void handle_usb_control(void) {
     wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
     wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
 
-    if (1) {
+    if (!(bmReq & USB_SETUP_TYPE_VENDOR)) {
       uart_puts("[C ");
       uart_puthex(bmReq);
       uart_puts(" ");
@@ -253,19 +257,21 @@ static void handle_usb_control(void) {
       REG_NVME_CMD_PARAM   = slot_sel;
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF3) {
-      if (wValL == 0xF4) {
-        usb_send_zlp();
-        { uint16_t t = 0xFFFF; do { if (REG_USB_DMA_TRIGGER == 0) break; } while (--t); }
-        XDATA_REG8V(0x5FFB) = 0xDF;
-        XDATA_REG8V(0x5FFA) = 0x0B;
-        XDATA_REG8V(0x5FF9) = 0xC0;
-        XDATA_REG8V(0x5FF8) = 0xDE;
-        REG_CPU_RESET = CPU_RESET_TRIGGER;
-        while (1);
+      /* 0xF3: PCIe power control.
+       *   wValue low bit 0 = 0 power off, 1 power on. */
+      if (wValL & 0x01) {
+        pcie_power_on();
+      } else {
+        pcie_power_off();
       }
-      if (wValL & 0x01) pcie_power_on();
-      else pcie_power_off();
       usb_send_zlp();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEC) {
+      /* 0xEC: enter DFU mode — set cookie then CPU reset */
+      DFU_COOKIE = DFU_COOKIE_MAGIC;
+      usb_send_zlp();
+      { uint16_t t = 0xFFFF; do { if (REG_USB_DMA_TRIGGER == 0) break; } while (--t); }
+      REG_CPU_RESET = CPU_RESET_TRIGGER;
+      while (1);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
       *   wValue = fmt_type | (byte_enable << 8)

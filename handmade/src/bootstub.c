@@ -305,26 +305,11 @@ static void dfu_loop(void) {
 /* ---- entry ---- */
 
 void main(void) {
-  /* Full UART re-init in case mask ROM changed baud rate */
-  REG_UART_LCR = 0x03;  /* 8N1, no parity */
   REG_UART_LCR &= ~LCR_PARITY_MASK;
-  /* Send 0x55 0x55 0x55 as a sync pattern before [BS] */
-  uart_putc(0x55); uart_putc(0x55); uart_putc(0x55);
   uart_puts("\n[BS]\n");
 
   usb_init_endpoint_state();
   flash_init();
-
-  /* Check DFU cookie */
-  {
-    uint32_t cookie = DFU_COOKIE;
-    uart_puts("[CK:");
-    uart_puthex(cookie & 0xFF);
-    uart_puthex((cookie >> 8) & 0xFF);
-    uart_puthex((cookie >> 16) & 0xFF);
-    uart_puthex((cookie >> 24) & 0xFF);
-    uart_puts("]\n");
-  }
 
   if (DFU_COOKIE == DFU_COOKIE_MAGIC) {
     DFU_COOKIE = 0;
