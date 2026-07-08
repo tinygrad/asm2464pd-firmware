@@ -2,6 +2,7 @@
 #define UTIL_H
 
 #include "types.h"
+#include "registers.h"
 
 /* IE register bits (8051 interrupt enable). */
 #define IE_EA   0x80
@@ -76,6 +77,29 @@ static void uart_puthex(uint8_t val) {
   static __code const char hex[] = "0123456789ABCDEF";
   uart_putc(hex[val >> 4]);
   uart_putc(hex[val & 0x0F]);
+}
+
+/* USB endpoint state init — shared between app and bootstub. */
+static void usb_init_endpoint_state(void) {
+  REG_USB_EP0_LEN_H = 0; REG_USB_EP0_LEN_L = 0;
+  REG_USB_EP0_CONFIG = 0;
+  REG_USB_DMA_TRIGGER = 0; REG_USB_CTRL_PHASE = USB_CTRL_PHASE_ALL;
+  REG_USB_MSC_CFG = 0; REG_USB_MSC_LENGTH = 0;
+  REG_USB_ALT_SETTING_L = 0; REG_USB_ALT_SETTING_H = 0;
+  REG_USB_ALT_SETTING2_L = 0; REG_USB_ALT_SETTING2_H = 0;
+  REG_USB_DATA_L = 0; REG_USB_DATA_H = 0;
+  REG_USB_EP_CFG_905A = 0; REG_USB_EP_BUF_HI = 0; REG_USB_EP_BUF_LO = 0;
+  REG_USB_EP_MGMT = 0; REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL;
+  REG_USB_EP_CFG1 = USB_EP_CFG1_INIT_CLEAR;
+  REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
+  REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
+  { uint8_t p = REG_USB_EP_READY; if (p) REG_USB_EP_READY = p; }
+  REG_USB_EP_CTRL_9097 = USB_EP_CTRL_9097_INIT;
+  REG_USB_EP_MODE_9098 = USB_EP_MODE_INIT; REG_USB_EP_MODE_9099 = USB_EP_MODE_INIT;
+  REG_USB_EP_MODE_909A = USB_EP_MODE_INIT; REG_USB_EP_MODE_909B = USB_EP_MODE_INIT;
+  REG_USB_EP_MODE_909C = USB_EP_MODE_INIT; REG_USB_EP_MODE_909D = USB_EP_MODE_INIT;
+  REG_USB_STATUS_909E = USB_STATUS_909E_INIT;
+  REG_USB_MODE = USB_MODE_INIT;
 }
 
 #endif /* UTIL_H */

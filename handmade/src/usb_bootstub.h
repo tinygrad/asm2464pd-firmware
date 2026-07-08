@@ -256,48 +256,6 @@ static void usb_phy_tune(void) {
     usb_serdes_tune_lane(0xC300);  /* lane 1 */
 }
 
-static void usb_init_endpoint_state(void) {
-    uint8_t pending;
-
-    REG_USB_EP0_LEN_H = 0x00;
-    REG_USB_EP0_LEN_L = 0x00;
-    REG_USB_EP0_CONFIG = 0x00;
-    REG_USB_DMA_TRIGGER = 0x00;
-    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_ALL;
-
-    REG_USB_MSC_CFG = 0x00;
-    REG_USB_MSC_LENGTH = 0x00;
-    REG_USB_ALT_SETTING_L = 0x00;
-    REG_USB_ALT_SETTING_H = 0x00;
-    REG_USB_ALT_SETTING2_L = 0x00;
-    REG_USB_ALT_SETTING2_H = 0x00;
-    REG_USB_DATA_L = 0x00;
-    REG_USB_DATA_H = 0x00;
-
-    REG_USB_EP_CFG_905A = 0x00;
-    REG_USB_EP_BUF_HI = 0x00;
-    REG_USB_EP_BUF_LO = 0x00;
-    REG_USB_EP_MGMT = 0x00;
-    REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL;
-
-    REG_USB_EP_CFG1 = USB_EP_CFG1_INIT_CLEAR;
-    REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
-    REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
-    pending = REG_USB_EP_READY;
-    if (pending) REG_USB_EP_READY = pending;
-
-    REG_USB_EP_CTRL_9097 = USB_EP_CTRL_9097_INIT;
-    REG_USB_EP_MODE_9098 = USB_EP_MODE_INIT;
-    REG_USB_EP_MODE_9099 = USB_EP_MODE_INIT;
-    REG_USB_EP_MODE_909A = USB_EP_MODE_INIT;
-    REG_USB_EP_MODE_909B = USB_EP_MODE_INIT;
-    REG_USB_EP_MODE_909C = USB_EP_MODE_INIT;
-    REG_USB_EP_MODE_909D = USB_EP_MODE_INIT;
-    REG_USB_STATUS_909E = USB_STATUS_909E_INIT;
-
-    REG_USB_MODE = USB_MODE_INIT;
-}
-
 static void usb_init_controller(uint8_t force_usb2) {
     REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
     usb_init_endpoint_state();

@@ -4,6 +4,7 @@
 #include "types.h"
 #include "registers.h"
 #include "flash.h"
+#include "util.h"
 
 #define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
 
@@ -196,13 +197,16 @@ static void usb_init_controller(uint8_t force_usb2) {
     if (force_usb2) {
         REG_CPU_MODE = CPU_MODE_USB2;
         REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_FORCE_HS;
-    } else {
+    }
+#ifdef BOOTSTUB
+    else {
         /* CPU reset preserves CC30; restore SS-capable mode so the bootstub
          * enumerates on USB4 cards where the app left the PHY in USB4 mode. */
         REG_CPU_MODE = CPU_MODE_USB3;
         REG_USB_PHY_CTRL_91C0 |= USB_PHY_91C0_INIT_TOGGLE;
         REG_USB_PHY_CTRL_91C0 &= (uint8_t)~USB_PHY_91C0_INIT_TOGGLE;
     }
+#endif
 }
 
 /* Bring up the USB PIPE/PHY engine; run unconditionally at boot. */

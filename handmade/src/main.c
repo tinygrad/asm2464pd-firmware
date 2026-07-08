@@ -22,14 +22,6 @@ __sfr __at(0x88) TCON;
 #define DFU_COOKIE              (*(__xdata volatile uint32_t *)0x5FF8)
 #define DFU_COOKIE_MAGIC        0xDF0BC0DEUL
 
-void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
-void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
-static void uart_puthex(uint8_t val) {
-  static __code const char hex[] = "0123456789ABCDEF";
-  uart_putc(hex[val >> 4]);
-  uart_putc(hex[val & 0x0F]);
-}
-
 #define TIMER1_MODE_HALF_MS     0x04U
 /* Millisecond busy-sleep on Timer1; must never touch the CC10-CC13 PHY/PD mailbox. */
 static void sleep(uint16_t milliseconds) {
@@ -271,7 +263,7 @@ static void handle_usb_control(void) {
       usb_send_zlp();
       { uint16_t t = 0xFFFF; do { if (REG_USB_DMA_TRIGGER == 0) break; } while (--t); }
       REG_CPU_RESET = CPU_RESET_TRIGGER;
-      while (1);
+      while (1) { }
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
       *   wValue = fmt_type | (byte_enable << 8)
@@ -541,10 +533,6 @@ void main(void) {
   uart_puts("]\n");
   u4_entered_usb_mode = 0;
 
-  // enable interrupts early so USB control requests (SET_CONFIGURATION, vendor)
-  // are handled during USB4 PD negotiation. EX0 = USB INT0, EX1 = PD/USB4 INT1.
-  IE = (uint8_t)(IE_EA | IE_EX0 | (IS_USB4() ? (IE_EX1 | IE_ET0) : 0));
-
   if (IS_USB4()) {
     usb4_state_prepare();
     usb_pipe_engine_init();
@@ -572,6 +560,9 @@ void main(void) {
   } else {
     usb_init_controller(0);
   }
+
+  // enable interrupts (EX1 = PD/USB4 INT1)
+  IE = (uint8_t)(IE_EA | IE_EX0 | (IS_USB4() ? (IE_EX1 | IE_ET0) : 0));
 
   // INA231 power monitor: init in both modes so the 0xC0 hw_status vendor
   // request works over USB3 and over the USB4-tunneled USB function.
