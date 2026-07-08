@@ -4,21 +4,30 @@
 #include "types.h"
 #include "registers.h"
 #include "flash.h"
+#include "util.h"
 
 #define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
 
 /*=== USB device identification ===*/
+#ifndef USB_VID
 #define USB_VID                 0xADD1
-#ifndef USB_PID
-#define USB_PID                 0x0001
 #endif
+#ifndef USB_PID
+#error "USB_PID must be defined by the firmware personality before including usb.h"
+#endif
+#ifndef USB_BCD_DEVICE
 #define USB_BCD_DEVICE          0x0001
+#endif
+#ifndef USB_LANG_ID
 #define USB_LANG_ID             0x0409   /* US English */
+#endif
 
 /* String descriptors */
+#ifndef USB_STR_MFG
 #define USB_STR_MFG             "tiny"
+#endif
 #ifndef USB_STR_PRODUCT
-#define USB_STR_PRODUCT         "custom v0.1"
+#error "USB_STR_PRODUCT must be defined by the firmware personality before including usb.h"
 #endif
 
 #define USB_STR_IDX_LANG        0
@@ -100,7 +109,7 @@ static __code const uint8_t usb_cfg_desc_ss[] = {
   0x06, 0x30, 0x00, 0x00, U16_LE(0x0000),
   0x04, 0x24, 0x01, 0x00,
 };
-#endif /* USB_DFU_EP0_ONLY */
+#endif
 
 /*=== BOS descriptor ===*/
 
@@ -122,6 +131,70 @@ static uint8_t usb_build_string_desc(__code const char *s, __xdata uint8_t *buf)
   buf[1] = 0x03;
   return 2 + 2*i;
 }
+
+#ifdef USB_GITVERSION_GLOBAL
+extern __xdata uint8_t userfw_gitversion[22];
+#endif
+
+#ifdef USB_STR_PRODUCT_FROM_USERFW_HEADER
+static uint8_t usb_build_product_desc(__xdata uint8_t *buf) {
+  __code const char *product = USB_STR_PRODUCT;
+  uint8_t out = 0;
+  uint8_t i;
+
+  for (i = 0; product[i] && out < 31; i++) {
+    buf[2 + 2*out] = product[i];
+    buf[2 + 2*out + 1] = 0;
+    out++;
+  }
+
+#ifdef USB_GITVERSION_GLOBAL
+  if (out < 31 && userfw_gitversion[0] && userfw_gitversion[0] != 0xFF) {
+    buf[2 + 2*out] = ' ';
+    buf[2 + 2*out + 1] = 0;
+    out++;
+    for (i = 0; i < USERFW_GITVERSION_SIZE && out < 31; i++) {
+      uint8_t ch = userfw_gitversion[i];
+      if (!ch || ch == 0xFF) break;
+      buf[2 + 2*out] = ch;
+      buf[2 + 2*out + 1] = 0;
+      out++;
+    }
+  }
+#else
+  {
+    __xdata userfw_hdr_t *hdr = (__xdata userfw_hdr_t *)(buf + 64);
+    if (out < 31) {
+      /* Inline flash_read of the userfw header CRC region (0x20 bytes from
+       * flash 0x4000).  Discard slot 0 — multi-byte reads from FLASH_BUF[0]
+       * were not stable in hardware testing. */
+      if (flash_cmd(FLASH_CMD_READ, USERFW_FLASH_OFFSET - 1, FLASH_ADDR_LEN_3BYTE,
+                    USERFW_HEADER_CRC_LEN + 1, 0)) {
+        flash_clear_dma_status();
+        __xdata uint8_t *p = (__xdata uint8_t *)hdr;
+        for (i = 0; i < USERFW_HEADER_CRC_LEN; i++) p[i] = FLASH_BUF[i + 1];
+        if (userfw_header_has_gitversion(hdr)) {
+          buf[2 + 2*out] = ' ';
+          buf[2 + 2*out + 1] = 0;
+          out++;
+    for (i = 0; i < 22 && out < 31; i++) {
+            uint8_t ch = hdr->gitversion[i];
+            if (!ch || ch == 0xFF) break;
+            buf[2 + 2*out] = ch;
+            buf[2 + 2*out + 1] = 0;
+            out++;
+          }
+        }
+      }
+    }
+  }
+#endif
+
+  buf[0] = 2 + 2*out;
+  buf[1] = 0x03;
+  return buf[0];
+}
+#endif
 
 /* Build a STRING descriptor from the OTP-stored 4-byte serial, lowercase
  * ASCII hex (8 chars). Falls back to "ffffffff" when the OTP is blank,
@@ -183,6 +256,48 @@ static void usb_phy_tune(void) {
     usb_serdes_tune_lane(0xC300);  /* lane 1 */
 }
 
+static void usb_init_endpoint_state(void) {
+    uint8_t pending;
+
+    REG_USB_EP0_LEN_H = 0x00;
+    REG_USB_EP0_LEN_L = 0x00;
+    REG_USB_EP0_CONFIG = 0x00;
+    REG_USB_DMA_TRIGGER = 0x00;
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_ALL;
+
+    REG_USB_MSC_CFG = 0x00;
+    REG_USB_MSC_LENGTH = 0x00;
+    REG_USB_ALT_SETTING_L = 0x00;
+    REG_USB_ALT_SETTING_H = 0x00;
+    REG_USB_ALT_SETTING2_L = 0x00;
+    REG_USB_ALT_SETTING2_H = 0x00;
+    REG_USB_DATA_L = 0x00;
+    REG_USB_DATA_H = 0x00;
+
+    REG_USB_EP_CFG_905A = 0x00;
+    REG_USB_EP_BUF_HI = 0x00;
+    REG_USB_EP_BUF_LO = 0x00;
+    REG_USB_EP_MGMT = 0x00;
+    REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL;
+
+    REG_USB_EP_CFG1 = USB_EP_CFG1_INIT_CLEAR;
+    REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
+    REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
+    pending = REG_USB_EP_READY;
+    if (pending) REG_USB_EP_READY = pending;
+
+    REG_USB_EP_CTRL_9097 = USB_EP_CTRL_9097_INIT;
+    REG_USB_EP_MODE_9098 = USB_EP_MODE_INIT;
+    REG_USB_EP_MODE_9099 = USB_EP_MODE_INIT;
+    REG_USB_EP_MODE_909A = USB_EP_MODE_INIT;
+    REG_USB_EP_MODE_909B = USB_EP_MODE_INIT;
+    REG_USB_EP_MODE_909C = USB_EP_MODE_INIT;
+    REG_USB_EP_MODE_909D = USB_EP_MODE_INIT;
+    REG_USB_STATUS_909E = USB_STATUS_909E_INIT;
+
+    REG_USB_MODE = USB_MODE_INIT;
+}
+
 static void usb_init_controller(uint8_t force_usb2) {
     REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
     usb_init_endpoint_state();
@@ -197,8 +312,7 @@ static void usb_init_controller(uint8_t force_usb2) {
         REG_CPU_MODE = CPU_MODE_USB2;
         REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_FORCE_HS;
     } else {
-        /* CPU reset preserves CC30; restore SS-capable mode so the bootstub
-         * enumerates on USB4 cards where the app left the PHY in USB4 mode. */
+        /* CPU reset preserves CC30; restore SS-capable app/DFU mode. */
         REG_CPU_MODE = CPU_MODE_USB3;
         REG_USB_PHY_CTRL_91C0 |= USB_PHY_91C0_INIT_TOGGLE;
         REG_USB_PHY_CTRL_91C0 &= (uint8_t)~USB_PHY_91C0_INIT_TOGGLE;
@@ -244,6 +358,21 @@ static void usb4_phy_arm(void) {
     REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
 }
 
+static uint8_t usb_wait_ep0_dma_idle(void) {
+    uint16_t timeout = 0xFFFF;
+    do {
+        if (REG_USB_DMA_TRIGGER == 0) return 1;
+    } while (--timeout);
+    return 0;
+}
+
+static void usb_attach_controller(void) {
+    REG_USB_POWER_CYCLE = 0;
+    timer_delay_ms(25);
+    REG_USB_POWER_CYCLE = USB_POWER_CYCLE_TRIGGER;
+    timer_delay_ms(25);
+}
+
 /* EP0 IN: send `len` bytes of DESC_BUF, or a zero-length ack. */
 static void usb_send_data(uint16_t len) {
     REG_USB_EP0_LEN_H = (uint8_t)(len >> 8);
@@ -285,6 +414,10 @@ static void usb_handle_get_descriptor(uint8_t is_usb2, uint8_t desc_type,
       desc_len = 4;
     } else if (desc_idx == USB_STR_IDX_SERIAL) {
       desc_len = usb_build_serial_desc(DESC_BUF);
+#ifdef USB_STR_PRODUCT_FROM_USERFW_HEADER
+    } else if (desc_idx == USB_STR_IDX_PRODUCT) {
+      desc_len = usb_build_product_desc(DESC_BUF);
+#endif
     } else {
       __code const char *s;
       switch (desc_idx) {

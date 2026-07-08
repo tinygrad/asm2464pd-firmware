@@ -1,343 +1,325 @@
 /* ASM2464PD bootstub.
  *
- * Lives at CODE 0x0000-0x23FF. On boot, validates a userfw image at flash
- * 0x4000 (header + crc32 + body) and copies it into CODE 0x2400+, or drops
- * into DFU mode where the host can re-flash via USB EP0 control transfers. */
+ * Loaded by the chip's mask-ROM bootloader from SPI flash 0x100, lives at
+ * CODE 0x0000-0x23FF. On boot, validates a userfw image at flash 0x4000
+ * (header + crc32 + body) and either copies it into CODE 0x2400+ and
+ * jumps there, or drops into DFU mode where the host can re-flash via
+ * USB. */
 
 #include "types.h"
-#include "util.h"
 #include "registers.h"
 
 #define BOOTSTUB 1
 #define USB_PID                 0xB007
 #define USB_STR_PRODUCT         "bootstub"
-#include "usb.h"
+#define USB_DFU_EP0_ONLY        1
+#include "usb_bootstub.h"
 #include "flash.h"
 
-__sfr __at(0x87) PCON;
+__sfr __at(0x87) PCON;       /* bit 4 = MEMSEL: redirects MOVX writes to CODE */
 __sfr __at(0xA8) IE;
 
-#define DFU_COOKIE          (*(__xdata volatile uint32_t *)0x5FF8)
-#define DFU_COOKIE_MAGIC    0xDF0BC0DEUL
-
-#define USERFW_FLASH_OFFSET   0x4000UL
-#define USERFW_HEADER_SIZE    0x40UL
-#define USERFW_HEADER_CRC_LEN 0x20U
-#define USERFW_CODE_BASE      0x2400
-#define USERFW_BODY_LIMIT     0xE000UL
-#define USERFW_FLASH_END      (USERFW_FLASH_OFFSET + USERFW_HEADER_SIZE + USERFW_BODY_LIMIT)
-#define SECTOR_SIZE           0x1000UL
-#define USERFW_ERASE_END      ((USERFW_FLASH_END + (SECTOR_SIZE - 1)) & ~(SECTOR_SIZE - 1))
-
-typedef struct {
-  uint8_t  magic[4];
-  uint8_t  gitversion[24];
-  uint32_t body_len;
-  uint32_t crc;
-  uint8_t  _pad[28];
-} userfw_hdr_t;
-
-/* ---- code write ---- */
-
-static void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
-static void uart_puts(__code const char *s) { while (*s) uart_putc(*s++); }
-static void uart_puthex(uint8_t val) {
-  static __code const char hex[] = "0123456789ABCDEF";
-  uart_putc(hex[val >> 4]);
-  uart_putc(hex[val & 0x0F]);
-}
-
-static void timer_delay_ms(uint16_t ms) {
-  uint16_t threshold = 2 * ms;
-  REG_TIMER1_CSR = 0x04; REG_TIMER1_CSR = 0x02;
-  REG_TIMER1_DIV = (REG_TIMER1_DIV & 0xF8) | 0x04;
-  REG_TIMER1_THRESHOLD_HI = threshold >> 8;
-  REG_TIMER1_THRESHOLD_LO = threshold & 0xFF;
-  REG_TIMER1_CSR = 0x01;
-  { uint32_t g = 0; while (!(REG_TIMER1_CSR & 0x02) && ++g < 4000000UL); }
-  REG_TIMER1_CSR = 0x04; REG_TIMER1_CSR = 0x02;
-}
-
-static void usb_init_endpoint_state(void) {
-  REG_USB_EP0_LEN_H = 0; REG_USB_EP0_LEN_L = 0;
-  REG_USB_DMA_TRIGGER = 0; REG_USB_CTRL_PHASE = 0x1F;
-  REG_USB_MSC_CFG = 0; REG_USB_DATA_L = 0; REG_USB_DATA_H = 0;
-  REG_USB_EP_MGMT = 0; REG_USB_INT_MASK_9090 = 0x80;
-  REG_USB_EP_CFG1 = 0x0F;
-  REG_USB_EP_CFG2 = 0x02; REG_USB_EP_CFG2 = 0x01;
-  { uint8_t p = REG_USB_EP_READY; if (p) REG_USB_EP_READY = p; }
-  REG_USB_MODE = 0x01;
-}
-
-static uint8_t usb_wait_ep0_dma_idle(void) {
-  uint16_t t = 0xFFFF;
-  do { if (REG_USB_DMA_TRIGGER == 0) return 1; } while (--t);
-  return 0;
-}
-
-static void usb_attach_controller(void) {
-  REG_USB_POWER_CYCLE = 0;
-  timer_delay_ms(25);
-  REG_USB_POWER_CYCLE = 0x01;
-  timer_delay_ms(25);
-}
+/* 0x5FF8-0x5FFF is reserved in the linker flags and survives CPU reset. */
+#define DFU_COOKIE              (*(__xdata volatile uint32_t *)0x5FF8)
+#define DFU_COOKIE_MAGIC        0xDF0BC0DEUL
 
 static uint8_t is_usb2;
 
+/* ---- helpers ----------------------------------------------------------- */
+
+/* MOVX-with-MEMSEL trick: PCON bit 4 redirects MOVX writes to CODE. */
 static void code_write(uint16_t addr, uint8_t val) {
-  uint8_t old = PCON;
-  PCON = old | 0x10;
-  *(__xdata volatile uint8_t *)addr = val;
-  PCON = old;
+    uint8_t old = PCON;
+    /* Keep MEMSEL scoped to this store; SDCC may use MOVX for temporaries. */
+    PCON = old | 0x10;
+    *(__xdata volatile uint8_t *)addr = val;
+    PCON = old;
 }
 
-/* ---- userfw loader ---- */
+/* ---- userfw header & loader ------------------------------------------- */
 
-__xdata static uint8_t scratch[256];
-__xdata static userfw_hdr_t hdr;
+__xdata static uint8_t       scratch[256];
+__xdata static userfw_hdr_t  hdr;
 
-static uint8_t header_magic_ok(void) {
-  return hdr.magic[0] == 'A' && hdr.magic[1] == '2' &&
-         hdr.magic[2] == '4' && hdr.magic[3] == 'F';
-}
+static void dfu_loop(void);
 
-static void crc32_step(uint32_t *c, uint8_t b) {
-  uint32_t crc = *c ^ b;
-  uint8_t i;
-  for (i = 0; i < 8; i++)
-    crc = (crc >> 1) ^ ((crc & 1) ? 0xEDB88320UL : 0);
-  *c = crc;
-}
+/* DFU stays on EP0 control transfers.
+ *
+ * Vendor commands: 0xB0 erase, 0xB1 set addr, 0xB2 write, 0xB3 read,
+ * 0xEB reset. Write/erase are confined to the userfw region; reads are
+ * allowed over the 24-bit SPI flash address space. */
 
-static uint8_t verify_body(uint32_t total_body_len) {
-  uint32_t crc = 0xFFFFFFFFUL;
-  __xdata uint8_t *p = (__xdata uint8_t *)&hdr;
-  uint8_t i;
-  for (i = 0; i < USERFW_HEADER_CRC_LEN; i++) crc32_step(&crc, p[i]);
-  uint32_t addr = USERFW_FLASH_OFFSET + sizeof(hdr);
-  while (total_body_len) {
-    uint16_t take = total_body_len > sizeof(scratch) ? sizeof(scratch) : (uint16_t)total_body_len;
-    if (!flash_read(addr, scratch, take)) return 0;
-    for (i = 0; i < take; i++) crc32_step(&crc, scratch[i]);
-    addr += take; total_body_len -= take;
-  }
-  return ~crc == hdr.crc;
-}
+__xdata static uint32_t xfer_addr;       /* auto-advancing cursor */
 
-static uint8_t load_region(uint32_t flash_addr, uint16_t code_base, uint32_t len) {
-  while (len) {
-    uint16_t take = len > sizeof(scratch) ? sizeof(scratch) : (uint16_t)len;
-    if (!flash_read(flash_addr, scratch, take)) return 0;
-    uint16_t i;
-    for (i = 0; i < take; i++) code_write(code_base + i, scratch[i]);
-    flash_addr += take; code_base += take; len -= take;
-  }
-  return 1;
-}
-
-/* ---- DFU ---- */
-
-__xdata static uint32_t xfer_addr;
+/* Operations whose payload arrives via DATA_OUT — processed in the
+ * STAT_IN branch of dfu_loop after the host's data has landed in
+ * DESC_BUF, BEFORE the IN-status ZLP, so the host's
+ * libusb_control_transfer() blocks until the SPI op retires. */
 enum { XOP_NONE = 0, XOP_ERASE, XOP_WRITE };
-__xdata static uint8_t xfer_op;
-__xdata static uint32_t xfer_op_addr;
-__xdata static uint16_t xfer_op_len;
+__xdata static uint8_t  xfer_op;
+__xdata static uint32_t xfer_op_addr;    /* captured WRITE address */
+__xdata static uint16_t xfer_op_len;     /* WRITE: byte count to program (ERASE reads its own params from DESC_BUF) */
+
+static void clear_pending_xfer(void) {
+    xfer_op      = XOP_NONE;
+    xfer_op_addr = 0;
+    xfer_op_len  = 0;
+}
 
 static void stall_ep0(void) {
-  xfer_op = XOP_NONE;
-  REG_USB_DMA_TRIGGER = USB_DMA_STALL;
+    clear_pending_xfer();
+    REG_USB_DMA_TRIGGER = USB_DMA_STALL;
 }
 
 static void cpu_reset(void) {
-  REG_CPU_RESET = CPU_RESET_TRIGGER;
-  while (1);
+    (void)usb_wait_ep0_dma_idle();
+    REG_CPU_RESET = CPU_RESET_TRIGGER;
+    while (1) ;
 }
 
 static uint8_t dfu_range_ok(uint32_t addr, uint32_t len, uint32_t end) {
-  if (len == 0) return 0;
-  if (addr < USERFW_FLASH_OFFSET || addr > end) return 0;
-  return len <= (end - addr);
+    if (len == 0) return 0;
+    if (addr < USERFW_FLASH_OFFSET || addr > end) return 0;
+    return len <= (end - addr);
 }
 
-enum { XR_NOOP = 0, XR_OK, XR_STALL };
+static uint8_t load_header(void) {
+    if (!flash_read(USERFW_FLASH_OFFSET, (__xdata uint8_t *)&hdr, sizeof(hdr))) return 0;
+    return userfw_header_magic_ok(&hdr);
+}
 
-/* Process a deferred write/erase after DATA_OUT payload has landed in DESC_BUF.
- * Called from STAT_OUT (USB 3.0) or STAT_IN (USB 2.0). */
-static uint8_t run_deferred_xfer_op(void) {
-  if (!usb_wait_ep0_dma_idle()) return XR_STALL;
-  if (xfer_op == XOP_WRITE) {
-    uint32_t addr = xfer_op_addr;
-    uint16_t len = xfer_op_len;
-    xfer_op = XOP_NONE;
-    __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
-    if (!flash_unlock()) { uart_puts("[U-FAIL]\n"); return XR_STALL; }
-    if (!flash_wren()) { uart_puts("[W-FAIL]\n"); return XR_STALL; }
-    uint16_t i;
-    for (i = 0; i < len; i++) FLASH_BUF[i] = buf[i];
-    if (!flash_cmd(FLASH_CMD_PAGE_PROGRAM, addr, FLASH_ADDR_LEN_3BYTE, len, 1)) { uart_puts("[C-FAIL]\n"); return XR_STALL; }
-    if (!flash_wait_wip()) { uart_puts("[WIP-FAIL]\n"); return XR_STALL; }
-    xfer_addr = addr + len;
-    return XR_OK;
-  }
-  if (xfer_op == XOP_ERASE) {
-    xfer_op = XOP_NONE;
-    __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
-    uint32_t addr = *(__xdata uint32_t *)buf;
-    uint32_t len = *(__xdata uint32_t *)(buf + 4);
-    if (!(addr & (SECTOR_SIZE - 1)) && !(len & (SECTOR_SIZE - 1)) &&
-        dfu_range_ok(addr, len, USERFW_ERASE_END)) {
-      uint32_t off;
-      for (off = 0; off < len; off += SECTOR_SIZE)
-        if (!flash_erase_sector(addr + off)) return XR_STALL;
-      return XR_OK;
+/* Single-byte CRC-32/IEEE step. */
+static void crc32_step(uint32_t *c, uint8_t b) {
+    uint32_t crc = *c ^ b;
+    for (uint8_t i = 0; i < 8; i++)
+        crc = (crc >> 1) ^ ((crc & 1) ? 0xEDB88320UL : 0);
+    *c = crc;
+}
+
+/* CRC-32/IEEE (zlib) over the header bytes up to `crc`, plus the body. */
+static uint8_t verify_body(uint32_t total_body_len) {
+    uint32_t crc = 0xFFFFFFFFUL;
+    __xdata const uint8_t *p = (__xdata const uint8_t *)&hdr;
+    for (uint8_t i = 0; i < USERFW_HEADER_CRC_LEN; i++) crc32_step(&crc, p[i]);
+
+    uint32_t addr = USERFW_FLASH_OFFSET + sizeof(hdr);
+    while (total_body_len) {
+        uint16_t take = total_body_len > sizeof(scratch) ? sizeof(scratch) : (uint16_t)total_body_len;
+        if (!flash_read(addr, scratch, take)) return 0;
+        for (uint16_t i = 0; i < take; i++) crc32_step(&crc, scratch[i]);
+        addr += take; total_body_len -= take;
     }
-    return XR_STALL;
-  }
-  return XR_NOOP;
+    return ~crc == hdr.crc;
+}
+
+static uint8_t load_region(uint32_t flash_addr, uint16_t code_base, uint32_t len) {
+    while (len) {
+        uint16_t take = len > sizeof(scratch) ? sizeof(scratch) : (uint16_t)len;
+        if (!flash_read(flash_addr, scratch, take)) return 0;
+        for (uint16_t i = 0; i < take; i++) code_write(code_base + i, scratch[i]);
+        flash_addr += take; code_base += take; len -= take;
+    }
+    return 1;
+}
+
+static void boot_userfw(void) {
+    uint32_t base = USERFW_FLASH_OFFSET + sizeof(hdr);
+
+    if (hdr.body_len && !load_region(base, USERFW_CODE_BASE, hdr.body_len)) goto load_fail;
+
+    DFU_COOKIE = 0;
+    uart_puts("[BS->APP]\n");
+    __asm
+        ljmp 0x2400
+    __endasm;
+
+load_fail:
+    uart_puts("[BS load-fail]\n");
+    dfu_loop();
 }
 
 static void handle_setup(void) {
-  uint8_t bmReq = REG_USB_SETUP_BMREQ;
-  uint8_t bReq = REG_USB_SETUP_BREQ;
-  uint8_t wValL = REG_USB_SETUP_WVAL_L;
-  uint8_t wValH = REG_USB_SETUP_WVAL_H;
-  uint16_t wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
+    uint8_t bmReq = REG_USB_SETUP_BMREQ;
+    uint8_t bReq  = REG_USB_SETUP_BREQ;
+    uint8_t wValL = REG_USB_SETUP_WVAL_L;
+    uint8_t wValH = REG_USB_SETUP_WVAL_H;
+    uint16_t wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
 
-  if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
-    usb_handle_set_address(wValL);
-  } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-    usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
-  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
-    usb_send_zlp();
-  } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
-    if (wLen != 8) { stall_ep0(); return; }
-    REG_USB_DMA_TRIGGER = USB_DMA_RECV;  /* arm DATA_OUT receive */
-    xfer_op = XOP_ERASE;
-  } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB1) {
-    xfer_addr = ((uint32_t)REG_USB_SETUP_WIDX_L << 16) | ((uint16_t)wValH << 8) | wValL;
-    usb_send_zlp();
-  } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB2) {
-    if (wLen == 0 || wLen > 64) { stall_ep0(); return; }
-    if (!dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) { stall_ep0(); return; }
-    if ((uint16_t)(xfer_addr & 0xFF) + wLen > 0x100) { stall_ep0(); return; }
-    REG_USB_DMA_TRIGGER = USB_DMA_RECV;  /* arm DATA_OUT receive */
-    xfer_op_addr = xfer_addr;
-    xfer_op_len = wLen;
-    xfer_op = XOP_WRITE;
-  } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB3) {
-    uint16_t n = (wLen > 64) ? 64 : wLen;
-    if (n == 0) { usb_send_zlp(); return; }
-    if (!flash_read(xfer_addr, scratch, n)) { stall_ep0(); return; }
-    __xdata uint8_t *buf = (__xdata uint8_t *)USB_CTRL_BUF_BASE;
-    uint16_t i;
-    for (i = 0; i < n; i++) buf[i] = scratch[i];
-    xfer_addr += n;
-    usb_send_data(n);
-  } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEB) {
-    usb_send_zlp();
-    cpu_reset();
-  } else {
-    stall_ep0();
-  }
+    if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
+        usb_handle_set_address(wValL);
+    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
+        usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
+    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
+        usb_send_zlp();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
+        if (wLen != 8) { stall_ep0(); return; }
+        xfer_op = XOP_ERASE;
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB1) {
+        xfer_addr     = ((uint32_t)REG_USB_SETUP_WIDX_L << 16) | ((uint16_t)wValH << 8) | wValL;
+        usb_send_zlp();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB2) {
+        /* One EP0 packet, and no crossing the SPI page-program boundary. */
+        if (wLen == 0 || wLen > 64) { stall_ep0(); return; }
+        if (!dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) { stall_ep0(); return; }
+        if ((uint16_t)(xfer_addr & 0xFF) + wLen > 0x100) {
+            stall_ep0(); return;
+        }
+        xfer_op_addr = xfer_addr;
+        xfer_op_len = wLen;
+        xfer_op     = XOP_WRITE;
+    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB3) {
+        uint16_t n = (wLen > 64) ? 64 : wLen;
+        if (n == 0) { usb_send_zlp(); return; }
+        /* Do not refill DESC_BUF while the previous EP0 IN DMA can still own it. */
+        if (!usb_wait_ep0_dma_idle()) { stall_ep0(); return; }
+        /* Hardware testing found the direct 0x7000 -> 0x9e00 copy path unreliable. */
+        if (!flash_read(xfer_addr, scratch, n)) { stall_ep0(); return; }
+        xmemcpy(DESC_BUF, scratch, n);
+        xfer_addr += n;
+        usb_send_data(n);
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEB) {
+        usb_send_zlp();
+        cpu_reset();
+    } else {
+        stall_ep0();
+    }
+}
+
+/* ---- DFU loop --------------------------------------------------------- */
+
+enum { XR_NOOP = 0, XR_OK, XR_STALL };
+
+/* Run an OUT-with-data op after its payload lands in DESC_BUF. */
+static uint8_t run_deferred_xfer_op(void) {
+    if (xfer_op == XOP_WRITE) {
+        uint32_t addr = xfer_op_addr;
+        uint16_t len = xfer_op_len;
+        clear_pending_xfer();
+        if (!usb_wait_ep0_dma_idle()) {
+            stall_ep0();
+            return XR_STALL;
+        }
+        if (!dfu_range_ok(addr, len, USERFW_FLASH_END) ||
+            (uint16_t)(addr & 0xFF) + len > 0x100) {
+            stall_ep0();
+            return XR_STALL;
+        }
+        xmemcpy(FLASH_BUF, DESC_BUF, len);
+        if (!flash_program_page(addr, len)) {
+            stall_ep0();
+            return XR_STALL;
+        }
+        xfer_addr     = addr + len;
+        return XR_OK;
+    }
+    if (xfer_op == XOP_ERASE) {
+        clear_pending_xfer();
+        if (!usb_wait_ep0_dma_idle()) {
+            stall_ep0();
+            return XR_STALL;
+        }
+        uint32_t addr = *(__xdata const uint32_t *)DESC_BUF;
+        uint32_t len  = *(__xdata const uint32_t *)(DESC_BUF + 4);
+        if ((addr & (SECTOR_SIZE - 1)) || (len & (SECTOR_SIZE - 1)) ||
+            !dfu_range_ok(addr, len, USERFW_ERASE_END)) {
+            stall_ep0();
+            return XR_STALL;
+        }
+        for (uint32_t off = 0; off < len; off += SECTOR_SIZE) {
+            if (!flash_erase_sector(addr + off)) {
+                stall_ep0();
+                return XR_STALL;
+            }
+        }
+        return XR_OK;
+    }
+    return XR_NOOP;
 }
 
 static void dfu_loop(void) {
-  uart_puts("[DFU]\n");
-  usb_phy_tune();
-  usb_pipe_engine_init();
-  usb4_phy_arm();
-  is_usb2 = 0;
-  usb_init_controller(0);
-  IE = 0x80;
-  usb_attach_controller();
-  xfer_op = XOP_NONE;
-  xfer_addr = 0;
+    uart_puts("[DFU]\n");
+    usb_phy_tune();
+    is_usb2 = 0;
+    usb_init_controller(0);
+    /* IE.EA must be on for the USB controller to push events to PERIPH_STATUS;
+     * we leave individual interrupt sources off and poll. */
+    IE = 0x80;
+    usb_attach_controller();
 
-  while (1) {
-    uint8_t s = REG_USB_PERIPH_STATUS;
-    if (s & USB_PERIPH_CONTROL) {
-      uint8_t phase = REG_USB_CTRL_PHASE;
-      if (phase & USB_CTRL_PHASE_SETUP) {
-        xfer_op = XOP_NONE;
-        REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
-        handle_setup();
-      } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
-        /* USB 3.0: STAT_OUT fires for host-to-device status phase. */
-        uint8_t r = run_deferred_xfer_op();
-        if (r == XR_OK) {
-          usb_send_zlp();
-        } else if (r == XR_STALL) {
-          stall_ep0();
-        } else if (r == XR_NOOP) {
-          REG_USB_DMA_TRIGGER = USB_DMA_RECV;
-          REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
+    xfer_op       = XOP_NONE;
+    xfer_op_addr  = 0;
+    xfer_op_len   = 0;
+    xfer_addr     = 0;
+
+    while (1) {
+        uint8_t s = REG_USB_PERIPH_STATUS;
+        if (s & USB_PERIPH_CONTROL) {
+            uint8_t phase = REG_USB_CTRL_PHASE;
+            if (phase & USB_CTRL_PHASE_SETUP) {
+                clear_pending_xfer();
+                REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
+                handle_setup();
+            } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
+                REG_USB_DMA_TRIGGER = USB_DMA_RECV;
+                REG_USB_CTRL_PHASE  = USB_CTRL_PHASE_STAT_OUT;
+            } else if ((phase & USB_CTRL_PHASE_DATA_IN) || (phase & USB_CTRL_PHASE_STAT_IN)) {
+                uint8_t r = run_deferred_xfer_op();
+                if (r == XR_OK) {
+                    usb_send_zlp();
+                } else if (r == XR_NOOP) {
+                    if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
+                    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
+                }
+            } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
+                REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
+            }
+        } else if (s & USB_PERIPH_BUS_RESET) {
+            clear_pending_xfer();
+            uint8_t e = REG_USB_PHY_CTRL_91D1;
+            REG_USB_PHY_CTRL_91D1 = e;
+        } else if (s & USB_PERIPH_LINK_EVENT) {
+            uint8_t e = REG_BUF_CFG_9300;
+            if (e & BUF_CFG_9300_SS_FAIL) {
+                is_usb2 = 1;
+                REG_CPU_MODE = CPU_MODE_USB2;
+                REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_FORCE_HS;
+            }
+            REG_BUF_CFG_9300 = (e & BUF_CFG_9300_SS_EVENT) ? BUF_CFG_9300_SS_FAIL : e;
         }
-      } else if ((phase & USB_CTRL_PHASE_DATA_IN) || (phase & USB_CTRL_PHASE_STAT_IN)) {
-        /* USB 2.0: STAT_IN fires for host-to-device status phase (device sends ZLP).
-         * USB 2.0/3.0: DATA_IN fires for device-to-host data phase. */
-        uint8_t r = run_deferred_xfer_op();
-        if (r == XR_OK) {
-          usb_send_zlp();
-        } else if (r == XR_STALL) {
-          stall_ep0();
-        } else if (r == XR_NOOP) {
-          if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
-          REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
-        }
-      } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
-        REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
-      }
-    } else if (s & USB_PERIPH_BUS_RESET) {
-      xfer_op = XOP_NONE;
-      REG_USB_PHY_CTRL_91D1 = REG_USB_PHY_CTRL_91D1;
-    } else if (s & USB_PERIPH_LINK_EVENT) {
-      uint8_t e = REG_BUF_CFG_9300;
-      if (e & BUF_CFG_9300_SS_FAIL) {
-        is_usb2 = 1;
-        REG_CPU_MODE = CPU_MODE_USB2;
-        REG_USB_PHY_CTRL_91C0 = 0x10;
-      }
-      REG_BUF_CFG_9300 = e;
     }
-  }
 }
 
-/* ---- entry ---- */
+/* ---- entry ------------------------------------------------------------ */
 
 void main(void) {
-  REG_UART_LCR &= ~LCR_PARITY_MASK;
-  uart_puts("\n[BS]\n");
+    REG_UART_LCR &= ~LCR_PARITY_MASK;
+    uart_puts("\n[BS]\n");
 
-  usb_init_endpoint_state();
-  flash_init();
+    /* Reset shared DMA and endpoint state before boot-time flash reads. */
+    REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
+    usb_init_endpoint_state();
+    flash_init();
+    if (!flash_unlock()) uart_puts("[BS flash-lock]\n");
 
-  if (DFU_COOKIE == DFU_COOKIE_MAGIC) {
-    DFU_COOKIE = 0;
-    dfu_loop();
-  }
+    if (DFU_COOKIE == DFU_COOKIE_MAGIC) {
+        DFU_COOKIE = 0;
+        dfu_loop();
+    }
 
-  if (!flash_read(USERFW_FLASH_OFFSET, (__xdata uint8_t *)&hdr, sizeof(hdr)) || !header_magic_ok()) {
-    uart_puts("[BS bad-magic]\n");
-    dfu_loop();
-  }
+    if (!load_header()) {
+        uart_puts("[BS bad-magic]\n");
+        dfu_loop();
+    }
 
-  if (hdr.body_len > USERFW_BODY_LIMIT) {
-    uart_puts("[BS bad-size]\n");
-    dfu_loop();
-  }
+    if (hdr.body_len > USERFW_BODY_LIMIT) {
+        uart_puts("[BS bad-size]\n");
+        dfu_loop();
+    }
 
-  if (!verify_body(hdr.body_len)) {
-    uart_puts("[BS bad-crc]\n");
-    dfu_loop();
-  }
+    if (!verify_body(hdr.body_len)) {
+        uart_puts("[BS bad-crc]\n");
+        dfu_loop();
+    }
 
-  uint32_t base = USERFW_FLASH_OFFSET + sizeof(hdr);
-  if (hdr.body_len && !load_region(base, USERFW_CODE_BASE, hdr.body_len)) {
-    uart_puts("[BS load-fail]\n");
-    dfu_loop();
-  }
-
-  DFU_COOKIE = 0;
-  uart_puts("[BS->APP]\n");
-  __asm ljmp 0x2400 __endasm;
+    boot_userfw();
 }
