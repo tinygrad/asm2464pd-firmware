@@ -54,11 +54,14 @@ static void mem_set(void *dst, uint8_t val, uint8_t n) {
   while (n--) *d++ = val;
 }
 
+#ifdef BOOTSTUB
 static void xmemcpy(__xdata uint8_t *dst, __xdata const uint8_t *src, uint16_t len) {
   while (len--) *dst++ = *src++;
 }
+#endif
 
 /* Timer1-based millisecond delay. Used by usb_attach_controller. */
+#ifdef BOOTSTUB
 static void timer_delay_ms(uint16_t milliseconds) {
   uint16_t threshold = 2 * milliseconds;
   REG_TIMER1_CSR = 0x04; REG_TIMER1_CSR = 0x02;
@@ -69,17 +72,19 @@ static void timer_delay_ms(uint16_t milliseconds) {
   { uint32_t g = 0; while (!(REG_TIMER1_CSR & 0x02) && ++g < 4000000UL); }
   REG_TIMER1_CSR = 0x04; REG_TIMER1_CSR = 0x02;
 }
+#endif
 
 /* UART output helpers. */
-static void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
-static void uart_puts(__code const char *s) { while (*s) uart_putc(*s++); }
+void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
+void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {
   static __code const char hex[] = "0123456789ABCDEF";
   uart_putc(hex[val >> 4]);
   uart_putc(hex[val & 0x0F]);
 }
 
-/* USB endpoint state init — shared between app and bootstub. */
+/* USB endpoint state init — bootstub only (app has its own minimal init). */
+#ifdef BOOTSTUB
 static void usb_init_endpoint_state(void) {
   REG_USB_EP0_LEN_H = 0; REG_USB_EP0_LEN_L = 0;
   REG_USB_EP0_CONFIG = 0;
@@ -101,5 +106,6 @@ static void usb_init_endpoint_state(void) {
   REG_USB_STATUS_909E = USB_STATUS_909E_INIT;
   REG_USB_MODE = USB_MODE_INIT;
 }
+#endif
 
 #endif /* UTIL_H */

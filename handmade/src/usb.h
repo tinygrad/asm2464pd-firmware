@@ -185,8 +185,10 @@ static void usb_phy_tune(void) {
 }
 
 static void usb_init_controller(uint8_t force_usb2) {
+#ifdef BOOTSTUB
     REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
     usb_init_endpoint_state();
+#endif
     REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
     REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
     REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
