@@ -36,10 +36,12 @@ USERFW_ERASE_END = ((USERFW_FLASH_END + (SECTOR_SIZE - 1)) & ~(SECTOR_SIZE - 1))
 def find_device(vid, pid, bus=None, timeout=10):
     t0 = time.time()
     while time.time() - t0 < timeout:
-        dev = usb.core.find(idVendor=vid, idProduct=pid)
+        if bus is not None:
+            dev = usb.core.find(idVendor=vid, idProduct=pid, bus=bus)
+        else:
+            dev = usb.core.find(idVendor=vid, idProduct=pid)
         if dev is not None:
-            if bus is None or dev.bus == bus:
-                return dev
+            return dev
         time.sleep(0.2)
     return None
 
