@@ -184,7 +184,17 @@ static void pd_keystone_init(void) {
   u4_cfg.mode_flag = USB4_MODE_FLAGS;
   cc_pd_phy_term_init();
   pd_internal_state_init();
-  /* Arm the 1s DMA timer once at boot (stock fw func_e352). */
+  /* Arm the 1s DMA timer once at boot (stock fw func_e352). CC91 is a
+   * TIMER_CSR-style register; when it still carries enabled/expired state
+   * from a previous session (reboot via REG_CPU_RESET - the bootstub 0xEB
+   * handoff - keeps the block powered), it must be reset + acked first or
+   * it never fires again and the USB3 fallback never arms (the app then
+   * sits in USB4-wait forever on a PD-less port). The stale state can read
+   * back as 0, so reset unconditionally; on a cold power-on the reset is a
+   * no-op. The CC90 arm keeps the original OR form (the stock mask-clear
+   * variant was seen to disturb the PCIe tunnel bring-up on cold boots). */
+  REG_CPU_DMA_INT = 0x04;
+  REG_CPU_DMA_INT = 0x02;
   REG_CPU_DMA_CTRL_CC90 = (uint8_t)(REG_CPU_DMA_CTRL_CC90 | 0x05);
   REG_CPU_DMA_DATA_LO = 0x00;
   REG_CPU_DMA_DATA_HI = 0xC8;

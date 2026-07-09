@@ -4,18 +4,27 @@
 #include "types.h"
 #include "registers.h"
 #include "flash.h"
+#include "util.h"
 
 #define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
 
 /*=== USB device identification ===*/
 #define USB_VID                 0x3801
+/* The bootstub personality overrides PID/product/bcdDevice before including
+ * this header (see bootstub.c); the app uses the defaults. */
+#ifndef USB_PID
 #define USB_PID                 0x0001
+#endif
+#ifndef USB_BCD_DEVICE
 #define USB_BCD_DEVICE          0x0001
+#endif
 #define USB_LANG_ID             0x0409   /* US English */
 
 /* String descriptors */
 #define USB_STR_MFG             "tiny"
+#ifndef USB_STR_PRODUCT
 #define USB_STR_PRODUCT         "custom v0.1"
+#endif
 
 #define USB_STR_IDX_LANG        0
 #define USB_STR_IDX_MFG         1
@@ -49,6 +58,21 @@ static __code const uint8_t usb_dev_desc_ss[] = {
 
 /*=== Configuration descriptors ===*/
 
+#ifdef USB_DFU_EP0_ONLY
+/* DFU personality: all firmware update traffic stays on EP0 control
+ * transfers — one vendor interface, zero endpoints. The chip's bulk-OUT
+ * engine, once active, locks the SPI controller's read DMA out of the
+ * 0x7000 buffer, so the bootstub never exposes bulk EPs. */
+static __code const uint8_t usb_cfg_desc[] = {
+  0x09, 0x02, U16_LE(18), 0x01, 0x01, 0x00, 0xC0, 0x00,
+  0x09, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00,
+};
+
+static __code const uint8_t usb_cfg_desc_ss[] = {
+  0x09, 0x02, U16_LE(18), 0x01, 0x01, 0x00, 0xC0, 0x00,
+  0x09, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00,
+};
+#else
 /* USB 2.0: 1 interface, 4 bulk EPs @ 64 B (FS) / 512 B (HS). Total=46. */
 static __code const uint8_t usb_cfg_desc[] = {
   0x09, 0x02, U16_LE(46), 0x01, 0x01, 0x00, 0xC0, 0x00,
@@ -84,6 +108,7 @@ static __code const uint8_t usb_cfg_desc_ss[] = {
   0x06, 0x30, 0x00, 0x00, U16_LE(0x0000),
   0x04, 0x24, 0x01, 0x00,
 };
+#endif /* USB_DFU_EP0_ONLY */
 
 /*=== BOS descriptor ===*/
 
@@ -168,6 +193,10 @@ static void usb_phy_tune(void) {
 }
 
 static void usb_init_controller(uint8_t force_usb2) {
+#ifdef BOOTSTUB
+    REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
+    usb_init_endpoint_state();
+#endif
     REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
     REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
     REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
@@ -179,6 +208,15 @@ static void usb_init_controller(uint8_t force_usb2) {
         REG_CPU_MODE = CPU_MODE_USB2;
         REG_USB_PHY_CTRL_91C0 = 0x10;
     }
+#ifdef BOOTSTUB
+    else {
+        /* CPU reset preserves CC30; restore the SS-capable mode so the
+         * bootstub enumerates at SuperSpeed after a 0xEC handoff. */
+        REG_CPU_MODE = CPU_MODE_USB3;
+        REG_USB_PHY_CTRL_91C0 |= USB_PHY_91C0_INIT_TOGGLE;
+        REG_USB_PHY_CTRL_91C0 &= (uint8_t)~USB_PHY_91C0_INIT_TOGGLE;
+    }
+#endif
 }
 
 /* Bring up the USB PIPE/PHY engine; run unconditionally at boot. */
@@ -220,6 +258,23 @@ static void usb4_phy_arm(void) {
     REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
 }
 
+#ifdef BOOTSTUB
+static uint8_t usb_wait_ep0_dma_idle(void) {
+    uint16_t timeout = 0xFFFF;
+    do {
+        if (REG_USB_DMA_TRIGGER == 0) return 1;
+    } while (--timeout);
+    return 0;
+}
+
+static void usb_attach_controller(void) {
+    REG_USB_POWER_CYCLE = 0;
+    timer_delay_ms(25);
+    REG_USB_POWER_CYCLE = USB_POWER_CYCLE_TRIGGER;
+    timer_delay_ms(25);
+}
+#endif /* BOOTSTUB */
+
 /* EP0 IN: send `len` bytes of DESC_BUF, or a zero-length ack. */
 static void usb_send_data(uint16_t len) {
     REG_USB_EP0_LEN_H = (uint8_t)(len >> 8);
@@ -236,6 +291,9 @@ static void usb_desc_copy(__code const uint8_t *src, uint8_t len) {
 static void usb_handle_set_address(uint8_t wValL) {
     REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
     REG_USB_EP_CTRL_91D0  = 0x02;
+    /* The host assigned us an address: a USB recovery channel (0xEC / bootstub
+     * DFU) is live, so clear the bootstub wedge-guard count. */
+    boot_mark_healthy();
     usb_send_zlp();
 }
 
@@ -273,6 +331,10 @@ static void usb_handle_get_descriptor(uint8_t is_usb2, uint8_t desc_type,
     usb_send_data(wlen < desc_len ? wlen : desc_len);
     return;
   } else {
+    /* Unknown descriptor type (DEVICE_QUALIFIER, OTHER_SPEED_CONFIG, debug,
+     * ...): stall EP0 so the host moves on immediately instead of retrying
+     * until it times out and resets the port. */
+    REG_USB_DMA_TRIGGER = USB_DMA_STALL;
     return;
   }
 
