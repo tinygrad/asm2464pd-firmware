@@ -22,7 +22,6 @@ import sys
 import time
 import argparse
 
-from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
 
 # =============================================================================
@@ -232,27 +231,33 @@ class ASM2464PD:
     def __init__(self, verbose=False, dry_run=False):
         self.verbose = verbose
         self.dry_run = dry_run
-        self.dev = None
+        self.handle = None
+        self.ctx = None
         self._write_count = 0
         self._read_count = 0
 
     def open(self):
         """Open USB device."""
+        self.ctx = ctypes.POINTER(libusb.libusb_context)()
+        if libusb.libusb_init(ctypes.byref(self.ctx)) < 0:
+            raise RuntimeError("libusb init failed")
         for vid, pid in SUPPORTED_DEVICES:
-            try:
-                self.dev = USB3(vid, pid, 0x81, 0x83, 0x02, 0x04, use_bot=True)
+            self.handle = libusb.libusb_open_device_with_vid_pid(self.ctx, vid, pid)
+            if self.handle:
+                libusb.libusb_claim_interface(self.handle, 0)
                 print(f"Opened device {vid:04X}:{pid:04X}")
                 return
-            except RuntimeError:
-                pass
         raise RuntimeError("No ASM2464PD device found")
 
     def close(self):
         """Release USB interface."""
-        if self.dev:
-            libusb.libusb_release_interface(self.dev.handle, 0)
-            libusb.libusb_close(self.dev.handle)
-            self.dev = None
+        if self.handle:
+            libusb.libusb_release_interface(self.handle, 0)
+            libusb.libusb_close(self.handle)
+            self.handle = None
+        if self.ctx:
+            libusb.libusb_exit(self.ctx)
+            self.ctx = None
 
     def read(self, addr, size=1):
         """Read bytes from XDATA via 0xE4 vendor control transfer."""
@@ -262,7 +267,7 @@ class ASM2464PD:
                 print(f"  RD  0x{addr:04X} [{size}]  (dry-run)")
             return bytes(size)  # return zeros
         buf = (ctypes.c_ubyte * size)()
-        ret = libusb.libusb_control_transfer(self.dev.handle, 0xC0, 0xE4, addr, 0, buf, size, 1000)
+        ret = libusb.libusb_control_transfer(self.handle, 0xC0, 0xE4, addr, 0, buf, size, 1000)
         if ret < 0:
             raise IOError(f"E4 read(0x{addr:04X}, {size}) failed: {ret}")
         data = bytes(buf[:ret])
@@ -281,7 +286,7 @@ class ASM2464PD:
             print(f"  WR  0x{addr:04X} = 0x{val:02X}")
         if self.dry_run:
             return
-        ret = libusb.libusb_control_transfer(self.dev.handle, 0x40, 0xE5, addr, val, None, 0, 1000)
+        ret = libusb.libusb_control_transfer(self.handle, 0x40, 0xE5, addr, val, None, 0, 1000)
         if ret < 0:
             raise IOError(f"E5 write(0x{addr:04X}, 0x{val:02X}) failed: {ret}")
 
@@ -292,7 +297,7 @@ class ASM2464PD:
             print(f"  B1W 0x{addr:04X} = 0x{val:02X}")
         if self.dry_run:
             return
-        ret = libusb.libusb_control_transfer(self.dev.handle, 0x40, 0xE5, addr, val | (1 << 8), None, 0, 1000)
+        ret = libusb.libusb_control_transfer(self.handle, 0x40, 0xE5, addr, val | (1 << 8), None, 0, 1000)
         if ret < 0:
             raise IOError(f"E5 bank1_write(0x{addr:04X}, 0x{val:02X}) failed: {ret}")
 
@@ -302,7 +307,7 @@ class ASM2464PD:
         if self.dry_run:
             return bytes(size)
         buf = (ctypes.c_ubyte * size)()
-        ret = libusb.libusb_control_transfer(self.dev.handle, 0xC0, 0xE4, addr, 1 << 8, buf, size, 1000)
+        ret = libusb.libusb_control_transfer(self.handle, 0xC0, 0xE4, addr, 1 << 8, buf, size, 1000)
         if ret < 0:
             raise IOError(f"E4 bank1_read(0x{addr:04X}, {size}) failed: {ret}")
         data = bytes(buf[:ret])
@@ -316,7 +321,7 @@ class ASM2464PD:
             print(f"  PCIe power {'on' if enabled else 'off'}")
         if self.dry_run:
             return
-        ret = libusb.libusb_control_transfer(self.dev.handle, 0x40, 0xF3, 1 if enabled else 0, 0, None, 0, 1000)
+        ret = libusb.libusb_control_transfer(self.handle, 0x40, 0xF3, 1 if enabled else 0, 0, None, 0, 1000)
         if ret < 0:
             state = 'on' if enabled else 'off'
             raise IOError(f"F3 PCIe power {state} failed: {ret}")
