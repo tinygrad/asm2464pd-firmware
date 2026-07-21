@@ -573,17 +573,10 @@ void main(void) {
         CRITICAL_EXIT();
       }
       /* After the 1s timeout commits USB4 mode on a USB3-only host (where PD
-       * never arrives), reinit PCIe/USB for USB3 mode.  Gated on !pd_seen
+       * never arrives), reset into USB3-direct mode.  Gated on !pd_seen
        * so the USB4 card never enters this path. */
       if (u4_entered_usb_mode && !usb4_usb_inited && !u4_boot.pd_seen) {
-        usb4_usb_inited = 1;
-        usb4_reinit_usb3_after_reset_fallback();
-        usb_phy_tune();
-        usb_init_controller(0);
-        REG_PCIE_TLP_CTRL   = 0x01;
-        REG_PCIE_TLP_LENGTH = 0x20;
-        pcie_apply_x2_rxphy_tuning();
-        pcie_power_on();
+        usb4_fallback_to_usb3();
       }
       /* On the USB4 card, after the sideband connection is fully established
        * (sb_asserted), do the RX PLL reset to connect the USB function to
