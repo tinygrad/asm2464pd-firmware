@@ -46,6 +46,9 @@ static uint32_t __xdata usb4_skip_magic;
 /* Streaming PCIe state — configured via 0xF0 control message */
 static uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming transfer */
 
+static uint8_t __xdata stress_mode;      /* 0=off, 1=OUT sink, 2=IN source, 3=loopback */
+static uint16_t __xdata stress_xfer_size; /* IN source transfer size in bytes */
+
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
 #include "i2c.h"
@@ -139,6 +142,23 @@ static void do_usb_bulk_in(void) {
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
 
+static uint16_t __xdata stress_seq;
+
+static void stress_fill_in_buf(void) {
+  __xdata uint8_t *buf = (__xdata uint8_t *)0x8000;
+  uint16_t i;
+  for (i = 0; i < stress_xfer_size; i++) buf[i] = (uint8_t)i;
+  buf[0] = (uint8_t)(stress_seq >> 8);
+  buf[1] = (uint8_t)(stress_seq & 0xFF);
+  stress_seq++;
+}
+
+static void do_stress_bulk_in(void) {
+  REG_USB_BULK_IN_LEN_H = (uint8_t)(stress_xfer_size >> 8);
+  REG_USB_BULK_IN_LEN_L = (uint8_t)(stress_xfer_size & 0xFF);
+  REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
+}
+
 
 /*=== USB Control Handler ===*/
 
@@ -179,6 +199,7 @@ static void handle_usb_control(void) {
         REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       }
       dma_dwords = 0;
+      stress_mode = 0;
       usb_send_zlp();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
       // enable USB bulk mode (bypass MSC)
@@ -187,12 +208,14 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
+      stress_mode = 0;
       usb_send_zlp();
       uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
+      stress_mode = 0;
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xC0) {
       /* 0xC0 IN: hw_status_t */
@@ -253,6 +276,27 @@ static void handle_usb_control(void) {
       } else {
         pcie_power_off();
       }
+      usb_send_zlp();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF4) {
+      /* 0xF4: USB bulk stress test.
+       *   wValue low  = mode (0=off, 1=OUT sink, 2=IN source, 3=loopback)
+       *   wValue high = xfer size in 512B units (0=4096) */
+      stress_mode = wValL;
+      stress_xfer_size = wValH ? ((uint16_t)wValH * 512) : 1024;
+      if (stress_xfer_size > 1024) stress_xfer_size = 1024;
+      dma_dwords = 0;
+      if (stress_mode == 2) {
+        stress_seq = 0;
+        do_stress_bulk_in();
+      } else if (stress_mode == 1 || stress_mode == 3) {
+        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      }
+      uart_puts("[STRESS ");
+      uart_puthex(stress_mode);
+      uart_puts(" ");
+      uart_puthex((uint8_t)(stress_xfer_size >> 8));
+      uart_puthex((uint8_t)(stress_xfer_size & 0xFF));
+      uart_puts("]\n");
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
@@ -372,9 +416,33 @@ void handle_usb_bulk_data(void) {
   uint8_t bulk_cfg1, bulk_cfg2;
   bulk_cfg1 = REG_USB_EP_CFG1;
   bulk_cfg2 = REG_USB_EP_CFG2;
-  /*uart_puts("[BULK ");
-  uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
-  uart_puts("]\n");*/
+  if (stress_mode) {
+    if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
+      REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_OUT_COMPLETE;
+      if (stress_mode == 3) {
+        uint16_t bc = ((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L;
+        __xdata uint8_t *src = (__xdata uint8_t *)0x7000;
+        __xdata uint8_t *dst = (__xdata uint8_t *)0x8000;
+        uint16_t i;
+        for (i = 0; i < bc; i++) dst[i] = src[i];
+        REG_USB_BULK_IN_LEN_H = (uint8_t)(bc >> 8);
+        REG_USB_BULK_IN_LEN_L = (uint8_t)(bc & 0xFF);
+        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
+        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      } else {
+        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      }
+    }
+    if (bulk_cfg1 & USB_EP_CFG1_BULK_IN_COMPLETE) {
+      REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_IN_COMPLETE;
+      if (stress_mode == 2) {
+        do_stress_bulk_in();
+      } else if (stress_mode == 3) {
+        REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+      }
+    }
+    return;
+  }
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
     REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_OUT_COMPLETE;
     uint16_t dword_count = (((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L) >> 2;
