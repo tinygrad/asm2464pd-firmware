@@ -3,6 +3,7 @@
 
 
 static void boot_phy_set_link_mode(uint8_t param);  /* dd42 */
+static void u4c_uart_drain_wait(void);  /* e7ae, defined in usb4.h */
 
 static uint8_t P1_REG8_rd(uint16_t off) {
   uint8_t v;

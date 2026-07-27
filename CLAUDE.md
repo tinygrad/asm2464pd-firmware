@@ -7,7 +7,7 @@ work with the custom firmware in handmade/src/main.c
 
 You can rebuild and flash the firmware with:
 
-make -C handmade nflash
+make -C handmade nrecover
 
 
 Goals:

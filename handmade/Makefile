@@ -38,7 +38,7 @@ TARGET = $(BUILD_DIR)/firmware
 HEX = $(TARGET).ihx
 BIN = $(TARGET).bin
 
-.PHONY: all clean flash wrapped uflash nflash bootstub bootstub-flash image
+.PHONY: all clean flash recover nrecover wrapped uflash bootstub image
 
 all: $(BIN)
 	@echo "Built: $(BIN)"
@@ -178,29 +178,28 @@ $(APP_IMAGE): $(APP_BIN)
 
 image: $(APP_IMAGE)
 
-bootstub-flash: $(BOOTSTUB_WRAPPED)
-	@python3 ../ftdi_debug.py -bn
-	@python3 ../flash.py $<
-	@python3 ../ftdi_debug.py -rn
-
 uflash: $(BUILD_DIR)/firmware_wrapped.bin
 	@python3 e4_flash.py $<
 
-nflash: $(BUILD_DIR)/firmware_wrapped.bin
+recover: $(BUILD_DIR)/firmware_wrapped.bin
+	@echo "Resetting to bootloader..."
+	@python3 ../ftdi_debug.py -bn
+	@echo "Flashing firmware to device..."
+	@python3 ../flash.py $<
+	@echo "Resetting device and capturing UART output..."
+	@python3 ../ftdi_debug.py -rt 2
+
+nrecover: $(BUILD_DIR)/firmware_wrapped.bin
 	@echo "Resetting to bootloader..."
 	@python3 ../ftdi_debug.py -bn
 	@echo "Flashing firmware to device..."
 	@python3 ../flash.py $<
 	@python3 ../ftdi_debug.py -rn
 
-# Flash to device
-flash: $(BUILD_DIR)/firmware_wrapped.bin
-	@echo "Resetting to bootloader..."
-	@python3 ../ftdi_debug.py -bn
-	@echo "Flashing firmware to device..."
-	@python3 ../flash.py $<
-	@echo "Resetting device..."
-	@python3 ../ftdi_debug.py -rt 2
+# Update only the bootstub-managed user firmware. The running application is
+# asked to enter DFU; no FTDI or mask-ROM bootloader reflash is involved.
+flash: $(APP_IMAGE)
+	@python3 flash.py $<
 
 # Clean build artifacts
 clean:

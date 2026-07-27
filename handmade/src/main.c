@@ -633,19 +633,7 @@ void main(void) {
        * never arrives), reset into USB3-direct mode.  Gated on !pd_seen
        * so the USB4 card never enters this path. */
       if (u4_entered_usb_mode && !usb4_usb_inited && !u4_boot.pd_seen) {
-<<<<<<< HEAD
         usb4_fallback_to_usb3();
-=======
-        usb4_usb_inited = 1;
-        usb4_reinit_usb3_after_reset_fallback();
-        usb_phy_tune();
-        usb_init_controller(0);
-        usb_attach_cycle();
-        REG_PCIE_TLP_CTRL   = 0x01;
-        REG_PCIE_TLP_LENGTH = 0x20;
-        pcie_apply_x2_rxphy_tuning();
-        pcie_power_on();
->>>>>>> 8f513a2 (bootstub attempt 3)
       }
       /* On the USB4 card, after the sideband connection is fully established
        * (sb_asserted), do the RX PLL reset to connect the USB function to
