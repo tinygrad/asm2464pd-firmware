@@ -166,6 +166,8 @@
 #define   USB_DESC_TYPE_STRING       0x03
 #define   USB_DESC_TYPE_INTERFACE    0x04
 #define   USB_DESC_TYPE_ENDPOINT     0x05
+#define   USB_DESC_TYPE_DEVICE_QUALIFIER 0x06
+#define   USB_DESC_TYPE_OTHER_SPEED_CONFIG 0x07
 #define   USB_DESC_TYPE_BOS          0x0F  // Binary Object Store (USB 3.0)
 
 // Additional USB control buffer registers

@@ -1,4 +1,5 @@
-; Bootstub startup. Interrupt vectors trampoline into userfw at 0x2400+.
+; Bootstub startup. Reset stays local; every interrupt vector trampolines into
+; userfw at the corresponding offset from 0x3000.
 ;
 ; Structure matches crt0_userfw.s / crt0.s: the whole project deliberately
 ; avoids initialized statics, so GSINIT is empty and startup jumps straight
@@ -17,22 +18,22 @@ __reset:
     ljmp    __sdcc_program_startup
 
     .org    0x0003
-    ljmp    0x2403
+    ljmp    0x3003
 
     .org    0x000B
-    ljmp    0x240B
+    ljmp    0x300B
 
     .org    0x0013
-    ljmp    0x2413
+    ljmp    0x3013
 
     .org    0x001B
-    ljmp    0x241B
+    ljmp    0x301B
 
     .org    0x0023
-    ljmp    0x2423
+    ljmp    0x3023
 
     .org    0x002B
-    ljmp    0x242B
+    ljmp    0x302B
 
     .area   HOME    (CODE)
 __sdcc_program_startup:

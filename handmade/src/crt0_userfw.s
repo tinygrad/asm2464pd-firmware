@@ -1,8 +1,8 @@
 ; crt0_userfw.s - Startup for bootstub-loaded userfw
 ;
-; The bootstub copies this image from flash to CODE 0x2400 using the
-; PCON bit 4 (MEMSEL) code_write mechanism. Interrupt vectors are at
-; 0x2400+ and the bootstub's crt0 trampolines to them.
+; The bootstub copies this image from flash to CODE 0x3000 using the
+; PCON bit 4 (MEMSEL) code_write mechanism. Reset enters here after validation;
+; every interrupt vector is forwarded here by the bootstub.
 
     .module crt0_userfw
     .globl  _main
@@ -14,34 +14,34 @@
     ; Linker-computed stack base (start of SSEG, after all IDATA/overlay)
     .globl  __start__stack
 
-; Interrupt vectors — absolute at 0x2400 (where bootstub trampolines to)
+; Application vector table — absolute at 0x3000.
     .area   VECTOR  (ABS,CODE)
 
-    .org    0x2400
+    .org    0x3000
 __reset:
     ljmp    __sdcc_program_startup
 
-    .org    0x2403
+    .org    0x3003
 __ext0_vector:
     ljmp    _int0_isr
 
-    .org    0x240B
+    .org    0x300B
 __timer0_vector:
     reti
 
-    .org    0x2413
+    .org    0x3013
 __ext1_vector:
     ljmp    _int1_isr
 
-    .org    0x241B
+    .org    0x301B
 __timer1_vector:
     reti
 
-    .org    0x2423
+    .org    0x3023
 __serial_vector:
     reti
 
-    .org    0x242B
+    .org    0x302B
 __timer2_vector:
     reti
 

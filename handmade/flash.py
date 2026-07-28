@@ -13,8 +13,12 @@ import os
 import struct
 import sys
 import time
+import zlib
 
-from tinygrad.runtime.autogen import libusb
+try:
+  from tinygrad.runtime.autogen import libusb
+except ModuleNotFoundError:
+  libusb = None
 
 USERFW_VID,   USERFW_PID   = 0xADD1, 0x0001
 BOOTSTUB_VID, BOOTSTUB_PID = 0xADD1, 0xB007
@@ -24,12 +28,20 @@ SECTOR_SIZE         = 0x1000
 PAGE                = 64        # USB 2.0 EP0 max packet — see protocol comment in bootstub.c
 PAGE_SS             = 512       # SuperSpeed EP0 max packet (bootstub bcdDevice >= 0x0002)
 USERFW_HEADER_SIZE  = 0x40
-USERFW_BODY_LIMIT   = 0xDC00
+USERFW_BODY_LIMIT   = 0xD000
 USERFW_IMAGE_END    = USERFW_FLASH_OFFSET + USERFW_HEADER_SIZE + USERFW_BODY_LIMIT
 USERFW_ERASE_END    = (USERFW_IMAGE_END + SECTOR_SIZE - 1) & ~(SECTOR_SIZE - 1)
 
 TIMEOUT_MS = 5000
 FLASH_ADDR24_LIMIT = 0x1000000
+DFU_PROTOCOL_VERSION = 1
+BOOT_ABI_VERSION = 1
+DFU_INFO = struct.Struct("<4sBBBBHHII")
+DFU_STATUS = struct.Struct("<BBBB")
+
+DFU_STATUS_NAMES = ("ok", "bad request", "range error", "USB DMA timeout",
+                    "flash unlock failure", "flash erase failure",
+                    "flash program failure", "flash read failure", "aborted")
 
 
 def _range_ok(addr, length, end):
@@ -68,6 +80,8 @@ def assert_single_card():
 
 
 def open_device(vid_pid_list=((BOOTSTUB_VID, BOOTSTUB_PID), (USERFW_VID, USERFW_PID))):
+  if libusb is None:
+    raise RuntimeError("tinygrad.runtime.autogen.libusb is required for USB operations")
   ctx = ctypes.POINTER(libusb.libusb_context)()
   _check(libusb.libusb_init(ctypes.byref(ctx)), "libusb_init")
   last_error = None
@@ -100,11 +114,54 @@ def _ctl(h, bm, bReq, wValue, wIndex, data, wLen, what, timeout=TIMEOUT_MS):
   buf = (ctypes.c_ubyte * wLen)(*data) if data else (ctypes.c_ubyte * wLen)()
   r = libusb.libusb_control_transfer(h, bm, bReq, wValue, wIndex, buf, wLen, timeout)
   if r < 0: raise IOError(f"{what}: control transfer failed (libusb={r})")
-  if bm & 0x80:                                # IN: returned byte count
+  if bm & 0x80:                                # IN: require the complete reply
+    if r != wLen:
+      raise IOError(f"{what}: short transfer ({r}/{wLen})")
     return bytes(buf[:r])
   if r != wLen:                                # OUT: chip must have accepted everything
     raise IOError(f"{what}: short transfer ({r}/{wLen})")
   return None
+
+
+def validate_image(image, source="<image>"):
+  def require(ok, message):
+    if not ok: raise ValueError(f"{source}: {message}")
+  require(len(image) >= USERFW_HEADER_SIZE, "truncated header")
+  require(image[:4] == b"A24F", "bad image magic")
+  require(image[0x1B] == BOOT_ABI_VERSION, f"unsupported boot ABI {image[0x1B]}")
+  body_len, stored_crc = struct.unpack_from("<II", image, 0x1C)
+  require(0 < body_len <= USERFW_BODY_LIMIT, f"invalid body length {body_len}")
+  require(len(image) == USERFW_HEADER_SIZE + body_len, "length mismatch")
+  require(not any(image[0x24:USERFW_HEADER_SIZE]), "nonzero reserved header bytes")
+  crc = zlib.crc32(image[:0x20] + image[USERFW_HEADER_SIZE:]) & 0xFFFFFFFF
+  require(crc == stored_crc, f"CRC mismatch ({stored_crc:08x} != {crc:08x})")
+  require(_range_ok(USERFW_FLASH_OFFSET, len(image), USERFW_IMAGE_END),
+          "image exceeds partition")
+  return body_len
+
+
+def cmd_get_info(h):
+  fields = DFU_INFO.unpack(_ctl(h, 0xC0, 0xB4, 0, 0, None, DFU_INFO.size, "get_info"))
+  magic, protocol, boot_abi, flags, reserved, max_write, sector, start, end = fields
+  if magic != b"A24D": raise RuntimeError(f"bad DFU magic {magic!r}")
+  if protocol != DFU_PROTOCOL_VERSION:
+    raise RuntimeError(f"unsupported DFU protocol {protocol}")
+  if boot_abi != BOOT_ABI_VERSION: raise RuntimeError(f"unsupported boot ABI {boot_abi}")
+  expected = (reserved == 0 and flags & 1 and max_write in (PAGE, PAGE_SS) and
+              sector == SECTOR_SIZE and start == USERFW_FLASH_OFFSET and
+              end == USERFW_IMAGE_END)
+  if not expected: raise RuntimeError(f"incompatible DFU geometry {fields[3:]}")
+  return max_write
+
+
+def dfu_error_context(h, error):
+  try:
+    protocol, status, last_op, pending_op = DFU_STATUS.unpack(
+      _ctl(h, 0xC0, 0xB5, 0, 0, None, DFU_STATUS.size, "get_status"))
+    name = DFU_STATUS_NAMES[status] if status < len(DFU_STATUS_NAMES) else status
+    return IOError(f"{error}; bootstub={name}, last_op=0x{last_op:02X}, pending={pending_op}")
+  except Exception as status_error:
+    return IOError(f"{error}; status unavailable ({status_error})")
 
 
 def cmd_erase(h, addr, length):
@@ -115,8 +172,17 @@ def cmd_erase(h, addr, length):
   # a full-region erase on slow/aged NOR can far exceed the default 5s. Scale
   # the timeout to the sector count (a generous ~2s/sector).
   n_sectors = length // SECTOR_SIZE
-  _ctl(h, 0x40, 0xB0, 0, 0, struct.pack("<II", addr, length), 8,
-       f"erase 0x{addr:05X}+0x{length:X}", timeout=max(TIMEOUT_MS, 2000 * n_sectors))
+  error = None
+  for attempt in range(2):
+    try:
+      _ctl(h, 0x40, 0xB0, 0, 0, struct.pack("<II", addr, length), 8,
+           f"erase 0x{addr:05X}+0x{length:X}", timeout=max(TIMEOUT_MS, 2000 * n_sectors))
+      return
+    except IOError as exc:
+      error = exc
+      if attempt == 0:
+        print("  erase outcome unknown; safely retrying the same sectors")
+  raise dfu_error_context(h, error)
 
 def cmd_set_addr(h, addr):
   if not (0 <= addr < FLASH_ADDR24_LIMIT):
@@ -130,6 +196,26 @@ def cmd_read(h, length):
     n = min(PAGE, length - len(out))
     out.extend(_ctl(h, 0xC0, 0xB3, 0, 0, None, n, f"read +{len(out)}"))
   return bytes(out)
+
+
+def cmd_write(h, addr, data, retries=3):
+  """Write one explicitly addressed packet; replaying identical NOR data is
+  safe when the host lost only the status phase of the prior attempt."""
+  error = None
+  for attempt in range(retries):
+    try:
+      cmd_set_addr(h, addr)
+      _ctl(h, 0x40, 0xB2, 0, 0, data, len(data), f"write @0x{addr:05X}")
+      return
+    except IOError as exc:
+      error = exc
+      if attempt + 1 < retries:
+        try:
+          _ctl(h, 0x40, 0xB6, 0, 0, None, 0, "abort")
+        except Exception:
+          pass
+        print(f"\n  write @0x{addr:05X} outcome unknown; retrying identical data")
+  raise dfu_error_context(h, error)
 
 def cmd_reboot(h):
   print("  rebooting (0xEB)")
@@ -204,6 +290,36 @@ def wait_for_dfu(timeout=10.0):
   raise TimeoutError("bootstub never enumerated — check serial for [BS]/[DFU]")
 
 
+def wait_for_app(timeout=60.0):
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    speed = sysfs_usb_speed(USERFW_VID, USERFW_PID)
+    if speed is not None:
+      return f"USB at {speed} Mb/s"
+    if sysfs_usb4_router_present():
+      return "USB4 router"
+    time.sleep(0.2)
+  raise TimeoutError("application never enumerated")
+
+
+def test_app():
+  """One verified control + bulk transfer for the recovery state machine."""
+  _, _, h, ctx = open_device([(USERFW_VID, USERFW_PID)])
+  payload = bytes(((i * 37) + 11) & 0xFF for i in range(512))
+  try:
+    _ctl(h, 0x40, 0xF2, 1, 0x0100, None, 0, "arm SRAM bulk OUT")
+    buf, done = (ctypes.c_ubyte * len(payload))(*payload), ctypes.c_int()
+    _check(libusb.libusb_bulk_transfer(h, 0x02, buf, len(buf), ctypes.byref(done), TIMEOUT_MS),
+           "bulk OUT")
+    if done.value != len(payload): raise IOError(f"short bulk OUT ({done.value}/{len(payload)})")
+    got = b"".join(_ctl(h, 0xC0, 0xE4, 0xF000 + off, 0, None,
+                        min(PAGE, len(payload)-off), "SRAM readback")
+                   for off in range(0, len(payload), PAGE))
+    if got != payload: raise IOError("bulk SRAM readback mismatch")
+  finally:
+    close_device(h, ctx)
+
+
 def sysfs_usb_speed(vid, pid):
   """Speed (Mb/s) of the first vid:pid USB device in sysfs, or None."""
   for d in glob.glob("/sys/bus/usb/devices/*"):
@@ -215,22 +331,6 @@ def sysfs_usb_speed(vid, pid):
     except (OSError, ValueError):
       continue
   return None
-
-
-def dfu_write_chunk():
-  """Largest DFU write payload the enumerated bootstub supports: 512 bytes
-  when it is at SuperSpeed and advertises bcdDevice >= 0x0002, else 64."""
-  for d in glob.glob("/sys/bus/usb/devices/*"):
-    try:
-      with open(d + "/idVendor") as f: v = int(f.read().strip(), 16)
-      with open(d + "/idProduct") as f: pr = int(f.read().strip(), 16)
-      if v == BOOTSTUB_VID and pr == BOOTSTUB_PID:
-        with open(d + "/bcdDevice") as f: bcd = int(f.read().strip(), 16)
-        with open(d + "/speed") as f: spd = int(float(f.read().strip()))
-        return PAGE_SS if (bcd >= 2 and spd >= 5000) else PAGE
-    except (OSError, ValueError):
-      continue
-  return PAGE
 
 
 def sysfs_usb4_router_present(vid=0xADD1):
@@ -288,7 +388,7 @@ def verify_app_link(max_bounces=2, timeout=240.0):
   return True
 
 
-def flash_image(h, image, addr, verify=False):
+def flash_image(h, image, addr, page, verify=False):
   if addr % SECTOR_SIZE: sys.exit(f"image addr 0x{addr:X} not sector-aligned")
   if not _range_ok(addr, len(image), USERFW_IMAGE_END):
     sys.exit(f"image too large for userfw area: 0x{addr:05X}+0x{len(image):X}")
@@ -299,13 +399,11 @@ def flash_image(h, image, addr, verify=False):
   print(f"  erasing 0x{addr:05X}-0x{addr + erase_len - 1:05X} ({erase_len // SECTOR_SIZE} sectors)")
   cmd_erase(h, addr, erase_len)
 
-  page = dfu_write_chunk()
   print(f"  writing {len(image)} bytes ({page}-byte packets)")
-  cmd_set_addr(h, addr)
   t0 = time.monotonic()
   for off in range(0, len(image), page):
     chunk = image[off:off + page]
-    _ctl(h, 0x40, 0xB2, 0, 0, chunk, len(chunk), f"write @0x{addr+off:05X}")
+    cmd_write(h, addr + off, chunk)
     rate = (off + len(chunk)) / (time.monotonic() - t0 + 1e-9)
     print(f"\r  {off + len(chunk)}/{len(image)} ({100 * (off + len(chunk)) // len(image)}%) {rate:.0f} B/s",
           end="", flush=True)
@@ -326,8 +424,10 @@ def flash_image(h, image, addr, verify=False):
 def cmd_flash(args):
   assert_single_card()
   with open(args.image, "rb") as f: image = f.read()
-  if image[:4] != b"A24F":
-    sys.exit(f"error: {args.image} doesn't look like a packed userfw image")
+  try:
+    validate_image(image, args.image)
+  except ValueError as exc:
+    sys.exit(f"error: {exc}")
   print(f"image: {args.image} ({len(image)} bytes)")
 
   # Converge to bootstub DFU first, handling app-as-USB-device (0xEC) and
@@ -337,7 +437,9 @@ def cmd_flash(args):
   _, _, h, ctx = wait_for_dfu()
   print("bootstub up.")
   try:
-    flash_image(h, image, USERFW_FLASH_OFFSET, verify=args.verify)
+    page = cmd_get_info(h)
+    print(f"  DFU v1, boot ABI 1, max write {page} bytes")
+    flash_image(h, image, USERFW_FLASH_OFFSET, page, verify=args.verify)
     if not args.no_reboot: cmd_reboot(h)
   finally:
     close_device(h, ctx)
@@ -350,16 +452,35 @@ def cmd_enter_dfu(args):
   if not enter_dfu_from_app():
     sys.exit("FAIL: no app or DFU device found")
   _, _, h, ctx = wait_for_dfu()
-  print("bootstub up.")
-  close_device(h, ctx)
+  try:
+    cmd_get_info(h)
+    print("bootstub up: DFU v1, boot ABI 1.")
+  finally:
+    close_device(h, ctx)
 
 
 def cmd_reboot_only(args):
-  _, _, h, ctx = open_device()
+  _, _, h, ctx = open_device([(BOOTSTUB_VID, BOOTSTUB_PID)])
   try: cmd_reboot(h)
   finally: close_device(h, ctx)
   if not verify_app_link():
     sys.exit("FAIL: app link verification failed")
+
+
+def cmd_wait_dfu(args):
+  _, _, h, ctx = wait_for_dfu(args.timeout)
+  try:
+    page = cmd_get_info(h)
+    print(f"bootstub up: DFU v1, boot ABI 1, max write {page} bytes")
+  finally:
+    close_device(h, ctx)
+
+
+def cmd_wait_app(args):
+  print(f"application up: {wait_for_app(args.timeout)}")
+  if args.test:
+    test_app()
+    print("application control/bulk test passed")
 
 
 def cmd_read_dump(args):
@@ -395,6 +516,15 @@ def main():
   sub.add_parser("reboot", help="0xEB reset; bootstub re-validates and boots userfw"
                  ).set_defaults(func=cmd_reboot_only)
 
+  pwd = sub.add_parser("wait-dfu", help="wait for bootstub DFU and validate its protocol")
+  pwd.add_argument("--timeout", type=float, default=30.0)
+  pwd.set_defaults(func=cmd_wait_dfu)
+
+  pwa = sub.add_parser("wait-app", help="wait for the application USB function or USB4 router")
+  pwa.add_argument("--timeout", type=float, default=60.0)
+  pwa.add_argument("--test", action="store_true", help="verify control and bulk data")
+  pwa.set_defaults(func=cmd_wait_app)
+
   pr = sub.add_parser("read", help="hex-dump SPI flash")
   pr.add_argument("addr", type=lambda s: int(s, 0))
   pr.add_argument("size", type=lambda s: int(s, 0), nargs="?", default=256)
@@ -402,7 +532,7 @@ def main():
 
   argv = sys.argv[1:]
   if argv and not argv[0].startswith("-") \
-     and argv[0] not in {"flash", "enter-dfu", "reboot", "read"}:
+     and argv[0] not in {"flash", "enter-dfu", "reboot", "wait-dfu", "wait-app", "read"}:
     argv = ["flash", *argv]
 
   args = p.parse_args(argv)

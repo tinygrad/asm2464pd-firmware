@@ -40,12 +40,18 @@ static void boot_mark_healthy(void) {
     BOOT_TRACK = 0;
 }
 
+/* Immutable bootstub/application ABI. Keep these values synchronized with
+ * crt0_bootstub.s and crt0_userfw.s; tools/check_boot_layout.py enforces the
+ * linked result. */
+#define BOOT_ABI_VERSION        0x01U
+#define BOOTSTUB_CODE_SIZE      0x3000U
+
 /* Userfw layout constants (shared between bootstub and app). */
 #define USERFW_FLASH_OFFSET     0x4000UL
 #define USERFW_HEADER_SIZE      0x40UL
 #define USERFW_HEADER_CRC_LEN   0x20U
-#define USERFW_CODE_BASE        0x2400
-#define USERFW_BODY_LIMIT       0xDC00UL  /* CODE 0x2400-0xFFFF */
+#define USERFW_CODE_BASE        BOOTSTUB_CODE_SIZE
+#define USERFW_BODY_LIMIT       0xD000UL  /* CODE 0x3000-0xFFFF */
 #define USERFW_FLASH_END        (USERFW_FLASH_OFFSET + USERFW_HEADER_SIZE + USERFW_BODY_LIMIT)
 #define SECTOR_SIZE             0x1000UL
 #define USERFW_ERASE_END        ((USERFW_FLASH_END + (SECTOR_SIZE - 1)) & ~(SECTOR_SIZE - 1))
@@ -53,7 +59,8 @@ static void boot_mark_healthy(void) {
 /* Userfw header structure. */
 typedef struct {
   uint8_t  magic[4];
-  uint8_t  gitversion[24];
+  uint8_t  gitversion[23];
+  uint8_t  boot_abi;
   uint32_t body_len;
   uint32_t crc;
   uint8_t  _pad[28];

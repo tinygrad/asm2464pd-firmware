@@ -3,11 +3,12 @@
 
 Wire format:
   +0x00  magic       'A','2','4','F'  (4 bytes)
-  +0x04  gitversion  short git hash plus -CLEAN/-DIRTY, NUL-padded  (24 bytes)
+  +0x04  gitversion  short git hash plus -CLEAN/-DIRTY, NUL-padded  (23 bytes)
+  +0x1B  boot_abi    immutable bootstub/application ABI version     (1 byte)
   +0x1C  body_len    u32 LE           (4 bytes)
   +0x20  crc32       u32 LE — over header[0:0x20] || body  (4 bytes)
   +0x24  reserved    (28 bytes, zeros)
-  +0x40  body        copied to CODE 0x2400
+  +0x40  body        copied to CODE 0x3000
 """
 
 import argparse
@@ -21,8 +22,9 @@ import zlib
 MAGIC = b"A24F"
 HDR_SIZE = 0x40
 HASH_OFF = 0x20
-BODY_MAX = 0xDC00  # CODE 0x2400-0xFFFF
-GITVERSION_SIZE = 24
+BODY_MAX = 0xD000  # CODE 0x3000-0xFFFF
+GITVERSION_SIZE = 23
+BOOT_ABI_VERSION = 1
 
 
 def read_file(path: str) -> bytes:
@@ -63,7 +65,7 @@ def main() -> int:
   parser.add_argument(
     "--common",
     required=True,
-    help=".bin to load at CODE 0x2400 (<=55 KB)",
+    help=".bin to load at CODE 0x3000 (<=52 KB)",
   )
   parser.add_argument("-o", "--output", required=True, help="output image file")
   args = parser.parse_args()
@@ -82,6 +84,7 @@ def main() -> int:
     MAGIC
     + gitversion
     + b"\x00" * (GITVERSION_SIZE - len(gitversion))
+    + bytes([BOOT_ABI_VERSION])
     + struct.pack("<I", len(body))
   )
   assert len(pre) == HASH_OFF
