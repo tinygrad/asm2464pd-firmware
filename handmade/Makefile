@@ -181,19 +181,27 @@ image: $(APP_IMAGE)
 uflash: $(BUILD_DIR)/firmware_wrapped.bin
 	@python3 e4_flash.py $<
 
-recover: $(BUILD_DIR)/firmware_wrapped.bin
-	@echo "Resetting to bootloader..."
+recover: $(BOOTSTUB_WRAPPED) $(APP_IMAGE)
+	@echo "Resetting to mask-ROM bootloader..."
 	@python3 ../ftdi_debug.py -bn
-	@echo "Flashing firmware to device..."
-	@python3 ../flash.py $<
-	@echo "Resetting device and capturing UART output..."
+	@echo "Installing bootstub..."
+	@python3 ../flash.py $(BOOTSTUB_WRAPPED)
+	@python3 ../ftdi_debug.py -rn
+	@sleep 2
+	@echo "Installing user firmware through bootstub DFU..."
+	@python3 flash.py flash $(APP_IMAGE) --no-reboot
+	@echo "Resetting into user firmware and capturing UART output..."
 	@python3 ../ftdi_debug.py -rt 2
 
-nrecover: $(BUILD_DIR)/firmware_wrapped.bin
-	@echo "Resetting to bootloader..."
+nrecover: $(BOOTSTUB_WRAPPED) $(APP_IMAGE)
+	@echo "Resetting to mask-ROM bootloader..."
 	@python3 ../ftdi_debug.py -bn
-	@echo "Flashing firmware to device..."
-	@python3 ../flash.py $<
+	@echo "Installing bootstub..."
+	@python3 ../flash.py $(BOOTSTUB_WRAPPED)
+	@python3 ../ftdi_debug.py -rn
+	@sleep 2
+	@echo "Installing user firmware through bootstub DFU..."
+	@python3 flash.py flash $(APP_IMAGE) --no-reboot
 	@python3 ../ftdi_debug.py -rn
 
 # Update only the bootstub-managed user firmware. The running application is
