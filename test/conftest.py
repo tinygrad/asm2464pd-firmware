@@ -4,7 +4,7 @@ Pytest configuration for ASM2464PD firmware tests.
 
 Provides fixtures and command-line options for testing against different firmwares:
 - Original firmware (fw.bin) - the reference implementation
-- Our compiled firmware (build/firmware.bin) - what we're building
+- Our compiled firmware (handmade/build/firmware.bin) - what we're building
 
 Usage:
     # Run tests against original firmware only (default)
@@ -33,7 +33,7 @@ from emu import Emulator
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent
 ORIGINAL_FIRMWARE = PROJECT_ROOT / 'fw.bin'
-OUR_FIRMWARE = PROJECT_ROOT / 'build' / 'firmware.bin'
+OUR_FIRMWARE = PROJECT_ROOT / 'handmade' / 'build' / 'firmware.bin'
 
 
 def pytest_addoption(parser):
@@ -43,7 +43,7 @@ def pytest_addoption(parser):
         action="store",
         default="original",
         choices=["original", "ours", "both"],
-        help="Which firmware to test: original (fw.bin), ours (build/firmware.bin), or both"
+        help="Which firmware to test: original (fw.bin), ours (handmade/build/firmware.bin), or both"
     )
     parser.addoption(
         "--firmware-path",
@@ -146,7 +146,7 @@ def our_firmware_emulator():
     Use this for tests that should only run against our firmware.
     """
     if not OUR_FIRMWARE.exists():
-        pytest.skip("Our firmware (build/firmware.bin) not found")
+        pytest.skip("Our firmware (handmade/build/firmware.bin) not found")
 
     emu = Emulator(log_uart=False, usb_delay=1000)
     emu.load_firmware(str(OUR_FIRMWARE))
@@ -188,7 +188,7 @@ def skip_if_no_firmware(which="original"):
     elif which == "ours":
         return pytest.mark.skipif(
             not OUR_FIRMWARE.exists(),
-            reason="Our firmware (build/firmware.bin) not found"
+            reason="Our firmware (handmade/build/firmware.bin) not found"
         )
     elif which == "both":
         return pytest.mark.skipif(
