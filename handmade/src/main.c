@@ -45,6 +45,9 @@ static uint32_t __xdata usb4_skip_magic;
 
 /* Streaming PCIe state — configured via 0xF0 control message */
 static uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming transfer */
+static uint8_t __xdata f2_armed;
+
+#define USB_REQ_F2_COMPLETE 0xF6
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
@@ -181,6 +184,10 @@ static void handle_usb_control(void) {
       dma_dwords = 0;
       usb_send_zlp();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
+      if (f2_armed) {
+        REG_CPU_RESET = CPU_RESET_TRIGGER;
+        while (1) { }
+      }
       // enable USB bulk mode (bypass MSC)
       REG_USB_MSC_CFG = 0x00;
       // clearn bulk endpoints
@@ -242,8 +249,14 @@ static void handle_usb_control(void) {
       REG_NVME_SLOT_END   = num_slots + slot_sel;
       REG_NVME_SECTOR_COUNT_HI = (uint8_t)(sectors >> 8);
       REG_NVME_SECTOR_COUNT_LO = (uint8_t)(sectors & 0xFF);
+      f2_armed = 1;
       REG_NVME_CTRL_STATUS = NVME_CTRL_DMA_START | (bulk_in ? 0 : NVME_CTRL_WRITE_DIR);
       REG_NVME_CMD_PARAM   = slot_sel;
+      usb_send_zlp();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == USB_REQ_F2_COMPLETE) {
+      /* The F2 engine has no firmware-visible completion status. The host
+       * commits a completed bulk transfer explicitly. */
+      f2_armed = 0;
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF3) {
       /* 0xF3: PCIe power control.
@@ -458,6 +471,8 @@ void int0_isr(void) __interrupt(0) {
       uart_puts("]\n");
     }
   }
+  /* A control transition can assert while the peripheral event is serviced. */
+  int0_type = REG_INT_USB_STATUS;
   if (int0_type & INT_USB_CTRL_PENDING) {
     // NOTE: MSC interrupts are not enabled, if you want them, you can do the two writes here
     uart_puts("[MSC]\n");
@@ -505,6 +520,7 @@ void main(void) {
 
   // without this, UART has parity
   REG_UART_LCR &= ~LCR_PARITY_MASK;
+  f2_armed = 0;
 
   uart_puts("\n[BOOT]\n");
   led_set_rgb(false, false, true);
