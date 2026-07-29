@@ -143,7 +143,6 @@ static void f2_rearm(void) {
   REG_USB_EP_STATUS_90E3 = 0x02;
   REG_USB_EP_READY = 0x01;
   REG_USB_CTRL_90A0 = 0x01;
-  REG_NVME_CTRL_STATUS = 0x00;
   REG_NVME_DOORBELL = NVME_DOORBELL_DMA_UNLOCK;
   REG_NVME_DOORBELL = 0x00;
 }
@@ -178,12 +177,12 @@ static void handle_usb_control(void) {
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
     } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
-      /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
+      /* CLEAR_FEATURE(ENDPOINT_HALT) — retire active DMA.
        * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
        * wIndex = endpoint address (0x02=OUT, 0x81=IN). */
       uint8_t ep_addr = REG_USB_SETUP_WIDX_L;
       if (ep_addr == 0x02) {
-        REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
+        f2_rearm();
       } else if (ep_addr == 0x81) {
         REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       }
@@ -245,7 +244,6 @@ static void handle_usb_control(void) {
       if (num_slots == 0) num_slots = 1;
       f2_rearm();
       /* DMA_INIT sequence for SRAM DMA */
-      REG_NVME_DOORBELL       = 0x0;
       REG_NVME_SECTOR_SIZE_HI = 0x02;
       REG_NVME_SECTOR_SIZE_LO = 0x00;
       REG_NVME_SLOT_START = NVME_SLOT_ENABLE | slot_sel;
