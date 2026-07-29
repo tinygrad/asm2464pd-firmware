@@ -139,6 +139,15 @@ static void do_usb_bulk_in(void) {
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
 
+static void f2_rearm(void) {
+  REG_USB_EP_STATUS_90E3 = 0x02;
+  REG_USB_EP_READY = 0x01;
+  REG_USB_CTRL_90A0 = 0x01;
+  REG_NVME_CTRL_STATUS = 0x00;
+  REG_NVME_DOORBELL = NVME_DOORBELL_DMA_UNLOCK;
+  REG_NVME_DOORBELL = 0x00;
+}
+
 
 /*=== USB Control Handler ===*/
 
@@ -234,6 +243,7 @@ static void handle_usb_control(void) {
       uint8_t slot_sel = REG_USB_SETUP_WIDX_L;
       uint8_t num_slots = REG_USB_SETUP_WIDX_H;
       if (num_slots == 0) num_slots = 1;
+      f2_rearm();
       /* DMA_INIT sequence for SRAM DMA */
       REG_NVME_DOORBELL       = 0x0;
       REG_NVME_SECTOR_SIZE_HI = 0x02;
