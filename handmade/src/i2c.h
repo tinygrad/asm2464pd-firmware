@@ -96,7 +96,7 @@ static uint8_t i2c_read(uint8_t addr7, uint8_t rlen, uint8_t *out) {
 #define INA231_REG_SHUNT   0x01
 #define INA231_REG_BUS     0x02
 #define INA231_CFG_STOCK   0x4127
-#define INA231_SHUNT_UOHM  2408
+#define INA231_SHUNT_UOHM  2197
 
 static void ina231_init(void) {
   i2c_write_reg16(INA231_ADDR, INA231_REG_CFG, INA231_CFG_STOCK);

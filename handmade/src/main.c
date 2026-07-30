@@ -58,6 +58,7 @@ static uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming t
 typedef struct {
   uint16_t voltage_mv;   /* INA231 bus voltage */
   int16_t  current_ma;   /* INA231 shunt current (signed) */
+  bool     bob_flt;      /* BOB fault asserted (active-low GPIO 1) */
 } hw_status_t;
 
 static void hw_status_read(__xdata hw_status_t *s) {
@@ -67,6 +68,7 @@ static void hw_status_read(__xdata hw_status_t *s) {
   s->voltage_mv = (uint16_t)(((uint32_t)bus_raw * 125) / 100);               /* 1.25 mV/LSB */
   s->current_ma = (int16_t)(((int32_t)(int16_t)shunt_raw * 2500)             /* shunt uV × 1000 */
                             / INA231_SHUNT_UOHM);                            /* / R (uOhm) = mA */
+  s->bob_flt = gpio_read(GPIO_BOB_FLT_N) ? false : true;
 }
 
 static void pcie_power_off(void) {
@@ -528,6 +530,7 @@ void main(void) {
   REG_UART_LCR &= ~LCR_PARITY_MASK;
 
   uart_puts("\n[BOOT]\n");
+  gpio_set(GPIO_BOB_FLT_N, GPIO_INPUT);
   led_set_rgb(false, false, true);
 
   // flash controller — needed for the USB serial OTP read on enumeration
