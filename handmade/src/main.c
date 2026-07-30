@@ -181,6 +181,17 @@ static void handle_usb_control(void) {
       dma_dwords = 0;
       usb_send_zlp();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
+      /* USB reset leaves the C4xx DMA active; cycle its buffer and bridge. */
+      if (REG_NVME_CMD_STATUS_50 != 0) {
+        REG_NVME_DOORBELL |= NVME_DOORBELL_BIT0;
+        REG_USB_MSC_CFG |= USB_MSC_CFG_ENABLE;
+        REG_NVME_DOORBELL |= NVME_DOORBELL_BIT3;
+        REG_NVME_DOORBELL &= (uint8_t)~NVME_DOORBELL_BIT0;
+        REG_USB_MSC_CFG &= (uint8_t)~USB_MSC_CFG_ENABLE;
+        REG_NVME_DOORBELL &= (uint8_t)~NVME_DOORBELL_BIT3;
+        REG_PCIE_TUNNEL_CFG |= PCIE_TLP_CTRL_DMA_RESET;
+        REG_PCIE_TUNNEL_CFG &= (uint8_t)~PCIE_TLP_CTRL_DMA_RESET;
+      }
       // enable USB bulk mode (bypass MSC)
       REG_USB_MSC_CFG = 0x00;
       // clearn bulk endpoints

@@ -1062,7 +1062,8 @@
 #define   PCIE_STATUS_BUSY        0x04  // Bit 2: Busy flag
 #define   PCIE_STATUS_KICK        0x04  /* Command kick/write strobe value */
 #define   PCIE_STATUS_RESET       0x08  /* Request engine reset/re-arm value */
-#define REG_PCIE_TUNNEL_CFG     XDATA_REG8(0xB298)  // TLP control (bit 4 = tunnel enable)
+#define REG_PCIE_TUNNEL_CFG     XDATA_REG8(0xB298)  // PCIe/NVMe bridge control
+#define   PCIE_TLP_CTRL_DMA_RESET 0x04  // Bit 2: DMA bridge reset strobe
 #define   PCIE_TLP_CTRL_TUNNEL    0x10  // Bit 4: Tunnel enable
 #define REG_PCIE_CTRL_B2D5      XDATA_REG8(0xB2D5)  /* PCIe control */
 
@@ -1420,7 +1421,7 @@
 #define REG_NVME_INIT_CTRL2_1   XDATA_REG8(0xC449)  // NVMe init ctrl2 byte 1 (0xFF)
 #define REG_NVME_INIT_CTRL2_2   XDATA_REG8(0xC44A)  // NVMe init ctrl2 byte 2 (0xFF)
 #define REG_NVME_INIT_CTRL2_3   XDATA_REG8(0xC44B)  // NVMe init ctrl2 byte 3 (0xFF)
-#define REG_NVME_CMD_STATUS_50  XDATA_REG8(0xC450)  // NVMe command status
+#define REG_NVME_CMD_STATUS_50  XDATA_REG8(0xC450)  // 0=idle, 2=bulk DMA active
 #define REG_NVME_QUEUE_STATUS_51 XDATA_REG8(0xC451) // NVMe queue status
 #define   NVME_QUEUE_STATUS_51_MASK 0x1F  // Bits 0-4: Queue status index
 #define REG_DMA_ENTRY           XDATA_REG16(0xC462)
