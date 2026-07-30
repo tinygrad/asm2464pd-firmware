@@ -1,14 +1,7 @@
-; Bootstub startup. Reset stays local; every interrupt vector trampolines into
-; userfw at the corresponding offset from 0x3000.
-;
-; Structure matches crt0_userfw.s / crt0.s: the whole project deliberately
-; avoids initialized statics, so GSINIT is empty and startup jumps straight
-; to _main. Keep it that way — the bootstub must not gain an initialized
-; static without also running GSINIT here.
+; Startup skips GSINIT; writable initializers are forbidden.
 
     .module bootstub_crt0
     .globl  _main
-    ; Linker-computed stack base (start of SSEG, after all IDATA/overlay).
     .globl  __start__stack
 
     .area   VECTOR  (ABS,CODE)
@@ -43,9 +36,6 @@ clr_loop:
     mov     @r0, a
     djnz    r0, clr_loop
 
-    ; Derive SP from the linker's stack base (after all IDATA/overlay) rather
-    ; than a hardcoded address, so a future rebuild that grows internal RAM
-    ; cannot silently collide with the stack.
     mov     sp, #(__start__stack - 1)
     mov     0x96, #0x00     ; PSBANK = 0
     mov     0xA8, #0x00     ; IE = 0

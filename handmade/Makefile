@@ -91,24 +91,24 @@ for line in open('$<'): \
 open('$@', 'wb').write(bytes(data).rstrip(b'\x00'))"; \
 	fi
 
-# Add ASM2464 firmware wrapper (body_len + body + magic + checksum + crc)
-$(BUILD_DIR)/firmware_wrapped.bin: $(BIN)
-	@echo "Wrapping firmware with ASM2464 header..."
-	@python3 -c "\
-import zlib; \
+define wrap_firmware
+python3 -c "import zlib; \
 body = open('$<', 'rb').read(); \
 body_len = len(body).to_bytes(4, 'little'); \
 checksum = bytes([sum(body) & 0xFF]); \
 crc = zlib.crc32(body).to_bytes(4, 'little'); \
 magic = bytes([0xA5]); \
 open('$@', 'wb').write(body_len + body + magic + checksum + crc)"
+endef
+
+# Add ASM2464 firmware wrapper (body_len + body + magic + checksum + crc)
+$(BUILD_DIR)/firmware_wrapped.bin: $(BIN)
+	@echo "Wrapping firmware with ASM2464 header..."
+	@$(wrap_firmware)
 	@echo "Built: $@"
 	@ls -la $@
 
 wrapped: $(BUILD_DIR)/firmware_wrapped.bin
-
-# ===== Bootstub =====
-# Separate binary at CODE 0x0000-0x2FFF. Loads userfw from flash to CODE 0x3000+.
 
 BOOTSTUB_CFLAGS = -mmcs51 --model-large --opt-code-size --std-c99 --no-xinit-opt -I$(SRC_DIR)
 BOOTSTUB_LDFLAGS = --code-loc 0x0000 --code-size 0x3000 --xram-loc 0x0000 --xram-size 0x5FF8 --iram-size 0x100
@@ -139,22 +139,13 @@ $(BOOTSTUB_BIN): $(BOOTSTUB_HEX)
 	@sz=$$(stat -c %s $@); echo "bootstub body: $$sz bytes (budget 12288)"; \
 	 if [ $$sz -gt 12288 ]; then echo "FAIL: bootstub > 0x3000"; exit 1; fi
 
-# ASM2464 firmware wrapper so the mask-ROM bootloader loads the bootstub.
 $(BOOTSTUB_WRAPPED): $(BOOTSTUB_BIN)
-	@python3 -c "\
-import zlib; \
-body = open('$<', 'rb').read(); \
-body_len = len(body).to_bytes(4, 'little'); \
-checksum = bytes([sum(body) & 0xFF]); \
-crc = zlib.crc32(body).to_bytes(4, 'little'); \
-magic = bytes([0xA5]); \
-open('$@', 'wb').write(body_len + body + magic + checksum + crc)"
+	@$(wrap_firmware)
 
 bootstub: $(BOOTSTUB_WRAPPED) validate
 	@echo "Built: $(BOOTSTUB_WRAPPED)"
 	@ls -la $(BOOTSTUB_WRAPPED)
 
-# ===== Userfw image (bootstub-loaded) =====
 APP_LDFLAGS = --code-loc 0x3030 --code-size 0xCFD0 --xram-loc 0x0B60 --xram-size 0xA0 --iram-size 0x100
 APP_HEX = $(BUILD_DIR)/firmware_userfw.ihx
 APP_BIN = $(BUILD_DIR)/firmware_userfw.bin
@@ -191,7 +182,9 @@ FORCE:
 uflash: $(BUILD_DIR)/firmware_wrapped.bin
 	@python3 e4_flash.py $<
 
-recover: validate $(BOOTSTUB_WRAPPED) $(APP_IMAGE)
+recover: APP_RESET := -rt 2
+nrecover: APP_RESET := -rn
+recover nrecover: validate $(BOOTSTUB_WRAPPED) $(APP_IMAGE)
 	@echo "Resetting to mask-ROM bootloader..."
 	@python3 ../ftdi_debug.py -bn
 	@echo "Installing bootstub..."
@@ -200,32 +193,15 @@ recover: validate $(BOOTSTUB_WRAPPED) $(APP_IMAGE)
 	@python3 flash.py wait-dfu --timeout 30
 	@echo "Installing user firmware through bootstub DFU..."
 	@python3 flash.py flash $(APP_IMAGE) --no-reboot --verify
-	@echo "Resetting into user firmware and capturing UART output..."
-	@python3 ../ftdi_debug.py -rt 2
+	@echo "Resetting into user firmware..."
+	@python3 ../ftdi_debug.py $(APP_RESET)
 	@python3 flash.py wait-app --timeout 60 --test
 	@echo "Verifying application-to-bootstub recovery handoff..."
 	@python3 flash.py enter-dfu
 	@python3 flash.py reboot
 
-nrecover: validate $(BOOTSTUB_WRAPPED) $(APP_IMAGE)
-	@echo "Resetting to mask-ROM bootloader..."
-	@python3 ../ftdi_debug.py -bn
-	@echo "Installing bootstub..."
-	@python3 ../flash.py $(BOOTSTUB_WRAPPED)
-	@python3 ../ftdi_debug.py -rn
-	@python3 flash.py wait-dfu --timeout 30
-	@echo "Installing user firmware through bootstub DFU..."
-	@python3 flash.py flash $(APP_IMAGE) --no-reboot --verify
-	@python3 ../ftdi_debug.py -rn
-	@python3 flash.py wait-app --timeout 60 --test
-	@echo "Verifying application-to-bootstub recovery handoff..."
-	@python3 flash.py enter-dfu
-	@python3 flash.py reboot
-
-# Update only the bootstub-managed user firmware. The running application is
-# asked to enter DFU; no FTDI or mask-ROM bootloader reflash is involved.
 flash: validate $(APP_IMAGE)
-	@python3 flash.py $<
+	@python3 flash.py flash $<
 
 # Clean build artifacts
 clean:

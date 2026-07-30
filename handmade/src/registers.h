@@ -248,7 +248,7 @@
 #define REG_USB_EP0_LEN_H       XDATA_REG8(0x9003)  /* EP0 transfer length high byte */
 #define REG_USB_EP0_LEN_L       XDATA_REG8(0x9004)  /* EP0 transfer length low byte */
 #define REG_USB_EP0_CFG         XDATA_REG8(0x9005)  /* EP0 config / bulk interrupt enable (not length) */
-#define   USB_EP0_CFG_INIT       0xF0  // Stock USB init value for EP0/config gate
+#define   USB_EP0_CFG_INIT       0xF0
 /*
  * USB EP0 Config / Bulk Ready (0x9006)
  * Dual purpose: EP0 config during enumeration, bulk ready during transfers.
@@ -433,7 +433,7 @@
  *   Ack bulk done: 9093=0x02 (at 0x0FAC, after BULK_DATA fires in ISR)
  */
 #define REG_USB_EP_CFG1         XDATA_REG8(0x9093)
-#define   USB_EP_CFG1_INIT_CLEAR         0x0F  // Stock init: clear all endpoint pending bits
+#define   USB_EP_CFG1_INIT_CLEAR         0x0F
 #define   USB_EP_CFG1_CLEANUP     0x01  // Bit 0: Cleanup pending
 #define   USB_EP_CFG1_BULK_DONE   0x02  // Bit 1: Bulk data complete / ack
 #define   USB_EP_CFG1_CLEANUP2    0x04  // Bit 2: Cleanup pending (alt)
@@ -730,8 +730,8 @@
  *          at 0xc465. If clear → link is down → writes E710 and clears CC3B bit 1.
  */
 #define REG_USB_PHY_CTRL_91C0   XDATA_REG8(0x91C0)
-#define   USB_PHY_91C0_INIT_TOGGLE 0x01  // Stock init toggles bit 0 high then low
-#define   USB_PHY_91C0_FORCE_HS   0x10  // Bit 4: force USB 2.0 High Speed path
+#define   USB_PHY_91C0_INIT_TOGGLE 0x01
+#define   USB_PHY_91C0_FORCE_HS   0x10
 #define   USB_PHY_91C0_LINK_UP    0x02  // Bit 1: SS link up (checked in 91D1 bit 0 handler)
 #define REG_USB_PHY_CTRL_91C1   XDATA_REG8(0x91C1)
 #define REG_USB_PHY_CTRL_91C3   XDATA_REG8(0x91C3)
@@ -1636,8 +1636,8 @@
 #define REG_FLASH_DATA_PAGE_CNT XDATA_REG8(0xC8A3)  /* Transfer length: page count (256 bytes per page) */
 #define REG_FLASH_DATA_BYTE_OFS XDATA_REG8(0xC8A4)  /* Transfer length: byte offset within page */
 #define REG_FLASH_DATA_LEN      REG_FLASH_DATA_PAGE_CNT  /* Legacy alias */
-#define REG_FLASH_DATA_LEN_LO   REG_FLASH_DATA_BYTE_OFS  /* Legacy alias: low byte = byte offset */
-#define REG_FLASH_DATA_LEN_HI   REG_FLASH_DATA_PAGE_CNT  /* Legacy alias: high byte = page count */
+#define REG_FLASH_DATA_LEN_LO   REG_FLASH_DATA_BYTE_OFS
+#define REG_FLASH_DATA_LEN_HI   REG_FLASH_DATA_PAGE_CNT
 #define REG_FLASH_DIV           XDATA_REG8(0xC8A6)  /* SPI clock divider */
 #define REG_FLASH_CSR           XDATA_REG8(0xC8A9)  /* Write 0x01 to trigger transaction */
 #define   FLASH_CSR_BUSY          0x01  // Bit 0: Transaction in progress
@@ -1645,8 +1645,8 @@
 #define REG_FLASH_ADDR_HI       XDATA_REG8(0xC8AB)  /* SPI addr[23:16] */
 #define REG_FLASH_ADDR_LEN      XDATA_REG8(0xC8AC)  /* SPI address mode control */
 #define   FLASH_ADDR_LEN_MASK     0xFC  // Bits 2-7 (stock code reads & masks these)
-#define   FLASH_ADDR_LEN_NOADDR   0x04  // No address bytes sent (bits 0-1 = 0, bit 2 = controller mode)
-#define   FLASH_ADDR_LEN_3BYTE    0x07  // 3 address bytes sent (bits 0-1 = 0x03, bit 2 = controller mode)
+#define   FLASH_ADDR_LEN_NOADDR   0x04  // No address bytes sent (bits 0-1 = 0)
+#define   FLASH_ADDR_LEN_3BYTE    0x07  // 3 address bytes sent (bits 0-1 = 0x03)
 #define REG_FLASH_MODE          XDATA_REG8(0xC8AD)
 #define   FLASH_MODE_ENABLE       0x01  // Bit 0: Flash mode enable
 #define REG_FLASH_BUF_OFFSET    XDATA_REG16(0xC8AE)
@@ -2461,11 +2461,6 @@
  *   bits 31:16 = INA231 shunt current in signed mA
  */
 #define USB4_ROUTER_OP_TINY_HW_STATUS    0xC0u
-/*
- * Custom tiny native op mirroring USB vendor request 0xEC: ack the op, set
- * the bootstub DFU cookie and CPU-reset. Used to enter DFU when the app is
- * in USB4 router mode and exposes no USB function to send 0xEC to.
- */
 #define USB4_ROUTER_OP_TINY_ENTER_DFU    0xECu
 #define REG_BANK_2269           XDATA_REG8(0x2269)  /* Bank register at 0x2269 */
 

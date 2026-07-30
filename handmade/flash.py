@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
-"""Host-side flasher for the ASM2464PD bootstub.
-
-Bootstub DFU is EP0-only (ADD1:B007). If the app is running (ADD1:0001),
-the flasher asks it to reset into DFU before erasing, writing, verifying,
-and rebooting the userfw image at SPI flash 0x4000.
-"""
+"""Flash bootstub userfw over EP0 DFU."""
 
 import argparse
 import ctypes
-import glob
-import os
+from pathlib import Path
 import struct
 import sys
 import time
@@ -42,14 +36,13 @@ DFU_STATUS = struct.Struct("<BBBB")
 DFU_STATUS_NAMES = ("ok", "bad request", "range error", "USB DMA timeout",
                     "flash unlock failure", "flash erase failure",
                     "flash program failure", "flash read failure", "aborted")
+USB_SYSFS = Path("/sys/bus/usb/devices")
+TB_SYSFS = Path("/sys/bus/thunderbolt/devices")
+TB_DEBUGFS = Path("/sys/kernel/debug/thunderbolt")
 
 
 def _range_ok(addr, length, end):
   return length > 0 and USERFW_FLASH_OFFSET <= addr <= end and length <= end - addr
-
-
-def _addr24_range_ok(addr, length):
-  return length > 0 and 0 <= addr < FLASH_ADDR24_LIMIT and length <= FLASH_ADDR24_LIMIT - addr
 
 
 def _check(ret, what):
@@ -57,22 +50,18 @@ def _check(ret, what):
     raise RuntimeError(f"{what} failed (libusb={ret})")
 
 
+def read_hex(path):
+  try:
+    return int(path.read_text().strip(), 16)
+  except (OSError, ValueError):
+    return None
+
+
 def count_add1_usb():
-  """Number of ASM2464 (VID 0xADD1) USB devices currently on the host."""
-  n = 0
-  for d in glob.glob("/sys/bus/usb/devices/*"):
-    try:
-      if int(open(d + "/idVendor").read().strip(), 16) == 0xADD1:
-        n += 1
-    except OSError:
-      pass
-  return n
+  return sum(read_hex(d / "idVendor") == USERFW_VID for d in USB_SYSFS.glob("*"))
 
 
 def assert_single_card():
-  """Refuse to act when more than one ASM2464 card is on the host — the flasher
-  selects by VID:PID only and cannot tell two cards apart, so guessing risks
-  cross-flashing the wrong one. Update one card at a time."""
   n = count_add1_usb()
   if n > 1:
     sys.exit(f"error: {n} ADD1 USB devices present — refusing to guess which to flash. "
@@ -92,7 +81,7 @@ def open_device(vid_pid_list=((BOOTSTUB_VID, BOOTSTUB_PID), (USERFW_VID, USERFW_
       if libusb.libusb_kernel_driver_active(h, 0) == 1:
         _check(libusb.libusb_detach_kernel_driver(h, 0), f"detach kernel driver {vid:04X}:{pid:04X}")
       _check(libusb.libusb_claim_interface(h, 0), f"claim interface {vid:04X}:{pid:04X}")
-      return vid, pid, h, ctx
+      return h, ctx
     except RuntimeError as e:
       last_error = e
       libusb.libusb_close(h)
@@ -168,9 +157,7 @@ def cmd_erase(h, addr, length):
   if (addr & (SECTOR_SIZE - 1)) or (length & (SECTOR_SIZE - 1)) or \
      not _range_ok(addr, length, USERFW_ERASE_END):
     raise ValueError(f"erase range outside userfw area: 0x{addr:05X}+0x{length:X}")
-  # One 0xB0 erases every sector in the range inside a single control transfer;
-  # a full-region erase on slow/aged NOR can far exceed the default 5s. Scale
-  # the timeout to the sector count (a generous ~2s/sector).
+  # A full-region erase can exceed the default control-transfer timeout.
   n_sectors = length // SECTOR_SIZE
   error = None
   for attempt in range(2):
@@ -224,32 +211,19 @@ def cmd_reboot(h):
 
 
 def request_enter_dfu(h):
-  """Ask the running app (USB function) to reset into bootstub DFU."""
   try: _ctl(h, 0x40, 0xEC, 0, 0, None, 0, "enter-dfu")
   except IOError: pass        # the device may disappear during status
 
 
 def router_debugfs_regs(vid=0xADD1):
-  """Path to the tiny USB4 router's debugfs regs file, or None. Used when the
-  app runs as a USB4 router (the primary eGPU topology) and exposes no USB
-  function to send 0xEC to."""
-  for p in glob.glob("/sys/bus/thunderbolt/devices/*/vendor"):
-    try:
-      if int(open(p).read().strip(), 16) != vid:
-        continue
-    except (OSError, ValueError):
-      continue
-    name = os.path.basename(os.path.dirname(p))
-    regs = f"/sys/kernel/debug/thunderbolt/{name}/regs"
-    if os.path.exists(regs):
-      return regs
-  return None
+  routers = [p.parent.name for p in TB_SYSFS.glob("*/vendor") if read_hex(p) == vid]
+  if len(routers) > 1:
+    raise RuntimeError(f"{len(routers)} ADD1 USB4 routers present; refusing to guess")
+  regs = TB_DEBUGFS / routers[0] / "regs" if routers else None
+  return regs if regs is not None and regs.exists() else None
 
 
 def request_enter_dfu_router(regs):
-  """Post the TINY_ENTER_DFU (0xEC) native router op via debugfs; the firmware
-  acks it, sets the DFU cookie and CPU-resets. Needs root + thunderbolt
-  debugfs mounted."""
   try:
     with open(regs, "w") as f: f.write("0x0019 0x00000000\n")
     with open(regs, "w") as f: f.write("0x001a 0x800000ec\n")
@@ -260,16 +234,14 @@ def request_enter_dfu_router(regs):
 
 
 def enter_dfu_from_app():
-  """Drop a running app to bootstub DFU, whether it is a USB device (0xEC) or a
-  USB4 router (native router op). No-op if already in DFU."""
   try:
-    vid, pid, h, ctx = open_device([(BOOTSTUB_VID, BOOTSTUB_PID)])
+    h, ctx = open_device([(BOOTSTUB_VID, BOOTSTUB_PID)])
     close_device(h, ctx)
     return True                                  # already in DFU
   except RuntimeError:
     pass
   try:
-    vid, pid, h, ctx = open_device([(USERFW_VID, USERFW_PID)])
+    h, ctx = open_device([(USERFW_VID, USERFW_PID)])
     try: request_enter_dfu(h)
     finally: close_device(h, ctx)
     return True
@@ -303,8 +275,7 @@ def wait_for_app(timeout=60.0):
 
 
 def test_app():
-  """One verified control + bulk transfer for the recovery state machine."""
-  _, _, h, ctx = open_device([(USERFW_VID, USERFW_PID)])
+  h, ctx = open_device([(USERFW_VID, USERFW_PID)])
   payload = bytes(((i * 37) + 11) & 0xFF for i in range(512))
   try:
     _ctl(h, 0x40, 0xF2, 1, 0x0100, None, 0, "arm SRAM bulk OUT")
@@ -321,75 +292,21 @@ def test_app():
 
 
 def sysfs_usb_speed(vid, pid):
-  """Speed (Mb/s) of the first vid:pid USB device in sysfs, or None."""
-  for d in glob.glob("/sys/bus/usb/devices/*"):
-    try:
-      with open(d + "/idVendor") as f: v = int(f.read().strip(), 16)
-      with open(d + "/idProduct") as f: p = int(f.read().strip(), 16)
-      if v == vid and p == pid:
-        with open(d + "/speed") as f: return int(float(f.read().strip()))
-    except (OSError, ValueError):
-      continue
+  for d in USB_SYSFS.glob("*"):
+    if read_hex(d / "idVendor") == vid and read_hex(d / "idProduct") == pid:
+      try:
+        return int(float((d / "speed").read_text().strip()))
+      except (OSError, ValueError):
+        return None
   return None
 
 
 def sysfs_usb4_router_present(vid=0xADD1):
-  for d in glob.glob("/sys/bus/thunderbolt/devices/*/vendor"):
-    try:
-      with open(d) as f:
-        if int(f.read().strip(), 16) == vid: return True
-    except (OSError, ValueError):
-      continue
-  return False
+  return any(read_hex(path) == vid for path in TB_SYSFS.glob("*/vendor"))
 
 
-def verify_app_link(max_bounces=2, timeout=240.0):
-  """Wait for the app and make sure its USB link is SuperSpeed.
-
-  A boot via the bootstub 0xEB reset occasionally comes up with the SS PHY
-  in a state that only trains high speed; one extra trip through the
-  bootstub DFU reliably retrains it. On USB4 hosts the app may come up as
-  a USB4 router with no USB function - that counts as healthy too."""
-  spd = None
-  for bounce in range(max_bounces + 1):
-    deadline = time.monotonic() + timeout
-    spd = None
-    while time.monotonic() < deadline:
-      spd = sysfs_usb_speed(USERFW_VID, USERFW_PID)
-      if spd is not None: break
-      if sysfs_usb4_router_present():
-        print("  app up as a USB4 router")
-        return True
-      time.sleep(0.25)
-    if spd is None:
-      print("  app did not enumerate")
-      return False
-    if spd >= 5000:
-      print(f"  app up at {spd} Mb/s")
-      return True
-    if bounce == max_bounces: break
-    print(f"  app at {spd} Mb/s - bouncing through DFU to retrain SuperSpeed")
-    time.sleep(1.0)
-    try:
-      vid, pid, h, ctx = open_device([(USERFW_VID, USERFW_PID)])
-      try: request_enter_dfu(h)
-      finally: close_device(h, ctx)
-      _, _, h, ctx = wait_for_dfu()
-      try: cmd_reboot(h)
-      finally: close_device(h, ctx)
-    except (RuntimeError, TimeoutError) as e:
-      print(f"  bounce failed: {e}")
-      return False
-  # Still high speed after the retrain bounces. On a genuine USB 2.0 host/hub
-  # this is the correct, expected link and the app is fully functional — do
-  # NOT fail the flash. (On an SS-capable host it would mean the retrain
-  # didn't take, hence the warning.)
-  print(f"  WARNING: app at {spd} Mb/s after retrain (USB 2.0 host? — app is up and usable)")
-  return True
-
-
-def flash_image(h, image, addr, page, verify=False):
-  if addr % SECTOR_SIZE: sys.exit(f"image addr 0x{addr:X} not sector-aligned")
+def flash_image(h, image, page, verify=False):
+  addr = USERFW_FLASH_OFFSET
   if not _range_ok(addr, len(image), USERFW_IMAGE_END):
     sys.exit(f"image too large for userfw area: 0x{addr:05X}+0x{len(image):X}")
   erase_len = (len(image) + SECTOR_SIZE - 1) & ~(SECTOR_SIZE - 1)
@@ -410,7 +327,6 @@ def flash_image(h, image, addr, page, verify=False):
   print()
 
   if verify:
-    # Optional: the bootstub CRC-checks the image on every boot anyway.
     print("  verifying")
     cmd_set_addr(h, addr)
     got = cmd_read(h, len(image))
@@ -423,35 +339,33 @@ def flash_image(h, image, addr, page, verify=False):
 
 def cmd_flash(args):
   assert_single_card()
-  with open(args.image, "rb") as f: image = f.read()
+  image = Path(args.image).read_bytes()
   try:
     validate_image(image, args.image)
   except ValueError as exc:
     sys.exit(f"error: {exc}")
   print(f"image: {args.image} ({len(image)} bytes)")
 
-  # Converge to bootstub DFU first, handling app-as-USB-device (0xEC) and
-  # app-as-USB4-router (native router op); no-op if already in DFU.
   if not enter_dfu_from_app():
     sys.exit("FAIL: no app or DFU device found to flash")
-  _, _, h, ctx = wait_for_dfu()
+  h, ctx = wait_for_dfu()
   print("bootstub up.")
   try:
     page = cmd_get_info(h)
     print(f"  DFU v1, boot ABI 1, max write {page} bytes")
-    flash_image(h, image, USERFW_FLASH_OFFSET, page, verify=args.verify)
+    flash_image(h, image, page, verify=args.verify)
     if not args.no_reboot: cmd_reboot(h)
   finally:
     close_device(h, ctx)
-  if not args.no_reboot and not verify_app_link():
-    sys.exit("FAIL: app link verification failed")
+  if not args.no_reboot:
+    print(f"application up: {wait_for_app()}")
 
 
 def cmd_enter_dfu(args):
   assert_single_card()
   if not enter_dfu_from_app():
     sys.exit("FAIL: no app or DFU device found")
-  _, _, h, ctx = wait_for_dfu()
+  h, ctx = wait_for_dfu()
   try:
     cmd_get_info(h)
     print("bootstub up: DFU v1, boot ABI 1.")
@@ -460,15 +374,15 @@ def cmd_enter_dfu(args):
 
 
 def cmd_reboot_only(args):
-  _, _, h, ctx = open_device([(BOOTSTUB_VID, BOOTSTUB_PID)])
+  assert_single_card()
+  h, ctx = open_device([(BOOTSTUB_VID, BOOTSTUB_PID)])
   try: cmd_reboot(h)
   finally: close_device(h, ctx)
-  if not verify_app_link():
-    sys.exit("FAIL: app link verification failed")
+  print(f"application up: {wait_for_app()}")
 
 
 def cmd_wait_dfu(args):
-  _, _, h, ctx = wait_for_dfu(args.timeout)
+  h, ctx = wait_for_dfu(args.timeout)
   try:
     page = cmd_get_info(h)
     print(f"bootstub up: DFU v1, boot ABI 1, max write {page} bytes")
@@ -483,28 +397,12 @@ def cmd_wait_app(args):
     print("application control/bulk test passed")
 
 
-def cmd_read_dump(args):
-  if not _addr24_range_ok(args.addr, args.size):
-    sys.exit(f"read range outside 24-bit flash address space: 0x{args.addr:X}+0x{args.size:X}")
-  _, _, h, ctx = open_device([(BOOTSTUB_VID, BOOTSTUB_PID)])
-  try:
-    cmd_set_addr(h, args.addr)
-    data = cmd_read(h, args.size)
-  finally:
-    close_device(h, ctx)
-  for off in range(0, len(data), 16):
-    line = data[off:off + 16]
-    hexs  = " ".join(f"{b:02X}" for b in line)
-    ascii_ = "".join(chr(b) if 32 <= b < 127 else "." for b in line)
-    print(f"  {args.addr + off:05X}: {hexs:<48s} {ascii_}")
-
-
 def main():
   p = argparse.ArgumentParser(description=__doc__,
                               formatter_class=argparse.RawDescriptionHelpFormatter)
-  sub = p.add_subparsers(dest="cmd")
+  sub = p.add_subparsers(dest="cmd", required=True)
 
-  pf = sub.add_parser("flash", help="flash a userfw image (default if image given)")
+  pf = sub.add_parser("flash", help="flash a userfw image")
   pf.add_argument("image")
   pf.add_argument("--no-reboot", action="store_true", help="skip the post-flash reboot")
   pf.add_argument("--verify", action="store_true",
@@ -525,18 +423,7 @@ def main():
   pwa.add_argument("--test", action="store_true", help="verify control and bulk data")
   pwa.set_defaults(func=cmd_wait_app)
 
-  pr = sub.add_parser("read", help="hex-dump SPI flash")
-  pr.add_argument("addr", type=lambda s: int(s, 0))
-  pr.add_argument("size", type=lambda s: int(s, 0), nargs="?", default=256)
-  pr.set_defaults(func=cmd_read_dump)
-
-  argv = sys.argv[1:]
-  if argv and not argv[0].startswith("-") \
-     and argv[0] not in {"flash", "enter-dfu", "reboot", "wait-dfu", "wait-app", "read"}:
-    argv = ["flash", *argv]
-
-  args = p.parse_args(argv)
-  if not args.cmd: p.print_help(); return 1
+  args = p.parse_args()
   args.func(args)
   return 0
 

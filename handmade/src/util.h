@@ -10,65 +10,41 @@
 #define CRITICAL_ENTER()  (IE &= (uint8_t)~IE_EA)
 #define CRITICAL_EXIT()   (IE |= IE_EA)
 
-/* App-to-bootstub DFU handoff cookie. 0x5FF8-0x5FFF is reserved in the
- * bootstub linker flags and survives CPU reset: the app writes the magic and
- * CPU-resets; the bootstub sees it on the next boot and stays in DFU. */
+#define BOOT_ABI_VERSION        0x01U
+#define BOOTSTUB_CODE_SIZE      0x3000U
 #define DFU_COOKIE              (*(__xdata volatile uint32_t *)0x5FF8)
 #define DFU_COOKIE_MAGIC        0xDF0BC0DEUL
-
-/* Boot-attempt watchdog (lives in the reserved 0x5FFC-0x5FFF word). This word
- * survives a soft CPU reset (REG_CPU_RESET / 0xEB) but NOT a hardware reset or
- * power cycle, which clear XRAM — so this specifically catches a firmware
- * release that CRC-validates but soft-reset boot-loops before its USB/tunnel
- * recovery channel comes up (the classic "reboot-loop before enumeration",
- * where 0xEC can never reach the app). The bootstub increments the low-byte
- * count before jumping to a CRC-valid userfw; a healthy app calls
- * boot_mark_healthy() once a host-facing recovery channel is confirmed up (USB
- * enumeration -> 0xEC works, or the USB4 tunnel -> the router-op works). After
- * BOOT_MAX_ATTEMPTS un-cleared attempts the bootstub stays in DFU so the field
- * can reflash without the FTDI strap. A cold boot's uninitialized value fails
- * the marker check and starts at 0. (A pure hang with no reset, or a power
- * cycle, cannot be caught by any counter and still needs an external reset.) */
 #define BOOT_TRACK              (*(__xdata volatile uint32_t *)0x5FFC)
-#define BOOT_TRACK_MARK         0xB0075B00UL   /* upper 24 bits = validity marker; low byte = count */
+#define BOOT_TRACK_MARK         0xB0075B00UL
 #define BOOT_TRACK_MASK         0xFFFFFF00UL
 #define BOOT_MAX_ATTEMPTS       3
 
-/* Invalidate the marker so the next boot starts a fresh count. Called by the
- * app; a no-op-shaped write on the classic (no-bootstub) build. */
-static void boot_mark_healthy(void) {
-    BOOT_TRACK = 0;
-}
-
-/* Immutable bootstub/application ABI. Keep these values synchronized with
- * crt0_bootstub.s and crt0_userfw.s; tools/check_boot_layout.py enforces the
- * linked result. */
-#define BOOT_ABI_VERSION        0x01U
-#define BOOTSTUB_CODE_SIZE      0x3000U
-
-/* Userfw layout constants (shared between bootstub and app). */
 #define USERFW_FLASH_OFFSET     0x4000UL
 #define USERFW_HEADER_SIZE      0x40UL
 #define USERFW_HEADER_CRC_LEN   0x20U
 #define USERFW_CODE_BASE        BOOTSTUB_CODE_SIZE
-#define USERFW_BODY_LIMIT       0xD000UL  /* CODE 0x3000-0xFFFF */
+#define USERFW_BODY_LIMIT       0xD000UL
 #define USERFW_FLASH_END        (USERFW_FLASH_OFFSET + USERFW_HEADER_SIZE + USERFW_BODY_LIMIT)
-#define SECTOR_SIZE             0x1000UL
-#define USERFW_ERASE_END        ((USERFW_FLASH_END + (SECTOR_SIZE - 1)) & ~(SECTOR_SIZE - 1))
+#define USERFW_SECTOR_SIZE      0x1000UL
+#define USERFW_ERASE_END        ((USERFW_FLASH_END + USERFW_SECTOR_SIZE - 1) & \
+                                 ~(USERFW_SECTOR_SIZE - 1))
 
-/* Userfw header structure. */
 typedef struct {
   uint8_t  magic[4];
   uint8_t  gitversion[23];
   uint8_t  boot_abi;
   uint32_t body_len;
   uint32_t crc;
-  uint8_t  _pad[28];
+  uint8_t  reserved[28];
 } userfw_hdr_t;
 
 static uint8_t userfw_header_magic_ok(__xdata const userfw_hdr_t *hdr) {
   return hdr->magic[0] == 'A' && hdr->magic[1] == '2' &&
          hdr->magic[2] == '4' && hdr->magic[3] == 'F';
+}
+
+static void boot_mark_healthy(void) {
+  BOOT_TRACK = 0;
 }
 
 /* Memory primitives for generic (banked) pointers.  SDCC inherits the 3-byte
@@ -86,27 +62,25 @@ static void mem_set(void *dst, uint8_t val, uint8_t n) {
   while (n--) *d++ = val;
 }
 
-#ifdef BOOTSTUB
-static void xmemcpy(__xdata uint8_t *dst, __xdata const uint8_t *src, uint16_t len) {
-  while (len--) *dst++ = *src++;
+static void xmemcpy(__xdata uint8_t *dst, __xdata const uint8_t *src,
+                    uint16_t length) {
+  while (length--) *dst++ = *src++;
 }
-#endif
 
-/* Timer1-based millisecond delay. Used by usb_attach_controller. */
-#ifdef BOOTSTUB
 static void timer_delay_ms(uint16_t milliseconds) {
   uint16_t threshold = 2 * milliseconds;
-  REG_TIMER1_CSR = 0x04; REG_TIMER1_CSR = 0x02;
-  REG_TIMER1_DIV = (REG_TIMER1_DIV & 0xF8) | 0x04;
+  REG_TIMER1_CSR = TIMER_CSR_CLEAR;
+  REG_TIMER1_CSR = TIMER_CSR_EXPIRED;
+  REG_TIMER1_DIV = (REG_TIMER1_DIV & 0xF8) | 0x04U;
   REG_TIMER1_THRESHOLD_HI = threshold >> 8;
   REG_TIMER1_THRESHOLD_LO = threshold & 0xFF;
-  REG_TIMER1_CSR = 0x01;
-  { uint32_t g = 0; while (!(REG_TIMER1_CSR & 0x02) && ++g < 4000000UL); }
-  REG_TIMER1_CSR = 0x04; REG_TIMER1_CSR = 0x02;
+  REG_TIMER1_CSR = TIMER_CSR_ENABLE;
+  { uint32_t guard = 0;
+    while (!(REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && ++guard < 4000000UL); }
+  REG_TIMER1_CSR = TIMER_CSR_CLEAR;
+  REG_TIMER1_CSR = TIMER_CSR_EXPIRED;
 }
-#endif
 
-/* UART output helpers. */
 void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {
@@ -115,9 +89,6 @@ static void uart_puthex(uint8_t val) {
   uart_putc(hex[val & 0x0F]);
 }
 
-/* USB endpoint state reset to the documented stock init values. The
- * bootstub runs this before its DFU bring-up; the app runs it when
- * re-initializing USB after a register reset (bootstub 0xEB handoff). */
 static void usb_init_endpoint_state(void) {
   REG_USB_EP0_LEN_H = 0; REG_USB_EP0_LEN_L = 0;
   REG_USB_EP0_CONFIG = 0;

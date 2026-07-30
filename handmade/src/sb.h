@@ -3,7 +3,7 @@
 
 
 static void boot_phy_set_link_mode(uint8_t param);  /* dd42 */
-static void u4c_uart_drain_wait(void);  /* e7ae, defined in usb4.h */
+static void u4c_uart_drain_wait(void);
 
 static uint8_t P1_REG8_rd(uint16_t off) {
   uint8_t v;
@@ -750,9 +750,7 @@ static void u4c_native_hw_status(void) {
 }
 static void u4c_native_enter_dfu(void) {
   static __xdata volatile uint16_t u4c_dfu_spin;
-  /* Ack the op first so the host's poll completes, give it a moment to read
-   * the cleared OV bit, then hand off to the bootstub. The host must treat
-   * router disappearance after posting this op as success. */
+  /* Ack before resetting the live tunnel. */
   u4c_router_cfg_u32_write(USB4_ROUTER_CS_METADATA, 0x00000000UL);
   u4c_router_cfg_u32_write(USB4_ROUTER_CS_OPCODE, USB4_ROUTER_OP_TINY_ENTER_DFU);
   for (u4c_dfu_spin = 0xFFFF; u4c_dfu_spin; u4c_dfu_spin--) { }
@@ -767,11 +765,7 @@ static void u4c_native_routerop_service(void) {
   if (!(op & USB4_ROUTER_OP_OV)) return;
 
   metadata = u4c_router_cfg_dword_read(USB4_ROUTER_CS_METADATA);
-  /* Match the full 16-bit opcode, not just the low byte: the custom TINY ops
-   * (0xC0 hw-status, 0xEC enter-DFU — the latter resets the live tunnel) sit
-   * in the byte range, and an 8-bit compare would let any 0xXXC0 / 0xXXEC
-   * opcode alias onto them. Real opcodes carry a zero upper byte, so this is
-   * behaviour-identical for valid traffic. */
+  /* Compare all 16 bits so 0xXXC0/0xXXEC cannot alias custom TINY ops. */
   switch ((uint16_t)op) {
   case USB4_ROUTER_OP_DROM_READ:
     u4c_native_drom_read(metadata);

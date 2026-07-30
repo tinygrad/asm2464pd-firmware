@@ -18,19 +18,6 @@ __sfr __at(0x88) TCON;
 #define IE_ET0  0x02
 #define IE_EX0  0x01
 
-#define TIMER1_MODE_HALF_MS     0x04U
-/* Millisecond busy-sleep on Timer1; must never touch the CC10-CC13 PHY/PD mailbox. */
-static void sleep(uint16_t milliseconds) {
-  REG_TIMER1_CSR = TIMER_CSR_CLEAR;
-  REG_TIMER1_CSR = TIMER_CSR_EXPIRED;
-  REG_TIMER1_DIV = (REG_TIMER1_DIV & 0xF8) | TIMER1_MODE_HALF_MS;
-  uint16_t threshold = 2*milliseconds;
-  REG_TIMER1_THRESHOLD_HI = threshold >> 8;
-  REG_TIMER1_THRESHOLD_LO = threshold & 0xFF;
-  REG_TIMER1_CSR = TIMER_CSR_ENABLE;
-  { uint32_t g = 0; while (!(REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && ++g < 4000000UL); }
-}
-
 static uint8_t is_usb2;
 static uint32_t __xdata usb4_skip_magic;
 #define USB4_SKIP_MAGIC 0x5AA55AA5UL
@@ -110,7 +97,7 @@ static void pcie_power_on(void) {
     } else {
       stable_samples = 0;
     }
-    sleep(100);
+    timer_delay_ms(100);
   }
   if (stable_samples < 3) uart_puts("[PCIe timeout]\n");
 
@@ -270,10 +257,9 @@ static void handle_usb_control(void) {
       }
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEC) {
-      /* 0xEC: enter DFU mode — set cookie then CPU reset */
       DFU_COOKIE = DFU_COOKIE_MAGIC;
       usb_send_zlp();
-      { uint16_t t = 0xFFFF; do { if (REG_USB_DMA_TRIGGER == 0) break; } while (--t); }
+      (void)usb_wait_ep0_dma_idle();
       REG_CPU_RESET = CPU_RESET_TRIGGER;
       while (1) { }
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
@@ -511,35 +497,6 @@ static void usb4_fallback_to_usb3(void) {
   while (1) { }
 }
 
-/* Detach/re-attach the USB PHY. A cold boot powers up attached, but after a
- * REG_CPU_RESET (bootstub 0xEB handoff) the PHY stays detached and the host
- * never starts enumeration without this cycle. Also drops back to the
- * default address 0 — a bootstub DFU session leaves its device address in
- * INT_MASK_9090. */
-static void usb_attach_cycle(void) {
-  REG_USB_INT_MASK_9090 &= (uint8_t)~0x7F;
-  REG_USB_POWER_CYCLE = 0;
-  sleep(25);
-  REG_USB_POWER_CYCLE = USB_POWER_CYCLE_TRIGGER;
-  sleep(25);
-}
-
-/* USB3-device controller (re)init. Mirrors the bootstub's post-reset USB
- * bring-up — the DFU function reliably enumerates at SuperSpeed after a
- * REG_CPU_RESET with exactly this sequence, while a bare
- * usb_init_controller() leaves the SS PHY flapping or falling back to
- * high speed on such boots: quiesce DMA, reset the endpoint state to the
- * stock init values, standard controller init, then the SS-capable PHY
- * restore (CPU reset preserves CC30). */
-static void usb_reinit_controller_full(void) {
-  REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
-  usb_init_endpoint_state();
-  usb_init_controller(0);
-  REG_CPU_MODE = CPU_MODE_USB3;
-  REG_USB_PHY_CTRL_91C0 |= USB_PHY_91C0_INIT_TOGGLE;
-  REG_USB_PHY_CTRL_91C0 &= (uint8_t)~USB_PHY_91C0_INIT_TOGGLE;
-}
-
 static void usb4_reinit_usb3_after_reset_fallback(void) {
   usb4_skip_magic = USB4_SKIP_MAGIC;
   usb_pipe_engine_init();
@@ -580,14 +537,10 @@ void main(void) {
     usb_pipe_engine_init();
     usb4_phy_arm();
   } else {
-    /* USB3-direct boot: bring USB up first with the bootstub-proven
-     * post-reset sequence (phy tune + full controller reinit + attach).
-     * The USB4-block cleanup and PCIe bring-up run after enumeration —
-     * their PHY/power pokes can wedge a post-CC31 SS link when they run
-     * before training completes. */
+    /* USB4/PCIe cleanup before USB attach wedges post-reset SuperSpeed. */
     usb_phy_tune();
-    usb_reinit_controller_full();
-    usb_attach_cycle();
+    usb_reinit_controller();
+    usb_attach_controller();
 
     usb4_reinit_usb3_after_reset_fallback();
     REG_PCIE_TLP_CTRL   = 0x01;
@@ -640,9 +593,7 @@ void main(void) {
        * the USB4 tunnel (stock fw usb_ss_link_train_engine / rst_rx_pll). */
       if (u4_boot.sb_asserted && !usb4_usb_inited) {
         usb4_usb_inited = 1;
-        /* USB4 sideband/tunnel is up: the router-op recovery channel is live,
-         * so clear the bootstub wedge-guard count (covers pure USB4 router
-         * mode, where no USB SET_ADDRESS arrives to clear it). */
+        /* Router mode has no USB SET_ADDRESS health signal. */
         boot_mark_healthy();
         /* RX PLL reset + PHY link mode switch to USB4 tunnel path.
          * The USB function was already configured at boot by usb_pipe_engine_init.
@@ -697,7 +648,7 @@ void main(void) {
         continue;
       }
       if (u4_boot.sb_asserted) { uint32_t b; for (b = 0; b < 60000UL; b++) { __asm nop __endasm; } }
-      else             { sleep(500); }
+      else             { timer_delay_ms(500); }
       /* Give the host a settle window before each Hard Reset kick. Repeated immediate kicks can keep
        * power-cycling the device before the PD contract completes. */
       { static uint8_t pd_settle = 0;
