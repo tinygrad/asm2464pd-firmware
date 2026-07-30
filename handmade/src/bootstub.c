@@ -1,9 +1,12 @@
 /* userfw @ SPI 0x4000: A24F | git[23] | ABI8 | len32le | crc32le | zero[28] | body.
  * CRC covers bytes 0x00..0x1f + body; body loads at CODE 0x3000. */
 
+#define BOOTSTUB 1
+
 #include "types.h"
 #include "registers.h"
 #include "util.h"
+#include "usb.h"
 
 #define BOOT_ABI_VERSION        0x01U
 #define BOOT_TRACK_MARK         0xB0075B00UL
@@ -29,23 +32,11 @@ typedef struct {
 #define USERFW_ERASE_END        ((USERFW_FLASH_END + USERFW_SECTOR_SIZE - 1) & \
                                  ~(USERFW_SECTOR_SIZE - 1))
 
-static void xmemcpy(__xdata uint8_t *dst, __xdata const uint8_t *src,
-                    uint16_t length) {
-    while (length--) *dst++ = *src++;
-}
-
-#define BOOTSTUB 1
-#include "usb.h"
-
 __sfr __at(0x87) PCON;       /* bit 4 = MEMSEL: redirects MOVX writes to CODE */
 __sfr __at(0xA8) IE;
 
-static uint8_t is_usb2;
-
 #define DFU_PROTOCOL_VERSION    0x01
 #define DFU_INFO_SIZE           18
-
-__xdata static uint8_t usb_configuration;
 
 static void code_write(uint16_t addr, uint8_t val) {
     uint8_t old = PCON;
@@ -92,7 +83,7 @@ static void send_dfu_info(uint16_t wLen) {
     DESC_BUF[0] = 'A'; DESC_BUF[1] = '2'; DESC_BUF[2] = '4'; DESC_BUF[3] = 'D';
     DESC_BUF[4] = DFU_PROTOCOL_VERSION;
     DESC_BUF[5] = BOOT_ABI_VERSION;
-    desc_put_u16(6, is_usb2 ? 64 : 512);
+    desc_put_u16(6, USB_EP0_SIZE);
     desc_put_u16(8, (uint16_t)USERFW_SECTOR_SIZE);
     desc_put_u32(10, USERFW_FLASH_OFFSET);
     desc_put_u32(14, USERFW_FLASH_END);
@@ -152,22 +143,18 @@ static void handle_setup(void) {
         wValH == 0 && wLen == 0) {
         usb_handle_set_address(wValL);
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-        usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
+        usb_handle_get_descriptor(wValH, wValL, wLen);
     } else if ((bmReq == USB_SETUP_DIR_DEV_TO_HOST ||
                 bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) ||
                 bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_ENDPOINT)) &&
                bReq == USB_REQ_GET_STATUS && wLen == 2) {
-        DESC_BUF[0] = (bmReq == USB_SETUP_DIR_DEV_TO_HOST) ? 0x01 : 0x00;
-        DESC_BUF[1] = 0;
-        usb_send_data(2);
+        usb_handle_get_status(bmReq);
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_CONFIGURATION &&
                wLen == 1) {
-        DESC_BUF[0] = usb_configuration;
-        usb_send_data(1);
+        usb_handle_get_configuration();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION &&
                wValH == 0 && wValL <= 1 && wLen == 0) {
-        usb_configuration = wValL;
-        usb_send_zlp();
+        usb_handle_set_configuration(wValL);
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) &&
                bReq == USB_REQ_GET_INTERFACE && wLen == 1) {
         DESC_BUF[0] = 0;
@@ -193,15 +180,14 @@ static void handle_setup(void) {
         usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB2) {
         /* Multi-packet control OUT overwrites packet 1 in DESC_BUF. */
-        uint16_t maxw = is_usb2 ? 64 : 512;
-        if (wLen == 0 || wLen > maxw) { stall_ep0(); return; }
+        if (wLen == 0 || wLen > USB_EP0_SIZE) { stall_ep0(); return; }
         if (!dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) { stall_ep0(); return; }
         xfer_op_len = wLen;
         xfer_op = XOP_WRITE;
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB3) {
-        uint16_t maxr = is_usb2 ? 64 : 512;
         uint16_t n = wLen;
-        if (n == 0 || n > maxr || !dfu_range_ok(xfer_addr, n, USERFW_FLASH_END)) {
+        if (n == 0 || n > USB_EP0_SIZE ||
+            !dfu_range_ok(xfer_addr, n, USERFW_FLASH_END)) {
             stall_ep0(); return;
         }
         if (!usb_wait_ep0_dma_idle()) { stall_ep0(); return; }
@@ -276,7 +262,6 @@ static uint8_t run_deferred_xfer_op(void) {
 static void dfu_loop(void) {
     uart_puts("[DFU]\n");
     usb_phy_tune();
-    is_usb2 = 0;
     usb_reinit_controller();
     /* PERIPH_STATUS updates only while IE.EA is set. */
     IE = 0x80;
@@ -284,7 +269,6 @@ static void dfu_loop(void) {
 
     clear_pending_xfer();
     xfer_addr = 0;
-    usb_configuration = 0;
 
     while (1) {
         uint8_t s = REG_USB_PERIPH_STATUS;
@@ -323,9 +307,7 @@ static void dfu_loop(void) {
         } else if (s & USB_PERIPH_LINK_EVENT) {
             uint8_t e = REG_BUF_CFG_9300;
             if (e & BUF_CFG_9300_SS_FAIL) {
-                is_usb2 = 1;
-                REG_CPU_MODE = CPU_MODE_USB2;
-                REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_FORCE_HS;
+                usb_fallback_to_usb2();
             }
             REG_BUF_CFG_9300 = (e & BUF_CFG_9300_SS_EVENT) ? BUF_CFG_9300_SS_FAIL : e;
         }

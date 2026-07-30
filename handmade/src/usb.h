@@ -8,6 +8,11 @@
 
 #define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
 
+static uint8_t is_usb2;
+static uint8_t usb_configuration;
+
+#define USB_EP0_SIZE (is_usb2 ? 64U : 512U)
+
 /*=== USB device identification ===*/
 #define USB_VID                 0x3801
 #define USB_LANG_ID             0x0409   /* US English */
@@ -207,7 +212,7 @@ static void usb_phy_tune(void) {
     usb_serdes_tune_lane(0xC300);  /* lane 1 */
 }
 
-static void usb_init_controller(uint8_t force_usb2) {
+static void usb_init_controller(void) {
     REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
     REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
     REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
@@ -215,10 +220,6 @@ static void usb_init_controller(uint8_t force_usb2) {
     REG_USB_DATA_L = 0x00;
     REG_USB_EP_MGMT = 0x00;
     REG_BUF_CFG_9303 = 0x33;
-    if (force_usb2) {
-        REG_CPU_MODE = CPU_MODE_USB2;
-        REG_USB_PHY_CTRL_91C0 = 0x10;
-    }
 }
 
 /* Bring up the USB PIPE/PHY engine; run unconditionally at boot. */
@@ -262,12 +263,20 @@ static void usb4_phy_arm(void) {
 
 /* CPU reset preserves USB state. */
 static void usb_reinit_controller(void) {
+    is_usb2 = 0;
+    usb_configuration = 0;
     REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
     usb_init_endpoint_state();
-    usb_init_controller(0);
+    usb_init_controller();
     REG_CPU_MODE = CPU_MODE_USB3;
     REG_USB_PHY_CTRL_91C0 |= USB_PHY_91C0_INIT_TOGGLE;
     REG_USB_PHY_CTRL_91C0 &= (uint8_t)~USB_PHY_91C0_INIT_TOGGLE;
+}
+
+static void usb_fallback_to_usb2(void) {
+    is_usb2 = 1;
+    REG_CPU_MODE = CPU_MODE_USB2;
+    REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_FORCE_HS;
 }
 
 static void usb_attach_controller(void) {
@@ -305,8 +314,24 @@ static void usb_handle_set_address(uint8_t wValL) {
     usb_send_zlp();
 }
 
-static void usb_handle_get_descriptor(uint8_t is_usb2, uint8_t desc_type,
-                                      uint8_t desc_idx, uint16_t wlen) {
+static void usb_handle_get_status(uint8_t bm_request_type) {
+    DESC_BUF[0] = bm_request_type == USB_SETUP_DIR_DEV_TO_HOST; /* self-powered */
+    DESC_BUF[1] = 0;
+    usb_send_data(2);
+}
+
+static void usb_handle_get_configuration(void) {
+    DESC_BUF[0] = usb_configuration;
+    usb_send_data(1);
+}
+
+static void usb_handle_set_configuration(uint8_t configuration) {
+    usb_configuration = configuration;
+    usb_send_zlp();
+}
+
+static void usb_handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx,
+                                      uint16_t wlen) {
   __code const uint8_t *src;
   uint8_t desc_len;
 

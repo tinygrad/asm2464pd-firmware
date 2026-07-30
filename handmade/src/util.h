@@ -43,6 +43,11 @@ static void mem_set(void *dst, uint8_t val, uint8_t n) {
   while (n--) *d++ = val;
 }
 
+static void xmemcpy(__xdata uint8_t *dst, __xdata const uint8_t *src,
+                    uint16_t length) {
+  while (length--) *dst++ = *src++;
+}
+
 static void timer_delay_ms(uint16_t milliseconds) {
   uint16_t threshold = 2 * milliseconds;
   REG_TIMER1_CSR = TIMER_CSR_CLEAR;

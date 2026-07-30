@@ -18,7 +18,6 @@ __sfr __at(0x88) TCON;
 #define IE_ET0  0x02
 #define IE_EX0  0x01
 
-static uint8_t is_usb2;
 static uint32_t __xdata usb4_skip_magic;
 #define USB4_SKIP_MAGIC 0x5AA55AA5UL
 
@@ -149,17 +148,13 @@ static void handle_usb_control(void) {
       boot_mark_healthy();
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-      usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
+      usb_handle_get_descriptor(wValH, wValL, wLen);
     } else if ((bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_DEVICE) ||
                 bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) ||
                 bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_ENDPOINT)) &&
                bReq == USB_REQ_GET_STATUS && wValL == 0x00 && wValH == 0x00 &&
                wLen == 2) {
-      /* The configuration descriptors advertise a self-powered device.
-       * This firmware maintains no interface or endpoint status bits. */
-      DESC_BUF[0] = (bmReq == USB_SETUP_DIR_DEV_TO_HOST) ? 0x01 : 0x00;
-      DESC_BUF[1] = 0x00;
-      usb_send_data(2);
+      usb_handle_get_status(bmReq);
     } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
       /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
        * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
@@ -172,7 +167,11 @@ static void handle_usb_control(void) {
       }
       dma_dwords = 0;
       usb_send_zlp();
-    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
+    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_CONFIGURATION &&
+               wLen == 1) {
+      usb_handle_get_configuration();
+    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION &&
+               wValH == 0 && wValL <= 1 && wLen == 0) {
       /* USB reset leaves the C4xx DMA active; cycle its buffer and bridge. */
       if (REG_NVME_CMD_STATUS_50 != 0) {
         REG_NVME_DOORBELL |= NVME_DOORBELL_BIT0;
@@ -190,7 +189,7 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
-      usb_send_zlp();
+      usb_handle_set_configuration(wValL);
       uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
@@ -206,8 +205,7 @@ static void handle_usb_control(void) {
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
       uint8_t bank = REG_USB_SETUP_WIDX_H;
-      uint16_t maxlen = is_usb2 ? 64 : 512;
-      uint16_t rlen = (wLen > maxlen) ? maxlen : wLen;
+      uint16_t rlen = (wLen > USB_EP0_SIZE) ? USB_EP0_SIZE : wLen;
       uint16_t vi;
       for (vi = 0; vi < rlen; vi++) {
         if (bank) DPX = bank;
@@ -405,6 +403,7 @@ void int0_isr(void) __interrupt(0) {
     periph_status = REG_USB_PERIPH_STATUS;
 
     if (periph_status & USB_PERIPH_BUS_RESET) {
+      usb_configuration = 0;
       /* 0x91D1 USB-SS / USB4-router link-event demux. */
       uint8_t link_event = REG_USB_PHY_CTRL_91D1;
       if (link_event & USB_91D1_FLAG) {
@@ -440,9 +439,7 @@ void int0_isr(void) __interrupt(0) {
       if (ep & BUF_CFG_9300_SS_FAIL) {
         if (!IS_USB4()) {
           uart_puts("[USB2 fallback]\n");
-          is_usb2 = 1;
-          REG_CPU_MODE = CPU_MODE_USB2;
-          REG_USB_PHY_CTRL_91C0 = 0x10;
+          usb_fallback_to_usb2();
         }
         /* In USB4 mode, SS_FAIL is expected — the SS link goes through
          * the tunnel, not the direct USB3 PHY.  Just ack the event. */
