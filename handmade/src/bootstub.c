@@ -32,7 +32,7 @@ typedef struct {
 #define USERFW_ERASE_END        ((USERFW_FLASH_END + USERFW_SECTOR_SIZE - 1) & \
                                  ~(USERFW_SECTOR_SIZE - 1))
 
-__sfr __at(0x87) PCON;       /* bit 4 = MEMSEL: redirects MOVX writes to CODE */
+__sfr __at(0x87) PCON;       // bit 4 = MEMSEL: redirects MOVX writes to CODE
 __sfr __at(0xA8) IE;
 
 #define DFU_PROTOCOL_VERSION    0x01
@@ -40,7 +40,7 @@ __sfr __at(0xA8) IE;
 
 static void code_write(uint16_t addr, uint8_t val) {
     uint8_t old = PCON;
-    /* Keep MEMSEL scoped to this store; SDCC may use MOVX for temporaries. */
+    // Keep MEMSEL scoped to this store; SDCC may use MOVX for temporaries.
     PCON = old | 0x10;
     *(__xdata volatile uint8_t *)addr = val;
     PCON = old;
@@ -57,37 +57,9 @@ enum { XOP_NONE = 0, XOP_ERASE, XOP_WRITE };
 __xdata static uint8_t  xfer_op;
 __xdata static uint16_t xfer_op_len;
 
-static void clear_pending_xfer(void) {
-    xfer_op = XOP_NONE;
-}
-
 static void stall_ep0(void) {
-    clear_pending_xfer();
+    xfer_op = XOP_NONE;
     REG_USB_DMA_TRIGGER = USB_DMA_STALL;
-}
-
-static void desc_put_u16(uint8_t off, uint16_t value) {
-    DESC_BUF[off] = (uint8_t)value;
-    DESC_BUF[(uint8_t)(off + 1)] = (uint8_t)(value >> 8);
-}
-
-static void desc_put_u32(uint8_t off, uint32_t value) {
-    DESC_BUF[off] = (uint8_t)value;
-    DESC_BUF[(uint8_t)(off + 1)] = (uint8_t)(value >> 8);
-    DESC_BUF[(uint8_t)(off + 2)] = (uint8_t)(value >> 16);
-    DESC_BUF[(uint8_t)(off + 3)] = (uint8_t)(value >> 24);
-}
-
-static void send_dfu_info(uint16_t wLen) {
-    if (wLen != DFU_INFO_SIZE) { stall_ep0(); return; }
-    DESC_BUF[0] = 'A'; DESC_BUF[1] = '2'; DESC_BUF[2] = '4'; DESC_BUF[3] = 'D';
-    DESC_BUF[4] = DFU_PROTOCOL_VERSION;
-    DESC_BUF[5] = BOOT_ABI_VERSION;
-    desc_put_u16(6, USB_EP0_SIZE);
-    desc_put_u16(8, (uint16_t)USERFW_SECTOR_SIZE);
-    desc_put_u32(10, USERFW_FLASH_OFFSET);
-    desc_put_u32(14, USERFW_FLASH_END);
-    usb_send_data(DFU_INFO_SIZE);
 }
 
 static uint8_t dfu_range_ok(uint32_t addr, uint32_t len, uint32_t end) {
@@ -124,14 +96,6 @@ static uint8_t load_and_verify_body(uint32_t total_body_len) {
     return ~crc == hdr.crc;
 }
 
-static void boot_userfw(void) {
-    DFU_COOKIE = 0;
-    uart_puts("[BS->APP]\n");
-    __asm
-        ljmp 0x3000
-    __endasm;
-}
-
 static void handle_setup(void) {
     uint8_t bmReq = REG_USB_SETUP_BMREQ;
     uint8_t bReq  = REG_USB_SETUP_BREQ;
@@ -163,7 +127,7 @@ static void handle_setup(void) {
                bReq == USB_REQ_SET_INTERFACE && wValH == 0 && wValL == 0 && wLen == 0) {
         usb_send_zlp();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_SEL && wLen == 6) {
-        /* Accept and ignore the payload. */
+        // Accept and ignore the payload.
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ISOCH_DELAY &&
                wLen == 0) {
         usb_send_zlp();
@@ -179,7 +143,7 @@ static void handle_setup(void) {
         xfer_addr = ((uint32_t)REG_USB_SETUP_WIDX_L << 16) | ((uint16_t)wValH << 8) | wValL;
         usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB2) {
-        /* Multi-packet control OUT overwrites packet 1 in DESC_BUF. */
+        // Multi-packet control OUT overwrites packet 1 in DESC_BUF.
         if (wLen == 0 || wLen > USB_EP0_SIZE) { stall_ep0(); return; }
         if (!dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) { stall_ep0(); return; }
         xfer_op_len = wLen;
@@ -191,13 +155,22 @@ static void handle_setup(void) {
             stall_ep0(); return;
         }
         if (!usb_wait_ep0_dma_idle()) { stall_ep0(); return; }
-        /* Direct FLASH_BUF -> DESC_BUF copies are unreliable on hardware. */
+        // Direct FLASH_BUF -> DESC_BUF copies are unreliable on hardware.
         if (!flash_read(xfer_addr, scratch, n)) { stall_ep0(); return; }
         xmemcpy(DESC_BUF, scratch, n);
         xfer_addr += n;
         usb_send_data(n);
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB4) {
-        send_dfu_info(wLen);
+        // send_dfu_info
+        if (wLen != DFU_INFO_SIZE) { stall_ep0(); return; }
+        DESC_BUF[0] = 'A'; DESC_BUF[1] = '2'; DESC_BUF[2] = '4'; DESC_BUF[3] = 'D';
+        DESC_BUF[4] = DFU_PROTOCOL_VERSION;
+        DESC_BUF[5] = BOOT_ABI_VERSION;
+        *(__xdata uint16_t *)(DESC_BUF + 6) = USB_EP0_SIZE;
+        *(__xdata uint16_t *)(DESC_BUF + 8) = USERFW_SECTOR_SIZE;
+        *(__xdata uint32_t *)(DESC_BUF + 10) = USERFW_FLASH_OFFSET;
+        *(__xdata uint32_t *)(DESC_BUF + 14) = USERFW_FLASH_END;
+        usb_send_data(DFU_INFO_SIZE);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEB) {
         if (wLen != 0) { stall_ep0(); return; }
         usb_send_zlp();
@@ -212,12 +185,12 @@ static uint8_t run_deferred_xfer_op(void) {
     if (xfer_op == XOP_WRITE) {
         uint32_t addr = xfer_addr;
         uint16_t len = xfer_op_len;
-        clear_pending_xfer();
+        xfer_op = XOP_NONE;
         if (!usb_wait_ep0_dma_idle()) {
             stall_ep0();
             return 0;
         }
-        /* Unlock DMA touches FLASH_BUF, so it must precede payload staging. */
+        // Unlock DMA touches FLASH_BUF, so it must precede payload staging.
         if (!flash_unlock()) {
             stall_ep0();
             return 0;
@@ -236,7 +209,7 @@ static uint8_t run_deferred_xfer_op(void) {
         xfer_addr = addr + len;
         return 1;
     } else {
-        clear_pending_xfer();
+        xfer_op = XOP_NONE;
         if (!usb_wait_ep0_dma_idle()) {
             stall_ep0();
             return 0;
@@ -263,11 +236,11 @@ static void dfu_loop(void) {
     uart_puts("[DFU]\n");
     usb_phy_tune();
     usb_reinit_controller();
-    /* PERIPH_STATUS updates only while IE.EA is set. */
+    // PERIPH_STATUS updates only while IE.EA is set.
     IE = 0x80;
     usb_attach_controller();
 
-    clear_pending_xfer();
+    xfer_op = XOP_NONE;
     xfer_addr = 0;
 
     while (1) {
@@ -275,7 +248,7 @@ static void dfu_loop(void) {
         if (s & USB_PERIPH_CONTROL) {
             uint8_t phase = REG_USB_CTRL_PHASE;
             if (phase & USB_CTRL_PHASE_SETUP) {
-                clear_pending_xfer();
+                xfer_op = XOP_NONE;
                 REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
                 handle_setup();
             } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
@@ -286,7 +259,7 @@ static void dfu_loop(void) {
                     if (run_deferred_xfer_op()) {
                         usb_send_zlp();
                     } else {
-                        /* Ack the phase without overwriting USB_DMA_STALL. */
+                        // Ack the phase without overwriting USB_DMA_STALL.
                         REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
                     }
                 } else {
@@ -297,8 +270,8 @@ static void dfu_loop(void) {
                 REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
             }
         } else if (s & USB_PERIPH_BUS_RESET) {
-            clear_pending_xfer();
-            /* INT_MASK_9090[6:0] does not reset with the USB bus. */
+            xfer_op = XOP_NONE;
+            // INT_MASK_9090[6:0] does not reset with the USB bus.
             REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL;
             xfer_addr = 0;
             usb_configuration = 0;
@@ -338,7 +311,7 @@ void main(void) {
         dfu_loop();
     }
 
-    /* An empty body has a valid CRC but no reset vector. */
+    // An empty body has a valid CRC but no reset vector.
     if (hdr.body_len == 0 || hdr.body_len > USERFW_BODY_LIMIT) {
         uart_puts("[BS bad-size]\n");
         dfu_loop();
@@ -349,7 +322,7 @@ void main(void) {
         dfu_loop();
     }
 
-    /* Stay in DFU after repeated jumps that never call boot_mark_healthy(). */
+    // Stay in DFU after repeated jumps that never call boot_mark_healthy().
     uint8_t attempts = ((BOOT_TRACK & BOOT_TRACK_MASK) == BOOT_TRACK_MARK)
                        ? (uint8_t)(BOOT_TRACK & 0xFF) : 0;
     if (attempts >= BOOT_MAX_ATTEMPTS) {
@@ -358,5 +331,9 @@ void main(void) {
     }
     BOOT_TRACK = BOOT_TRACK_MARK | (uint32_t)(uint8_t)(attempts + 1);
 
-    boot_userfw();
+    DFU_COOKIE = 0;
+    uart_puts("[BS->APP]\n");
+    __asm
+        ljmp 0x3000
+    __endasm;
 }

@@ -212,16 +212,6 @@ static void usb_phy_tune(void) {
     usb_serdes_tune_lane(0xC300);  /* lane 1 */
 }
 
-static void usb_init_controller(void) {
-    REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
-    REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
-    REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
-    REG_USB_EP0_CFG = 0xF0;
-    REG_USB_DATA_L = 0x00;
-    REG_USB_EP_MGMT = 0x00;
-    REG_BUF_CFG_9303 = 0x33;
-}
-
 /* Bring up the USB PIPE/PHY engine; run unconditionally at boot. */
 static void usb_pipe_engine_init(void) {
     REG_POWER_ENABLE      = (REG_POWER_ENABLE & 0x7F) | 0x80;
@@ -267,7 +257,14 @@ static void usb_reinit_controller(void) {
     usb_configuration = 0;
     REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
     usb_init_endpoint_state();
-    usb_init_controller();
+    // usb_init_controller
+    REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
+    REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
+    REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
+    REG_USB_EP0_CFG = 0xF0;
+    REG_USB_DATA_L = 0x00;
+    REG_USB_EP_MGMT = 0x00;
+    REG_BUF_CFG_9303 = 0x33;
     REG_CPU_MODE = CPU_MODE_USB3;
     REG_USB_PHY_CTRL_91C0 |= USB_PHY_91C0_INIT_TOGGLE;
     REG_USB_PHY_CTRL_91C0 &= (uint8_t)~USB_PHY_91C0_INIT_TOGGLE;
@@ -315,7 +312,7 @@ static void usb_handle_set_address(uint8_t wValL) {
 }
 
 static void usb_handle_get_status(uint8_t bm_request_type) {
-    DESC_BUF[0] = bm_request_type == USB_SETUP_DIR_DEV_TO_HOST; /* self-powered */
+    DESC_BUF[0] = bm_request_type == USB_SETUP_DIR_DEV_TO_HOST; // self-powered
     DESC_BUF[1] = 0;
     usb_send_data(2);
 }

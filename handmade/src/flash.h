@@ -48,13 +48,6 @@ static uint8_t flash_poll_dma_idle(void) {
   return 1;
 }
 
-static void flash_clear_io_modes(void) {
-  REG_FLASH_MODE &= (uint8_t)~0x10;
-  REG_FLASH_MODE &= (uint8_t)~0x20;
-  REG_FLASH_MODE &= (uint8_t)~0x40;
-  REG_FLASH_MODE &= (uint8_t)~0x80;
-}
-
 static void flash_init(void) {
   REG_CPU_EXEC_STATUS_2 = 0x04;
   REG_INT_AUX_STATUS = 0x02;
@@ -98,8 +91,8 @@ static uint8_t flash_cmd(uint8_t command, uint32_t address,
 
   ok = flash_poll_busy();
   if (ok && read) ok = flash_poll_dma_idle();
-  REG_FLASH_MODE &= (uint8_t)~FLASH_MODE_ENABLE;
-  flash_clear_io_modes();
+  // flash_clear_io_modes
+  REG_FLASH_MODE &= (uint8_t)~(FLASH_MODE_ENABLE | 0xF0);
   if (read) flash_clear_dma_status();
   return ok;
 }

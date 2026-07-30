@@ -532,7 +532,7 @@ void main(void) {
     usb_pipe_engine_init();
     usb4_phy_arm();
   } else {
-    /* USB4/PCIe cleanup before USB attach wedges post-reset SuperSpeed. */
+    // USB4/PCIe cleanup before USB attach wedges post-reset SuperSpeed.
     usb_phy_tune();
     usb_reinit_controller();
     usb_attach_controller();
@@ -588,7 +588,7 @@ void main(void) {
        * the USB4 tunnel (stock fw usb_ss_link_train_engine / rst_rx_pll). */
       if (u4_boot.sb_asserted && !usb4_usb_inited) {
         usb4_usb_inited = 1;
-        /* Router mode has no USB SET_ADDRESS health signal. */
+        // Router mode has no USB SET_ADDRESS health signal.
         boot_mark_healthy();
         /* RX PLL reset + PHY link mode switch to USB4 tunnel path.
          * The USB function was already configured at boot by usb_pipe_engine_init.
