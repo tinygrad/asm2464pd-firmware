@@ -5,6 +5,35 @@
 #include "registers.h"
 #include "util.h"
 
+#define BOOT_ABI_VERSION        0x01U
+#define BOOT_TRACK_MARK         0xB0075B00UL
+#define BOOT_TRACK_MASK         0xFFFFFF00UL
+#define BOOT_MAX_ATTEMPTS       3
+
+#define USERFW_FLASH_OFFSET     0x4000UL
+#define USERFW_HEADER_CRC_LEN   0x20U
+#define USERFW_CODE_BASE        0x3000U
+#define USERFW_BODY_LIMIT       0xD000UL
+#define USERFW_SECTOR_SIZE      0x1000UL
+
+typedef struct {
+    uint8_t  magic[4];
+    uint8_t  gitversion[23];
+    uint8_t  boot_abi;
+    uint32_t body_len;
+    uint32_t crc;
+    uint8_t  reserved[28];
+} userfw_hdr_t;
+
+#define USERFW_FLASH_END        (USERFW_FLASH_OFFSET + sizeof(userfw_hdr_t) + USERFW_BODY_LIMIT)
+#define USERFW_ERASE_END        ((USERFW_FLASH_END + USERFW_SECTOR_SIZE - 1) & \
+                                 ~(USERFW_SECTOR_SIZE - 1))
+
+static void xmemcpy(__xdata uint8_t *dst, __xdata const uint8_t *src,
+                    uint16_t length) {
+    while (length--) *dst++ = *src++;
+}
+
 #define BOOTSTUB 1
 #include "usb.h"
 
@@ -14,23 +43,8 @@ __sfr __at(0xA8) IE;
 static uint8_t is_usb2;
 
 #define DFU_PROTOCOL_VERSION    0x01
-#define DFU_INFO_SIZE           20
-#define DFU_STATUS_SIZE         4
+#define DFU_INFO_SIZE           18
 
-enum {
-    DFU_OK = 0,
-    DFU_ERR_REQUEST,
-    DFU_ERR_RANGE,
-    DFU_ERR_USB_DMA,
-    DFU_ERR_FLASH_UNLOCK,
-    DFU_ERR_FLASH_ERASE,
-    DFU_ERR_FLASH_PROGRAM,
-    DFU_ERR_FLASH_READ,
-    DFU_ERR_ABORTED,
-};
-
-__xdata static uint8_t dfu_status;
-__xdata static uint8_t dfu_last_op;
 __xdata static uint8_t usb_configuration;
 
 static void code_write(uint16_t addr, uint8_t val) {
@@ -54,11 +68,9 @@ __xdata static uint16_t xfer_op_len;
 
 static void clear_pending_xfer(void) {
     xfer_op = XOP_NONE;
-    xfer_op_len = 0;
 }
 
-static void stall_ep0(uint8_t status) {
-    dfu_status = status;
+static void stall_ep0(void) {
     clear_pending_xfer();
     REG_USB_DMA_TRIGGER = USB_DMA_STALL;
 }
@@ -76,42 +88,19 @@ static void desc_put_u32(uint8_t off, uint32_t value) {
 }
 
 static void send_dfu_info(uint16_t wLen) {
-    if (wLen != DFU_INFO_SIZE) { stall_ep0(DFU_ERR_REQUEST); return; }
+    if (wLen != DFU_INFO_SIZE) { stall_ep0(); return; }
     DESC_BUF[0] = 'A'; DESC_BUF[1] = '2'; DESC_BUF[2] = '4'; DESC_BUF[3] = 'D';
     DESC_BUF[4] = DFU_PROTOCOL_VERSION;
     DESC_BUF[5] = BOOT_ABI_VERSION;
-    DESC_BUF[6] = 0x07; /* status command, explicit-address writes, bus-reset recovery */
-    DESC_BUF[7] = 0;
-    desc_put_u16(8, is_usb2 ? 64 : 512);
-    desc_put_u16(10, (uint16_t)USERFW_SECTOR_SIZE);
-    desc_put_u32(12, USERFW_FLASH_OFFSET);
-    desc_put_u32(16, USERFW_FLASH_END);
+    desc_put_u16(6, is_usb2 ? 64 : 512);
+    desc_put_u16(8, (uint16_t)USERFW_SECTOR_SIZE);
+    desc_put_u32(10, USERFW_FLASH_OFFSET);
+    desc_put_u32(14, USERFW_FLASH_END);
     usb_send_data(DFU_INFO_SIZE);
 }
 
-static void send_dfu_status(uint16_t wLen) {
-    if (wLen != DFU_STATUS_SIZE) { stall_ep0(DFU_ERR_REQUEST); return; }
-    DESC_BUF[0] = DFU_PROTOCOL_VERSION;
-    DESC_BUF[1] = dfu_status;
-    DESC_BUF[2] = dfu_last_op;
-    DESC_BUF[3] = xfer_op;
-    usb_send_data(DFU_STATUS_SIZE);
-}
-
-static void cpu_reset(void) {
-    (void)usb_wait_ep0_dma_idle();
-    REG_CPU_RESET = CPU_RESET_TRIGGER;
-    while (1) ;
-}
-
 static uint8_t dfu_range_ok(uint32_t addr, uint32_t len, uint32_t end) {
-    if (len == 0) return 0;
-    if (addr < USERFW_FLASH_OFFSET || addr > end) return 0;
-    return len <= (end - addr);
-}
-
-static uint8_t load_header(void) {
-    return flash_read(USERFW_FLASH_OFFSET, (__xdata uint8_t *)&hdr, sizeof(hdr));
+    return len && addr >= USERFW_FLASH_OFFSET && addr <= end && len <= end - addr;
 }
 
 static void crc32_step(uint32_t *c, uint8_t b) {
@@ -196,61 +185,42 @@ static void handle_setup(void) {
                wValH == 0 && (wValL == 48 || wValL == 49) && wLen == 0) {
         usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
-        if (wLen != 8) { stall_ep0(DFU_ERR_REQUEST); return; }
-        dfu_last_op = bReq;
+        if (wLen != 8) { stall_ep0(); return; }
         xfer_op = XOP_ERASE;
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB1) {
-        if (wLen != 0) { stall_ep0(DFU_ERR_REQUEST); return; }
-        xfer_addr     = ((uint32_t)REG_USB_SETUP_WIDX_L << 16) | ((uint16_t)wValH << 8) | wValL;
-        dfu_last_op = bReq;
-        dfu_status = DFU_OK;
+        if (wLen != 0) { stall_ep0(); return; }
+        xfer_addr = ((uint32_t)REG_USB_SETUP_WIDX_L << 16) | ((uint16_t)wValH << 8) | wValL;
         usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB2) {
         /* Multi-packet control OUT overwrites packet 1 in DESC_BUF. */
         uint16_t maxw = is_usb2 ? 64 : 512;
-        if (wLen == 0 || wLen > maxw) { stall_ep0(DFU_ERR_REQUEST); return; }
-        if (!dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) { stall_ep0(DFU_ERR_RANGE); return; }
-        dfu_last_op = bReq;
+        if (wLen == 0 || wLen > maxw) { stall_ep0(); return; }
+        if (!dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) { stall_ep0(); return; }
         xfer_op_len = wLen;
-        xfer_op     = XOP_WRITE;
+        xfer_op = XOP_WRITE;
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB3) {
         uint16_t maxr = is_usb2 ? 64 : 512;
         uint16_t n = wLen;
-        if (n == 0 || n > maxr) { stall_ep0(DFU_ERR_REQUEST); return; }
-        if (xfer_addr >= FLASH_3BYTE_LIMIT || n > FLASH_3BYTE_LIMIT - xfer_addr) {
-            stall_ep0(DFU_ERR_RANGE);
-            return;
+        if (n == 0 || n > maxr || !dfu_range_ok(xfer_addr, n, USERFW_FLASH_END)) {
+            stall_ep0(); return;
         }
-        if (!usb_wait_ep0_dma_idle()) { stall_ep0(DFU_ERR_USB_DMA); return; }
+        if (!usb_wait_ep0_dma_idle()) { stall_ep0(); return; }
         /* Direct FLASH_BUF -> DESC_BUF copies are unreliable on hardware. */
-        if (!flash_read(xfer_addr, scratch, n)) { stall_ep0(DFU_ERR_FLASH_READ); return; }
+        if (!flash_read(xfer_addr, scratch, n)) { stall_ep0(); return; }
         xmemcpy(DESC_BUF, scratch, n);
         xfer_addr += n;
-        dfu_last_op = bReq;
-        dfu_status = DFU_OK;
         usb_send_data(n);
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB4) {
         send_dfu_info(wLen);
-    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB5) {
-        send_dfu_status(wLen);
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB6) {
-        if (wLen != 0) { stall_ep0(DFU_ERR_REQUEST); return; }
-        clear_pending_xfer();
-        xfer_addr = 0;
-        dfu_last_op = bReq;
-        dfu_status = DFU_OK;
-        usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEB) {
-        if (wLen != 0) { stall_ep0(DFU_ERR_REQUEST); return; }
-        dfu_last_op = bReq;
+        if (wLen != 0) { stall_ep0(); return; }
         usb_send_zlp();
+        (void)usb_wait_ep0_dma_idle();
         cpu_reset();
     } else {
-        stall_ep0(DFU_ERR_REQUEST);
+        stall_ep0();
     }
 }
-
-enum { XR_NOOP = 0, XR_OK, XR_STALL };
 
 static uint8_t run_deferred_xfer_op(void) {
     if (xfer_op == XOP_WRITE) {
@@ -258,59 +228,49 @@ static uint8_t run_deferred_xfer_op(void) {
         uint16_t len = xfer_op_len;
         clear_pending_xfer();
         if (!usb_wait_ep0_dma_idle()) {
-            stall_ep0(DFU_ERR_USB_DMA);
-            return XR_STALL;
-        }
-        if (!dfu_range_ok(addr, len, USERFW_FLASH_END)) {
-            stall_ep0(DFU_ERR_RANGE);
-            return XR_STALL;
+            stall_ep0();
+            return 0;
         }
         /* Unlock DMA touches FLASH_BUF, so it must precede payload staging. */
         if (!flash_unlock()) {
-            stall_ep0(DFU_ERR_FLASH_UNLOCK);
-            return XR_STALL;
+            stall_ep0();
+            return 0;
         }
-        {
-            uint16_t off = 0;
-            while (off < len) {
-                uint16_t chunk = (uint16_t)(0x100 - (uint8_t)((addr + off) & 0xFF));
-                if (chunk > (uint16_t)(len - off)) chunk = (uint16_t)(len - off);
-                xmemcpy(FLASH_BUF, DESC_BUF + off, chunk);
-                if (!flash_program_page(addr + off, chunk)) {
-                    stall_ep0(DFU_ERR_FLASH_PROGRAM);
-                    return XR_STALL;
-                }
-                off += chunk;
+        uint16_t off = 0;
+        while (off < len) {
+            uint16_t chunk = (uint16_t)(0x100 - (uint8_t)((addr + off) & 0xFF));
+            if (chunk > (uint16_t)(len - off)) chunk = (uint16_t)(len - off);
+            xmemcpy(FLASH_BUF, DESC_BUF + off, chunk);
+            if (!flash_program_page(addr + off, chunk)) {
+                stall_ep0();
+                return 0;
             }
+            off += chunk;
         }
-        xfer_addr     = addr + len;
-        dfu_status = DFU_OK;
-        return XR_OK;
-    }
-    if (xfer_op == XOP_ERASE) {
+        xfer_addr = addr + len;
+        return 1;
+    } else {
         clear_pending_xfer();
         if (!usb_wait_ep0_dma_idle()) {
-            stall_ep0(DFU_ERR_USB_DMA);
-            return XR_STALL;
+            stall_ep0();
+            return 0;
         }
         uint32_t addr = *(__xdata const uint32_t *)DESC_BUF;
         uint32_t len  = *(__xdata const uint32_t *)(DESC_BUF + 4);
         if ((addr & (USERFW_SECTOR_SIZE - 1)) ||
             (len & (USERFW_SECTOR_SIZE - 1)) ||
             !dfu_range_ok(addr, len, USERFW_ERASE_END)) {
-            stall_ep0(DFU_ERR_RANGE);
-            return XR_STALL;
+            stall_ep0();
+            return 0;
         }
         for (uint32_t off = 0; off < len; off += USERFW_SECTOR_SIZE) {
             if (!flash_erase_sector(addr + off)) {
-                stall_ep0(DFU_ERR_FLASH_ERASE);
-                return XR_STALL;
+                stall_ep0();
+                return 0;
             }
         }
-        dfu_status = DFU_OK;
-        return XR_OK;
+        return 1;
     }
-    return XR_NOOP;
 }
 
 static void dfu_loop(void) {
@@ -322,11 +282,8 @@ static void dfu_loop(void) {
     IE = 0x80;
     usb_attach_controller();
 
-    xfer_op       = XOP_NONE;
-    xfer_op_len   = 0;
-    xfer_addr     = 0;
-    dfu_status    = DFU_OK;
-    dfu_last_op   = 0;
+    clear_pending_xfer();
+    xfer_addr = 0;
     usb_configuration = 0;
 
     while (1) {
@@ -334,7 +291,6 @@ static void dfu_loop(void) {
         if (s & USB_PERIPH_CONTROL) {
             uint8_t phase = REG_USB_CTRL_PHASE;
             if (phase & USB_CTRL_PHASE_SETUP) {
-                if (xfer_op != XOP_NONE) dfu_status = DFU_ERR_ABORTED;
                 clear_pending_xfer();
                 REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
                 handle_setup();
@@ -342,13 +298,14 @@ static void dfu_loop(void) {
                 REG_USB_DMA_TRIGGER = USB_DMA_RECV;
                 REG_USB_CTRL_PHASE  = USB_CTRL_PHASE_STAT_OUT;
             } else if ((phase & USB_CTRL_PHASE_DATA_IN) || (phase & USB_CTRL_PHASE_STAT_IN)) {
-                uint8_t r = run_deferred_xfer_op();
-                if (r == XR_OK) {
-                    usb_send_zlp();
-                } else if (r == XR_STALL) {
-                    /* Ack the phase without overwriting USB_DMA_STALL. */
-                    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
-                } else {  /* XR_NOOP */
+                if (xfer_op != XOP_NONE) {
+                    if (run_deferred_xfer_op()) {
+                        usb_send_zlp();
+                    } else {
+                        /* Ack the phase without overwriting USB_DMA_STALL. */
+                        REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
+                    }
+                } else {
                     if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
                     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
                 }
@@ -356,7 +313,6 @@ static void dfu_loop(void) {
                 REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_OUT;
             }
         } else if (s & USB_PERIPH_BUS_RESET) {
-            if (xfer_op != XOP_NONE) dfu_status = DFU_ERR_ABORTED;
             clear_pending_xfer();
             /* INT_MASK_9090[6:0] does not reset with the USB bus. */
             REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL;
@@ -389,7 +345,9 @@ void main(void) {
         dfu_loop();
     }
 
-    if (!load_header() || !userfw_header_magic_ok(&hdr)) {
+    if (!flash_read(USERFW_FLASH_OFFSET, (__xdata uint8_t *)&hdr, sizeof(hdr)) ||
+        hdr.magic[0] != 'A' || hdr.magic[1] != '2' ||
+        hdr.magic[2] != '4' || hdr.magic[3] != 'F') {
         uart_puts("[BS bad-magic]\n");
         dfu_loop();
     }
@@ -410,15 +368,13 @@ void main(void) {
     }
 
     /* Stay in DFU after repeated jumps that never call boot_mark_healthy(). */
-    {
-        uint8_t attempts = ((BOOT_TRACK & BOOT_TRACK_MASK) == BOOT_TRACK_MARK)
-                           ? (uint8_t)(BOOT_TRACK & 0xFF) : 0;
-        if (attempts >= BOOT_MAX_ATTEMPTS) {
-            uart_puts("[BS wedge-guard]\n");
-            dfu_loop();
-        }
-        BOOT_TRACK = BOOT_TRACK_MARK | (uint32_t)(uint8_t)(attempts + 1);
+    uint8_t attempts = ((BOOT_TRACK & BOOT_TRACK_MASK) == BOOT_TRACK_MARK)
+                       ? (uint8_t)(BOOT_TRACK & 0xFF) : 0;
+    if (attempts >= BOOT_MAX_ATTEMPTS) {
+        uart_puts("[BS wedge-guard]\n");
+        dfu_loop();
     }
+    BOOT_TRACK = BOOT_TRACK_MARK | (uint32_t)(uint8_t)(attempts + 1);
 
     boot_userfw();
 }

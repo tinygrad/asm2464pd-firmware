@@ -13,14 +13,14 @@
 #define FLASH_CMD_SECTOR_ERASE  0x20
 #define FLASH_CMD_ENSO          0xB1
 #define FLASH_CMD_EXSO          0xC1
-#define FLASH_3BYTE_LIMIT       0x1000000UL
 
-#ifdef BOOTSTUB
-
+/* Provisioned serial followed by its XOR checksum; blank OTP fails the check. */
 typedef struct {
   uint8_t serial[4];
   uint8_t checksum;
 } otp_t;
+
+#ifdef BOOTSTUB
 
 __xdata static uint8_t flash_unlocked;
 
@@ -239,13 +239,6 @@ static void flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_len, uint16_t dat
   REG_FLASH_MODE = 0; REG_FLASH_MODE = 0;
   REG_FLASH_MODE = 0; REG_FLASH_MODE = 0;
 }
-
-/* OTP layout (programmed by provisioning scripts): 4-byte serial +
- * XOR checksum. Blank OTP is all 0xFF and fails the checksum check. */
-typedef struct {
-  uint8_t  serial[4];
-  uint8_t  checksum;
-} otp_t;
 
 /* Read the OTP header. Returns 1 + populates `out` on a checksum match,
  * 0 if blank or corrupt. The buffer must be copied BEFORE EXSO and we

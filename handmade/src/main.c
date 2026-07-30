@@ -146,6 +146,7 @@ static void handle_usb_control(void) {
 
     if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
       usb_handle_set_address(wValL);
+      boot_mark_healthy();
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
@@ -257,11 +258,9 @@ static void handle_usb_control(void) {
       }
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEC) {
-      DFU_COOKIE = DFU_COOKIE_MAGIC;
       usb_send_zlp();
       (void)usb_wait_ep0_dma_idle();
-      REG_CPU_RESET = CPU_RESET_TRIGGER;
-      while (1) { }
+      boot_enter_dfu();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
       *   wValue = fmt_type | (byte_enable << 8)
@@ -493,8 +492,7 @@ void int1_isr(void) __interrupt(1) {
 static void usb4_fallback_to_usb3(void) {
   uart_puts("[USB4 fallback]\n");
   usb4_skip_magic = USB4_SKIP_MAGIC;
-  REG_CPU_RESET = CPU_RESET_TRIGGER;
-  while (1) { }
+  cpu_reset();
 }
 
 static void usb4_reinit_usb3_after_reset_fallback(void) {

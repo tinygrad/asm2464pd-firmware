@@ -754,9 +754,7 @@ static void u4c_native_enter_dfu(void) {
   u4c_router_cfg_u32_write(USB4_ROUTER_CS_METADATA, 0x00000000UL);
   u4c_router_cfg_u32_write(USB4_ROUTER_CS_OPCODE, USB4_ROUTER_OP_TINY_ENTER_DFU);
   for (u4c_dfu_spin = 0xFFFF; u4c_dfu_spin; u4c_dfu_spin--) { }
-  DFU_COOKIE = DFU_COOKIE_MAGIC;
-  REG_CPU_RESET = CPU_RESET_TRIGGER;
-  while (1) { }
+  boot_enter_dfu();
 }
 static void u4c_native_routerop_service(void) {
   uint32_t op, metadata;

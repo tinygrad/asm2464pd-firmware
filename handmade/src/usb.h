@@ -46,10 +46,7 @@ static __code const uint8_t usb_cfg_desc[] = {
   0x09, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00,
 };
 
-static __code const uint8_t usb_cfg_desc_ss[] = {
-  0x09, 0x02, U16_LE(18), 0x01, 0x01, 0x00, 0xC0, 0x00,
-  0x09, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00,
-};
+#define usb_cfg_desc_ss usb_cfg_desc
 
 static __code const uint8_t usb_device_qualifier_desc[] = {
   0x0A, USB_DESC_TYPE_DEVICE_QUALIFIER, U16_LE(0x0200),
@@ -305,7 +302,6 @@ static void usb_desc_copy(__code const uint8_t *src, uint8_t len) {
 static void usb_handle_set_address(uint8_t wValL) {
     REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
     REG_USB_EP_CTRL_91D0  = 0x02;
-    boot_mark_healthy();
     usb_send_zlp();
 }
 
