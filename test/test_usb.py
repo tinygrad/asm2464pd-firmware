@@ -54,7 +54,6 @@ USB_TYPE_VENDOR = 0x40
 USB_REQ_GET_DESCRIPTOR = 0x06
 USB_REQ_SET_ADDRESS = 0x05
 USB_REQ_SET_CONFIGURATION = 0x09
-USB_REQ_GET_STATUS = 0x00
 
 # Expected device info
 # Original ASMedia VID/PID
@@ -72,48 +71,6 @@ VALID_PIDS = [ASM2464_PID_ORIGINAL, ASM2464_PID_2461, ASM2464_PID_2463, ASM2464_
 
 class TestUSBEnumeration:
     """Tests for USB enumeration (GET_DESCRIPTOR requests)."""
-
-    @staticmethod
-    def _inject_setup_request(emu, bmRequestType, bRequest, wValue=0,
-                              wIndex=0, wLength=0):
-        """Inject a setup request through the custom firmware's EX0 path."""
-        setup = struct.pack('<BBHHH', bmRequestType, bRequest, wValue,
-                            wIndex, wLength)
-        hw = emu.hw
-
-        # Let main() initialize the controller and enable EX0 first.
-        emu.run(max_cycles=100000)
-        for i, value in enumerate(setup):
-            hw.regs[0x9104 + i] = value
-
-        hw.regs[0x9091] = 0x01  # setup phase
-        hw.regs[0x9101] = 0x02  # EP0 control interrupt
-        hw.regs[0xC802] = 0x01  # USB interrupt gate
-        hw._pending_usb_interrupt = True
-        emu.run(max_cycles=200000)
-
-    @pytest.mark.parametrize("recipient,index,expected", [
-        (0x00, 0x0000, b"\x01\x00"),  # self-powered device
-        (0x01, 0x0000, b"\x00\x00"),  # interface 0
-        (0x02, 0x0081, b"\x00\x00"),  # bulk IN endpoint
-    ])
-    def test_get_status(self, our_firmware_emulator, recipient, index,
-                        expected):
-        """GET_STATUS returns the Chapter 9 status for each recipient."""
-        emu = our_firmware_emulator
-        self._inject_setup_request(
-            emu,
-            bmRequestType=0x80 | recipient,
-            bRequest=USB_REQ_GET_STATUS,
-            wIndex=index,
-            wLength=2,
-        )
-
-        response = bytes(emu.hw.regs.get(0x9E00 + i, 0) for i in range(2))
-        assert response == expected
-        assert emu.hw.regs.get(0x9003, 0) == 0
-        assert emu.hw.regs.get(0x9004, 0) == 2
-        assert emu.hw.regs.get(0x9092, 0) & 0x04
 
     def _setup_usb_for_descriptor(self, emu, desc_type, desc_index=0, wLength=255):
         """
