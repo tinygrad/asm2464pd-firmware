@@ -168,6 +168,16 @@ static void handle_usb_control(void) {
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
+    } else if ((bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_DEVICE) ||
+                bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) ||
+                bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_ENDPOINT)) &&
+               bReq == USB_REQ_GET_STATUS && wValL == 0x00 && wValH == 0x00 &&
+               wLen == 2) {
+      /* The configuration descriptors advertise a self-powered device.
+       * This firmware maintains no interface or endpoint status bits. */
+      DESC_BUF[0] = (bmReq == USB_SETUP_DIR_DEV_TO_HOST) ? 0x01 : 0x00;
+      DESC_BUF[1] = 0x00;
+      usb_send_data(2);
     } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
       /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
        * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
