@@ -262,7 +262,6 @@ SFR(0xA8) IE;            // Interrupt enable
  */
 #define REG_USB_EP0_CONFIG      XDATA_REG8(0x9006)
 #define   USB_EP0_CONFIG_ENABLE   0x01  // Bit 0: EP0 config / bulk endpoint ready
-#define   USB_EP0_CONFIG_CQ_PHASE0 0x10 // Bit 4: accept NVMe CQ phase tag 0
 #define   USB_EP0_CONFIG_READY    0x80  // Bit 7: EP0 ready / data transfer ready
 #define REG_USB_SCSI_BUF_LEN    XDATA_REG16(0x9007)
 #define REG_USB_SCSI_BUF_LEN_L  XDATA_REG8(0x9007)
