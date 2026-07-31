@@ -3,7 +3,7 @@ import ctypes
 
 from tinygrad.runtime.autogen import libusb
 
-VID, PID = 0xADD1, 0x0001
+VID, PID = 0x3801, 0x0001
 
 
 def main():

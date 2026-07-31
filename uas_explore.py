@@ -21,7 +21,7 @@ DMA_INIT = [
 
 class Dev:
     def __init__(self):
-        self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04, max_streams=32, use_bot=STREAMS==0)
+        self.usb = USB3(0x3801, 0x0001, 0x81, 0x83, 0x02, 0x04, max_streams=32, use_bot=STREAMS==0)
         if STREAMS: assert self.usb.use_streams, "streams are required"
 
     def readn(self, addr, size):

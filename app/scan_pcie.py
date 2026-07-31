@@ -6,7 +6,7 @@ Scans for PCIe devices connected to the ASM2464PD chip over USB.
 The ASM2464PD is a USB 3.2 to PCIe bridge chip commonly found in
 external NVMe/GPU enclosures.
 
-Device: Bus 004 Device 003: ID add1:0001 tiny USB 3.2 PCIe TinyEnclosure
+Device: Bus 004 Device 003: ID 3801:0001 tiny USB 3.2 PCIe TinyEnclosure
 
 Usage:
     python app/scan_pcie.py              # Scan all buses
@@ -213,14 +213,14 @@ class PCIeScanner:
     def connect(self) -> bool:
         """Connect to the ASM2464PD controller."""
         try:
-            print("Connecting to ASM2464PD controller (VID:PID = ADD1:0001)...")
+            print("Connecting to ASM2464PD controller (VID:PID = 3801:0001)...")
             self.controller = ASM24Controller()
             print("Connected successfully!")
             return True
         except Exception as e:
             print(f"Failed to connect: {e}")
             print("\nTroubleshooting:")
-            print("  - Make sure the device is connected (lsusb | grep add1)")
+            print("  - Make sure the device is connected (lsusb | grep 3801)")
             print("  - Run with sudo for USB access")
             print("  - Check that no other program is using the device")
             return False

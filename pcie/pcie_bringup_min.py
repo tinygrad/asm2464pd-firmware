@@ -5,7 +5,7 @@ import ctypes, sys, time
 from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
 
-SUPPORTED_DEVICES = [(0xADD1, 0x0001), (0x174C, 0x2463), (0x174C, 0x2464)]
+SUPPORTED_DEVICES = [(0x3801, 0x0001), (0x174C, 0x2463), (0x174C, 0x2464)]
 
 class ASM2464PD:
   def __init__(self):

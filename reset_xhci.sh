@@ -6,4 +6,4 @@ echo 1 > /sys/bus/pci/devices/$DEV/remove
 sleep 2
 echo 1 > /sys/bus/pci/rescan
 sleep 1
-lsusb | grep -iE "add1|ftdi|0403"
+lsusb | grep -iE "3801|ftdi|0403"

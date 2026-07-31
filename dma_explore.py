@@ -12,7 +12,7 @@ from tinygrad.runtime.autogen import libusb
 
 class Dev:
   def __init__(self):
-    self.dev = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04, use_bot=True)
+    self.dev = USB3(0x3801, 0x0001, 0x81, 0x83, 0x02, 0x04, use_bot=True)
   def read8(self, addr):
     buf = (ctypes.c_ubyte * 1)()
     ret = libusb.libusb_control_transfer(self.dev.handle, 0xC0, 0xE4, addr, 0, buf, 1, 1000)

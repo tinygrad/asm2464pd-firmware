@@ -8,7 +8,7 @@ from hexdump import hexdump
 from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
 
-VID, PID = 0xADD1, 0x0001
+VID, PID = 0x3801, 0x0001
 
 def ctrl_read(dev, addr, size=1):
   """Read bytes from XDATA via vendor control IN (0xE4)."""

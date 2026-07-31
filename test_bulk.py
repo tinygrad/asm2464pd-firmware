@@ -22,7 +22,7 @@ from tinygrad.runtime.support.usb import USB3
 from tinygrad.runtime.autogen import libusb
 
 SUPPORTED_CONTROLLERS = [
-    (0xADD1, 0x0001),  # Custom firmware
+    (0x3801, 0x0001),  # Custom firmware
     (0x174C, 0x2463),  # Stock 2463
     (0x174C, 0x2464),  # Stock 2464
 ]

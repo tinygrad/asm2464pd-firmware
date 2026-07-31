@@ -18,7 +18,7 @@ import usb.util
 
 
 SUPPORTED_CONTROLLERS = [
-    (0xADD1, 0x0001),
+    (0x3801, 0x0001),
 ]
 
 HW_STATUS_REQ = 0xC0
