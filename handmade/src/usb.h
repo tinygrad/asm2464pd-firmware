@@ -271,31 +271,13 @@ static void usb_send_data(uint16_t len) {
     REG_USB_CTRL_PHASE  = USB_CTRL_PHASE_DATA_IN;
 }
 static void usb_send_zlp(void) { usb_send_data(0); }
+static void usb_stall_ep0(void) {
+    REG_USB_DMA_TRIGGER = USB_DMA_STALL;
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_ALL;
+}
 
 static void usb_desc_copy(__code const uint8_t *src, uint8_t len) {
     for (uint8_t i = 0; i < len; i++) DESC_BUF[i] = src[i];
-}
-
-static void usb_handle_set_address(uint8_t wValL) {
-    REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
-    REG_USB_EP_CTRL_91D0  = 0x02;
-    usb_send_zlp();
-}
-
-static void usb_handle_get_status(uint8_t bm_request_type) {
-    DESC_BUF[0] = bm_request_type == USB_SETUP_DIR_DEV_TO_HOST; // self-powered
-    DESC_BUF[1] = 0;
-    usb_send_data(2);
-}
-
-static void usb_handle_get_configuration(void) {
-    DESC_BUF[0] = usb_configuration;
-    usb_send_data(1);
-}
-
-static void usb_handle_set_configuration(uint8_t configuration) {
-    usb_configuration = configuration;
-    usb_send_zlp();
 }
 
 static void usb_handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint16_t wlen) {
@@ -331,12 +313,59 @@ static void usb_handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint1
     usb_send_data(wlen < desc_len ? wlen : desc_len);
     return;
   } else {
-    REG_USB_DMA_TRIGGER = USB_DMA_STALL;
+    usb_stall_ep0();
     return;
   }
 
   usb_desc_copy(src, desc_len);
   usb_send_data(wlen < desc_len ? wlen : desc_len);
+}
+
+static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, uint8_t wValH, uint16_t wLen);
+
+static void usb_handle_setup(void) {
+  uint8_t bmReq = REG_USB_SETUP_BMREQ;
+  uint8_t bReq = REG_USB_SETUP_BREQ;
+  uint8_t wValL = REG_USB_SETUP_WVAL_L;
+  uint8_t wValH = REG_USB_SETUP_WVAL_H;
+  uint16_t wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
+
+  if (usb_handle_custom_setup(bmReq, bReq, wValL, wValH, wLen)) {
+    return;
+  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS && wValH == 0 && wLen == 0) {
+    REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
+    REG_USB_EP_CTRL_91D0 = 0x02;
+    usb_send_zlp();
+  } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
+    usb_handle_get_descriptor(wValH, wValL, wLen);
+  } else if ((bmReq == USB_SETUP_DIR_DEV_TO_HOST || bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) ||
+              bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_ENDPOINT)) &&
+             bReq == USB_REQ_GET_STATUS && wValL == 0 && wValH == 0 && wLen == 2) {
+    DESC_BUF[0] = bmReq == USB_SETUP_DIR_DEV_TO_HOST;
+    DESC_BUF[1] = 0;
+    usb_send_data(2);
+  } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_CONFIGURATION && wLen == 1) {
+    DESC_BUF[0] = usb_configuration;
+    usb_send_data(1);
+  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION && wValH == 0 && wValL <= 1 && wLen == 0) {
+    usb_configuration = wValL;
+    usb_send_zlp();
+  } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_GET_INTERFACE && wLen == 1) {
+    DESC_BUF[0] = 0;
+    usb_send_data(1);
+  } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE &&
+             wValH == 0 && wValL == 0 && wLen == 0) {
+    usb_send_zlp();
+  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_SEL && wLen == 6) {
+    // Accept and ignore the payload.
+  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ISOCH_DELAY && wLen == 0) {
+    usb_send_zlp();
+  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && (bReq == USB_REQ_SET_FEATURE || bReq == USB_REQ_CLEAR_FEATURE) &&
+             wValH == 0 && (wValL == 48 || wValL == 49) && wLen == 0) {
+    usb_send_zlp();
+  } else {
+    usb_stall_ep0();
+  }
 }
 
 #endif /* USB_H */

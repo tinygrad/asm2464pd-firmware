@@ -118,17 +118,7 @@ static void do_usb_bulk_in(void) {
 
 /*=== USB Control Handler ===*/
 
-static void handle_usb_control(void) {
-  uint8_t phase;
-  phase = REG_USB_CTRL_PHASE;
-  if (phase & USB_CTRL_PHASE_SETUP) {
-    uint8_t bmReq, bReq, wValL, wValH;
-    uint16_t wLen;
-    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
-    bmReq = REG_USB_SETUP_BMREQ; bReq = REG_USB_SETUP_BREQ;
-    wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
-    wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
-
+static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, uint8_t wValH, uint16_t wLen) {
     if (!(bmReq & USB_SETUP_TYPE_VENDOR)) {
       uart_puts("[C ");
       uart_puthex(bmReq);
@@ -139,18 +129,7 @@ static void handle_usb_control(void) {
       uart_puts("]\n");
     }
 
-    if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
-      usb_handle_set_address(wValL);
-      uart_puts("[A]\n");
-    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-      usb_handle_get_descriptor(wValH, wValL, wLen);
-    } else if ((bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_DEVICE) ||
-                bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) ||
-                bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_ENDPOINT)) &&
-               bReq == USB_REQ_GET_STATUS && wValL == 0x00 && wValH == 0x00 &&
-               wLen == 2) {
-      usb_handle_get_status(bmReq);
-    } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
+    if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
       /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
        * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
        * wIndex = endpoint address (0x02=OUT, 0x81=IN). */
@@ -162,8 +141,6 @@ static void handle_usb_control(void) {
       }
       dma_dwords = 0;
       usb_send_zlp();
-    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_CONFIGURATION && wLen == 1) {
-      usb_handle_get_configuration();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION && wValH == 0 && wValL <= 1 && wLen == 0) {
       /* USB reset leaves the C4xx DMA active; cycle its buffer and bridge. */
       if (REG_NVME_CMD_STATUS_50 != 0) {
@@ -182,7 +159,8 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
-      usb_handle_set_configuration(wValL);
+      usb_configuration = wValL;
+      usb_send_zlp();
       uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
@@ -219,10 +197,10 @@ static void handle_usb_control(void) {
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF2) {
       /* 0xF2: SRAM DMA — init DMA engine and arm for bulk transfer.
-      *   wValue bit 15 = direction: 0=BULK OUT (host→SRAM), 1=BULK IN (SRAM→host)
-      *   wValue bits 0-14 = total sector count (C426:C427)
-      *   wIndex low  = start slot (slot_sel for C429, C414 base)
-      *   wIndex high = number of slots (for C415 end range; 0 means 1 slot) */
+       *   wValue bit 15 = direction: 0=BULK OUT (host→SRAM), 1=BULK IN (SRAM→host)
+       *   wValue bits 0-14 = total sector count (C426:C427)
+       *   wIndex low  = start slot (slot_sel for C429, C414 base)
+       *   wIndex high = number of slots (for C415 end range; 0 means 1 slot) */
       uint8_t bulk_in = wValH & 0x80;  /* bit 15 of wValue = direction flag */
       uint16_t sectors = (((uint16_t)(wValH & 0x7F)) << 8) | wValL;
       uint8_t slot_sel = REG_USB_SETUP_WIDX_L;
@@ -254,10 +232,10 @@ static void handle_usb_control(void) {
       boot_enter_dfu();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
-      *   wValue = fmt_type | (byte_enable << 8)
-      *   wIndex low[1:0] = mode (0=single TLP, 1=stream write, 2=stream read)
-      *   wIndex low[7:2] = dwords per read chunk (0 → 128 for writes)
-      *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 LE] */
+       *   wValue = fmt_type | (byte_enable << 8)
+       *   wIndex low[1:0] = mode (0=single TLP, 1=stream write, 2=stream read)
+       *   wIndex low[7:2] = dwords per read chunk (0 → 128 for writes)
+       *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 LE] */
       /* Don't configure yet — wait for DATA_OUT phase.
        * SETUP params (wValue/wIndex) are readable from registers in DATA_OUT. */
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
@@ -292,8 +270,16 @@ static void handle_usb_control(void) {
       DESC_BUF[7] = ret_status;
       usb_send_data(8);
     } else {
-      if (wLen == 0) usb_send_zlp();
+      return false;
     }
+    return true;
+}
+
+static void handle_usb_control(void) {
+  uint8_t phase = REG_USB_CTRL_PHASE;
+  if (phase & USB_CTRL_PHASE_SETUP) {
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
+    usb_handle_setup();
   } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
     REG_USB_DMA_TRIGGER = USB_DMA_RECV;
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;

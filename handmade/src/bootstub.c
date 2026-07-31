@@ -51,7 +51,7 @@ __xdata static uint16_t xfer_op_len;
 
 static void stall_ep0(void) {
     xfer_op = XOP_NONE;
-    REG_USB_DMA_TRIGGER = USB_DMA_STALL;
+    usb_stall_ep0();
 }
 
 static uint8_t dfu_range_ok(uint32_t addr, uint32_t len, uint32_t end) {
@@ -88,59 +88,29 @@ static uint8_t load_and_verify_body(uint32_t total_body_len) {
     return ~crc == hdr.crc;
 }
 
-static void handle_setup(void) {
-    uint8_t bmReq = REG_USB_SETUP_BMREQ;
-    uint8_t bReq  = REG_USB_SETUP_BREQ;
-    uint8_t wValL = REG_USB_SETUP_WVAL_L;
-    uint8_t wValH = REG_USB_SETUP_WVAL_H;
-    uint16_t wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
-
-    if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS && wValH == 0 && wLen == 0) {
-        usb_handle_set_address(wValL);
-    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-        usb_handle_get_descriptor(wValH, wValL, wLen);
-    } else if ((bmReq == USB_SETUP_DIR_DEV_TO_HOST || bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) ||
-                bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_ENDPOINT)) && bReq == USB_REQ_GET_STATUS && wLen == 2) {
-        usb_handle_get_status(bmReq);
-    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_CONFIGURATION && wLen == 1) {
-        usb_handle_get_configuration();
-    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION && wValH == 0 && wValL <= 1 && wLen == 0) {
-        usb_handle_set_configuration(wValL);
-    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_GET_INTERFACE && wLen == 1) {
-        DESC_BUF[0] = 0;
-        usb_send_data(1);
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE &&
-               wValH == 0 && wValL == 0 && wLen == 0) {
-        usb_send_zlp();
-    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_SEL && wLen == 6) {
-        // Accept and ignore the payload.
-    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ISOCH_DELAY && wLen == 0) {
-        usb_send_zlp();
-    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && (bReq == USB_REQ_SET_FEATURE || bReq == USB_REQ_CLEAR_FEATURE) &&
-               wValH == 0 && (wValL == 48 || wValL == 49) && wLen == 0) {
-        usb_send_zlp();
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
-        if (wLen != 8) { stall_ep0(); return; }
+static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, uint8_t wValH, uint16_t wLen) {
+    if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
+        if (wLen != 8) { stall_ep0(); return true; }
         xfer_op = XOP_ERASE;
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB1) {
-        if (wLen != 0) { stall_ep0(); return; }
+        if (wLen != 0) { stall_ep0(); return true; }
         xfer_addr = ((uint32_t)REG_USB_SETUP_WIDX_L << 16) | ((uint16_t)wValH << 8) | wValL;
         usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB2) {
         // Multi-packet control OUT overwrites packet 1 in DESC_BUF.
-        if (wLen == 0 || wLen > USB_EP0_SIZE) { stall_ep0(); return; }
-        if (!dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) { stall_ep0(); return; }
+        if (wLen == 0 || wLen > USB_EP0_SIZE) { stall_ep0(); return true; }
+        if (!dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) { stall_ep0(); return true; }
         xfer_op_len = wLen;
         xfer_op = XOP_WRITE;
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB3) {
         if (wLen == 0 || wLen > USB_EP0_SIZE || !dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) {
-            stall_ep0(); return;
+            stall_ep0(); return true;
         }
         xfer_op_len = wLen;
         xfer_op = XOP_READ;
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB4) {
         // send_dfu_info
-        if (wLen != DFU_INFO_SIZE) { stall_ep0(); return; }
+        if (wLen != DFU_INFO_SIZE) { stall_ep0(); return true; }
         DESC_BUF[0] = 'A'; DESC_BUF[1] = '2'; DESC_BUF[2] = '4'; DESC_BUF[3] = 'D';
         *(__xdata uint16_t *)(DESC_BUF + 4) = USB_EP0_SIZE;
         *(__xdata uint16_t *)(DESC_BUF + 6) = USERFW_SECTOR_SIZE;
@@ -149,13 +119,14 @@ static void handle_setup(void) {
         DESC_BUF[16] = BOOTSTUB_ABI_VERSION;
         usb_send_data(DFU_INFO_SIZE);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEB) {
-        if (wLen != 0) { stall_ep0(); return; }
+        if (wLen != 0) { stall_ep0(); return true; }
         usb_send_zlp();
         (void)usb_wait_ep0_dma_idle();
         cpu_reset();
     } else {
-        stall_ep0();
+        return false;
     }
+    return true;
 }
 
 static void run_deferred_xfer_op(void) {
@@ -234,7 +205,7 @@ static void dfu_loop(void) {
             if (phase & USB_CTRL_PHASE_SETUP) {
                 xfer_op = XOP_NONE;
                 REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
-                handle_setup();
+                usb_handle_setup();
             } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
                 REG_USB_DMA_TRIGGER = USB_DMA_RECV;
                 REG_USB_CTRL_PHASE  = USB_CTRL_PHASE_STAT_OUT;

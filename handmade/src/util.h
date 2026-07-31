@@ -66,7 +66,6 @@ static void uart_puthex(uint8_t val) {
 
 static void usb_init_endpoint_state(void) {
   REG_USB_EP0_LEN_H = 0; REG_USB_EP0_LEN_L = 0;
-  REG_USB_EP0_CONFIG = 0;
   REG_USB_DMA_TRIGGER = 0; REG_USB_CTRL_PHASE = USB_CTRL_PHASE_ALL;
   REG_USB_MSC_CFG = 0; REG_USB_MSC_LENGTH = 0;
   REG_USB_ALT_SETTING_L = 0; REG_USB_ALT_SETTING_H = 0;

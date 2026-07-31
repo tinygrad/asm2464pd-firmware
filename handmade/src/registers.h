@@ -255,11 +255,14 @@ SFR(0xA8) IE;            // Interrupt enable
 /*
  * USB EP0 Config / Bulk Ready (0x9006)
  * Dual purpose: EP0 config during enumeration, bulk ready during transfers.
+ * Bit 4 allows phase-0 NVMe completions; when clear, F2 bulk IN waits for
+ * phase tag 1. It powers up set and must survive USB reinit.
  * In CBW handler: set bit 0 (0x01) and bit 7 (0x80) after receiving CBW
  * to indicate endpoint is ready for data transfer.
  */
 #define REG_USB_EP0_CONFIG      XDATA_REG8(0x9006)
 #define   USB_EP0_CONFIG_ENABLE   0x01  // Bit 0: EP0 config / bulk endpoint ready
+#define   USB_EP0_CONFIG_CQ_PHASE0 0x10 // Bit 4: accept NVMe CQ phase tag 0
 #define   USB_EP0_CONFIG_READY    0x80  // Bit 7: EP0 ready / data transfer ready
 #define REG_USB_SCSI_BUF_LEN    XDATA_REG16(0x9007)
 #define REG_USB_SCSI_BUF_LEN_L  XDATA_REG8(0x9007)
