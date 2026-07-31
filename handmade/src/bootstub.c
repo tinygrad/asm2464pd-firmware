@@ -1,5 +1,5 @@
-/* userfw @ SPI 0x4000: A24F | git[23] | bootstub ABI8 | len32le | crc32le | zero[28] | body.
- * CRC covers bytes 0x00..0x1f + body; body loads at CODE 0x3000. */
+/* userfw @ SPI 0x4000: A24F | git[23] | bootstub ABI8 | len32le | xor32le | zero[28] | body.
+ * XOR covers bytes 0x00..0x1f + body; body loads at CODE 0x3000. */
 
 #define BOOTSTUB 1
 
@@ -11,7 +11,8 @@
 #define BOOTSTUB_ABI_VERSION    0x01U
 
 #define USERFW_FLASH_OFFSET     0x4000UL
-#define USERFW_HEADER_CRC_LEN   0x20U
+#define USERFW_HEADER_CHECKSUM_LEN 0x20U
+#define USERFW_CHECKSUM_SEED    0xA52464F1UL
 #define USERFW_CODE_BASE        0x3000U
 #define USERFW_BODY_LIMIT       0xD000UL
 #define USERFW_SECTOR_SIZE      0x1000UL
@@ -21,7 +22,7 @@ typedef struct {
     uint8_t  gitversion[23];
     uint8_t  bootstub_abi;
     uint32_t body_len;
-    uint32_t crc;
+    uint32_t checksum;
     uint8_t  reserved[28];
 } userfw_hdr_t;
 
@@ -58,18 +59,16 @@ static uint8_t dfu_range_ok(uint32_t addr, uint32_t len, uint32_t end) {
     return len && addr >= USERFW_FLASH_OFFSET && addr <= end && len <= end - addr;
 }
 
-static void crc32_step(uint32_t *c, uint8_t b) {
-    uint32_t crc = *c ^ b;
-    for (uint8_t i = 0; i < 8; i++)
-        crc = (crc >> 1) ^ ((crc & 1) ? 0xEDB88320UL : 0);
-    *c = crc;
-}
-
-/* CRC the same bytes written to CODE RAM, avoiding a validate/load race. */
+// Check the same bytes written to CODE RAM, avoiding a validate/load race.
 static uint8_t load_and_verify_body(uint32_t total_body_len) {
-    uint32_t crc = 0xFFFFFFFFUL;
+    __data uint32_t checksum = USERFW_CHECKSUM_SEED;
+    __data uint8_t *sum = (__data uint8_t *)&checksum;
+    uint8_t pos = 0;
     __xdata const uint8_t *p = (__xdata const uint8_t *)&hdr;
-    for (uint8_t i = 0; i < USERFW_HEADER_CRC_LEN; i++) crc32_step(&crc, p[i]);
+    for (uint8_t i = 0; i < USERFW_HEADER_CHECKSUM_LEN; i++) {
+        sum[pos] ^= p[i];
+        pos = (pos + 1) & 3;
+    }
 
     uint32_t addr = USERFW_FLASH_OFFSET + sizeof(hdr);
     uint16_t code_base = USERFW_CODE_BASE;
@@ -79,13 +78,14 @@ static uint8_t load_and_verify_body(uint32_t total_body_len) {
         for (uint16_t i = 0; i < take; i++) {
             uint8_t b = scratch[i];
             code_write(code_base + i, b);
-            crc32_step(&crc, b);
+            sum[pos] ^= b;
+            pos = (pos + 1) & 3;
         }
         addr += take;
         code_base += take;
         total_body_len -= take;
     }
-    return ~crc == hdr.crc;
+    return checksum == hdr.checksum;
 }
 
 static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, uint8_t wValH, uint16_t wLen) {
@@ -267,7 +267,7 @@ void main(void) {
     }
 
     if (!load_and_verify_body(hdr.body_len)) {
-        uart_puts("[BS bad-crc]\n");
+        uart_puts("[BS bad-checksum]\n");
         dfu_loop();
     }
 

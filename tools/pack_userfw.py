@@ -5,7 +5,6 @@ import argparse
 from pathlib import Path
 import struct
 import subprocess
-import zlib
 
 
 MAGIC = b"A24F"
@@ -14,6 +13,7 @@ HASH_OFF = 0x20
 BODY_MAX = 0xD000
 GITVERSION_SIZE = 23
 BOOTSTUB_ABI_VERSION = 1
+CHECKSUM_SEED = 0xA52464F1
 
 
 if __name__ == "__main__":
@@ -39,10 +39,12 @@ if __name__ == "__main__":
   )
   assert len(pre) == HASH_OFF
 
-  crc = zlib.crc32(pre + body) & 0xFFFFFFFF
-  image = pre + struct.pack("<I", crc)
+  checksum = CHECKSUM_SEED
+  for i, b in enumerate(pre + body):
+    checksum ^= b << (8 * (i & 3))
+  image = pre + struct.pack("<I", checksum)
   image += b"\x00" * (HDR_SIZE - HASH_OFF - 4) + body
 
   Path(args.output).write_bytes(image)
 
-  print(f"{args.output}: {gitversion.decode()}, {len(body)}/{BODY_MAX} bytes, crc32 {crc:08x}")
+  print(f"{args.output}: {gitversion.decode()}, {len(body)}/{BODY_MAX} bytes, checksum {checksum:08x}")
