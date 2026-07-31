@@ -9,9 +9,6 @@
 #include "usb.h"
 
 #define BOOTSTUB_ABI_VERSION    0x01U
-#define BOOT_TRACK_MARK         0xB0075B00UL
-#define BOOT_TRACK_MASK         0xFFFFFF00UL
-#define BOOT_MAX_ATTEMPTS       3
 
 #define USERFW_FLASH_OFFSET     0x4000UL
 #define USERFW_HEADER_CRC_LEN   0x20U
@@ -302,14 +299,6 @@ void main(void) {
         uart_puts("[BS bad-crc]\n");
         dfu_loop();
     }
-
-    // Stay in DFU after repeated jumps that never call boot_mark_healthy().
-    uint8_t attempts = ((BOOT_TRACK & BOOT_TRACK_MASK) == BOOT_TRACK_MARK) ? (uint8_t)(BOOT_TRACK & 0xFF) : 0;
-    if (attempts >= BOOT_MAX_ATTEMPTS) {
-        uart_puts("[BS wedge-guard]\n");
-        dfu_loop();
-    }
-    BOOT_TRACK = BOOT_TRACK_MARK | (uint32_t)(uint8_t)(attempts + 1);
 
     DFU_COOKIE = 0;
     uart_puts("[BS->APP]\n");

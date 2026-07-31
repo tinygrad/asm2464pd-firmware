@@ -12,11 +12,6 @@
 
 #define DFU_COOKIE              (*(__xdata volatile uint32_t *)0x5FF8)
 #define DFU_COOKIE_MAGIC        0xDF0BC0DEUL
-#define BOOT_TRACK              (*(__xdata volatile uint32_t *)0x5FFC)
-
-static void boot_mark_healthy(void) {
-  BOOT_TRACK = 0;
-}
 
 static void cpu_reset(void) {
   REG_CPU_RESET = CPU_RESET_TRIGGER;

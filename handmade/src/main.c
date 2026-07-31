@@ -141,7 +141,6 @@ static void handle_usb_control(void) {
 
     if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
       usb_handle_set_address(wValL);
-      boot_mark_healthy();
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
       usb_handle_get_descriptor(wValH, wValL, wLen);
@@ -582,8 +581,6 @@ void main(void) {
        * the USB4 tunnel (stock fw usb_ss_link_train_engine / rst_rx_pll). */
       if (u4_boot.sb_asserted && !usb4_usb_inited) {
         usb4_usb_inited = 1;
-        // Router mode has no USB SET_ADDRESS health signal.
-        boot_mark_healthy();
         /* RX PLL reset + PHY link mode switch to USB4 tunnel path.
          * The USB function was already configured at boot by usb_pipe_engine_init.
          * Just need to switch the PHY link to tunnel mode (4) and reset RX PLL. */
