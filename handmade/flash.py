@@ -27,9 +27,8 @@ BOOTSTUB_ABI_VERSION = 1
 
 
 def usb_nodes(vid, pid=None):
-  return [p.parent for p in USB_SYSFS.glob("*/idVendor")
-          if int(p.read_text(), 16) == vid and
-          (pid is None or int((p.parent / "idProduct").read_text(), 16) == pid)]
+  return [p.parent for p in USB_SYSFS.glob("*/idVendor") if int(p.read_text(), 16) == vid
+          and (pid is None or int((p.parent / "idProduct").read_text(), 16) == pid)]
 
 
 def open_device(*ids):
@@ -42,8 +41,7 @@ def control(h, request, value=0, index=0, data=b"", read=0, timeout=TIMEOUT_MS):
   length = read or len(data)
   buf = (ctypes.c_ubyte * length)(*data)
   direction = 0xC0 if read else 0x40
-  ret = checked(libusb.libusb_control_transfer)(
-    h, direction, request, value, index, buf, length, timeout)
+  ret = checked(libusb.libusb_control_transfer)(h, direction, request, value, index, buf, length, timeout)
   assert ret == length, f"short control transfer: {ret}/{length}"
   return bytes(buf) if read else None
 
@@ -55,9 +53,8 @@ def disconnect_request(h, request):
 def get_info(h):
   info = DFU_INFO.unpack(control(h, 0xB4, read=DFU_INFO.size))
   magic, page, sector, start, end, abi = info
-  valid = (magic == b"A24D" and abi == BOOTSTUB_ABI_VERSION and
-           page in (PAGE, PAGE_SS) and sector == SECTOR_SIZE and
-           start == USERFW_FLASH_OFFSET and end == USERFW_IMAGE_END)
+  valid = (magic == b"A24D" and abi == BOOTSTUB_ABI_VERSION and page in (PAGE, PAGE_SS) and sector == SECTOR_SIZE
+           and start == USERFW_FLASH_OFFSET and end == USERFW_IMAGE_END)
   assert valid, f"incompatible DFU: {info}"
   return page
 
@@ -68,8 +65,7 @@ def set_addr(h, addr):
 
 
 def router_regs():
-  routers = [p.parent.name for p in TB_SYSFS.glob("*/vendor")
-             if int(p.read_text(), 16) == USERFW_ID[0]]
+  routers = [p.parent.name for p in TB_SYSFS.glob("*/vendor") if int(p.read_text(), 16) == USERFW_ID[0]]
   assert len(routers) <= 1, f"{len(routers)} ADD1 USB4 routers present"
   return TB_DEBUGFS / routers[0] / "regs" if routers else None
 
@@ -132,8 +128,7 @@ if __name__ == "__main__":
     erase_len = (len(image) + SECTOR_SIZE - 1) & ~(SECTOR_SIZE - 1)
     assert erase_len <= USERFW_ERASE_END - USERFW_FLASH_OFFSET
     print(f"  erasing {erase_len // SECTOR_SIZE} sectors")
-    control(h, 0xB0, data=struct.pack("<II", USERFW_FLASH_OFFSET, erase_len),
-            timeout=max(TIMEOUT_MS, 2000 * erase_len // SECTOR_SIZE))
+    control(h, 0xB0, data=struct.pack("<II", USERFW_FLASH_OFFSET, erase_len), timeout=max(TIMEOUT_MS, 2000 * erase_len // SECTOR_SIZE))
 
     print(f"  writing {len(image)} bytes")
     for off in range(0, len(image), page):
@@ -142,8 +137,7 @@ if __name__ == "__main__":
 
     if args.verify:
       set_addr(h, USERFW_FLASH_OFFSET)
-      got = b"".join(control(h, 0xB3, read=min(PAGE, len(image) - off))
-                     for off in range(0, len(image), PAGE))
+      got = b"".join(control(h, 0xB3, read=min(PAGE, len(image) - off)) for off in range(0, len(image), PAGE))
       assert got == image, "flash verification failed"
       print("  verify OK")
     if not args.no_reboot:

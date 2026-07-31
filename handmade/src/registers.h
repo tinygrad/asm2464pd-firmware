@@ -390,9 +390,7 @@ SFR(0xA8) IE;            // Interrupt enable
 #define   USB_CTRL_PHASE_DATA_OUT 0x04  // Bit 2: OUT data received from host
 #define   USB_CTRL_PHASE_DATA_IN  0x08  // Bit 3: IN data phase ready; EP0 buffer is writable
 #define   USB_CTRL_PHASE_STAT_IN  0x10  // Bit 4: Status phase (IN/device-to-host, SET_ADDR)
-#define   USB_CTRL_PHASE_ALL      (USB_CTRL_PHASE_SETUP | USB_CTRL_PHASE_STAT_OUT | \
-                                   USB_CTRL_PHASE_DATA_OUT | USB_CTRL_PHASE_DATA_IN | \
-                                   USB_CTRL_PHASE_STAT_IN)
+#define   USB_CTRL_PHASE_ALL      (USB_CTRL_PHASE_SETUP | USB_CTRL_PHASE_STAT_OUT | USB_CTRL_PHASE_DATA_OUT | USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN)
 
 /*
  * USB EP0 DMA Control Register (0x9092)

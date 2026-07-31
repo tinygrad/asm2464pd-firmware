@@ -163,11 +163,9 @@ static void handle_usb_control(void) {
       }
       dma_dwords = 0;
       usb_send_zlp();
-    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_CONFIGURATION &&
-               wLen == 1) {
+    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_CONFIGURATION && wLen == 1) {
       usb_handle_get_configuration();
-    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION &&
-               wValH == 0 && wValL <= 1 && wLen == 0) {
+    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION && wValH == 0 && wValL <= 1 && wLen == 0) {
       /* USB reset leaves the C4xx DMA active; cycle its buffer and bridge. */
       if (REG_NVME_CMD_STATUS_50 != 0) {
         REG_NVME_DOORBELL |= NVME_DOORBELL_BIT0;

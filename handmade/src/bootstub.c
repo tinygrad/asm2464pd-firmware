@@ -29,8 +29,7 @@ typedef struct {
 } userfw_hdr_t;
 
 #define USERFW_FLASH_END        (USERFW_FLASH_OFFSET + sizeof(userfw_hdr_t) + USERFW_BODY_LIMIT)
-#define USERFW_ERASE_END        ((USERFW_FLASH_END + USERFW_SECTOR_SIZE - 1) & \
-                                 ~(USERFW_SECTOR_SIZE - 1))
+#define USERFW_ERASE_END        ((USERFW_FLASH_END + USERFW_SECTOR_SIZE - 1) & ~(USERFW_SECTOR_SIZE - 1))
 
 #define DFU_INFO_SIZE           17
 
@@ -99,36 +98,28 @@ static void handle_setup(void) {
     uint8_t wValH = REG_USB_SETUP_WVAL_H;
     uint16_t wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
 
-    if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS &&
-        wValH == 0 && wLen == 0) {
+    if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS && wValH == 0 && wLen == 0) {
         usb_handle_set_address(wValL);
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
         usb_handle_get_descriptor(wValH, wValL, wLen);
-    } else if ((bmReq == USB_SETUP_DIR_DEV_TO_HOST ||
-                bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) ||
-                bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_ENDPOINT)) &&
-               bReq == USB_REQ_GET_STATUS && wLen == 2) {
+    } else if ((bmReq == USB_SETUP_DIR_DEV_TO_HOST || bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) ||
+                bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_ENDPOINT)) && bReq == USB_REQ_GET_STATUS && wLen == 2) {
         usb_handle_get_status(bmReq);
-    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_CONFIGURATION &&
-               wLen == 1) {
+    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_CONFIGURATION && wLen == 1) {
         usb_handle_get_configuration();
-    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION &&
-               wValH == 0 && wValL <= 1 && wLen == 0) {
+    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION && wValH == 0 && wValL <= 1 && wLen == 0) {
         usb_handle_set_configuration(wValL);
-    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) &&
-               bReq == USB_REQ_GET_INTERFACE && wLen == 1) {
+    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_GET_INTERFACE && wLen == 1) {
         DESC_BUF[0] = 0;
         usb_send_data(1);
-    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) &&
-               bReq == USB_REQ_SET_INTERFACE && wValH == 0 && wValL == 0 && wLen == 0) {
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE &&
+               wValH == 0 && wValL == 0 && wLen == 0) {
         usb_send_zlp();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_SEL && wLen == 6) {
         // Accept and ignore the payload.
-    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ISOCH_DELAY &&
-               wLen == 0) {
+    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ISOCH_DELAY && wLen == 0) {
         usb_send_zlp();
-    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV &&
-               (bReq == USB_REQ_SET_FEATURE || bReq == USB_REQ_CLEAR_FEATURE) &&
+    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && (bReq == USB_REQ_SET_FEATURE || bReq == USB_REQ_CLEAR_FEATURE) &&
                wValH == 0 && (wValL == 48 || wValL == 49) && wLen == 0) {
         usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
@@ -145,8 +136,7 @@ static void handle_setup(void) {
         xfer_op_len = wLen;
         xfer_op = XOP_WRITE;
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB3) {
-        if (wLen == 0 || wLen > USB_EP0_SIZE ||
-            !dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) {
+        if (wLen == 0 || wLen > USB_EP0_SIZE || !dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) {
             stall_ep0(); return;
         }
         xfer_op_len = wLen;
@@ -215,9 +205,7 @@ static void run_deferred_xfer_op(void) {
         }
         uint32_t addr = *(__xdata const uint32_t *)DESC_BUF;
         uint32_t len  = *(__xdata const uint32_t *)(DESC_BUF + 4);
-        if ((addr & (USERFW_SECTOR_SIZE - 1)) ||
-            (len & (USERFW_SECTOR_SIZE - 1)) ||
-            !dfu_range_ok(addr, len, USERFW_ERASE_END)) {
+        if ((addr & (USERFW_SECTOR_SIZE - 1)) || (len & (USERFW_SECTOR_SIZE - 1)) || !dfu_range_ok(addr, len, USERFW_ERASE_END)) {
             stall_ep0();
             return;
         }
@@ -294,8 +282,7 @@ void main(void) {
         dfu_loop();
     }
 
-    if (!flash_read(USERFW_FLASH_OFFSET, (__xdata uint8_t *)&hdr, sizeof(hdr)) ||
-        hdr.magic[0] != 'A' || hdr.magic[1] != '2' ||
+    if (!flash_read(USERFW_FLASH_OFFSET, (__xdata uint8_t *)&hdr, sizeof(hdr)) || hdr.magic[0] != 'A' || hdr.magic[1] != '2' ||
         hdr.magic[2] != '4' || hdr.magic[3] != 'F') {
         uart_puts("[BS bad-magic]\n");
         dfu_loop();
@@ -317,8 +304,7 @@ void main(void) {
     }
 
     // Stay in DFU after repeated jumps that never call boot_mark_healthy().
-    uint8_t attempts = ((BOOT_TRACK & BOOT_TRACK_MASK) == BOOT_TRACK_MARK)
-                       ? (uint8_t)(BOOT_TRACK & 0xFF) : 0;
+    uint8_t attempts = ((BOOT_TRACK & BOOT_TRACK_MASK) == BOOT_TRACK_MARK) ? (uint8_t)(BOOT_TRACK & 0xFF) : 0;
     if (attempts >= BOOT_MAX_ATTEMPTS) {
         uart_puts("[BS wedge-guard]\n");
         dfu_loop();

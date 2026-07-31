@@ -327,8 +327,7 @@ static void usb_handle_set_configuration(uint8_t configuration) {
     usb_send_zlp();
 }
 
-static void usb_handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx,
-                                      uint16_t wlen) {
+static void usb_handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint16_t wlen) {
   __code const uint8_t *src;
   uint8_t desc_len;
 

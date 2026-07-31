@@ -103,11 +103,7 @@ def main():
             v_mv, i_ma, bob_flt = read_hw_status(dev)
             v = v_mv / 1000.0
             a = i_ma / 1000.0
-            print(
-                f"{fmt_timestamp(wall_now)}  {v:7.3f}  {a:+6.3f}  {v*a:+7.3f}"
-                f"  {'yes' if bob_flt else 'no':>7}",
-                flush=True,
-            )
+            print(f"{fmt_timestamp(wall_now)}  {v:7.3f}  {a:+6.3f}  {v*a:+7.3f}  {'yes' if bob_flt else 'no':>7}", flush=True)
 
             sample_count += 1
             next_sample += interval_s

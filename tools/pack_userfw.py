@@ -24,14 +24,11 @@ if __name__ == "__main__":
 
   body = Path(args.common).read_bytes()
   repo = Path(__file__).resolve().parents[1]
-  commit = subprocess.check_output(
-    ["git", "rev-parse", "--short=8", "HEAD"], cwd=repo, text=True).strip()
-  dirty = subprocess.check_output(
-    ["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo, text=True)
+  commit = subprocess.check_output(["git", "rev-parse", "--short=8", "HEAD"], cwd=repo, text=True).strip()
+  dirty = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo, text=True)
   gitversion = f"{commit}-{'DIRTY' if dirty else 'CLEAN'}".encode()
   assert len(body) <= BODY_MAX, f"image too big ({len(body)} > {BODY_MAX})"
-  assert len(gitversion) < GITVERSION_SIZE, \
-         f"gitversion too long ({len(gitversion)} >= {GITVERSION_SIZE})"
+  assert len(gitversion) < GITVERSION_SIZE, f"gitversion too long ({len(gitversion)} >= {GITVERSION_SIZE})"
 
   pre = (
     MAGIC

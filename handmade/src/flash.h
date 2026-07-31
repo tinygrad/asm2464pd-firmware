@@ -45,13 +45,10 @@ static void flash_init(void) {
   flash_unlocked = 0;
 }
 
-static uint8_t flash_cmd(uint8_t command, uint32_t address,
-                         uint8_t address_mode, uint16_t length,
-                         uint8_t write) {
+static uint8_t flash_cmd(uint8_t command, uint32_t address, uint8_t address_mode, uint16_t length, uint8_t write) {
   uint8_t ok;
 
-  if (address_mode > FLASH_ADDR_LEN_3BYTE || length > FLASH_BUFFER_SIZE ||
-      !flash_poll_busy()) return 0;
+  if (address_mode > FLASH_ADDR_LEN_3BYTE || length > FLASH_BUFFER_SIZE || !flash_poll_busy()) return 0;
 
   REG_FLASH_CON = 0;
   REG_FLASH_MODE = write ? FLASH_MODE_WRITE : 0;
@@ -87,16 +84,12 @@ static uint8_t flash_wait_write(void) {
 static uint8_t flash_clear_protection(void) {
   uint8_t attempt;
 
-  if (flash_cmd(FLASH_CMD_RDSR, 0, FLASH_ADDR_LEN_NOADDR, 1, 0) &&
-      !(FLASH_BUF[0] & 0x1C)) return 1;
+  if (flash_cmd(FLASH_CMD_RDSR, 0, FLASH_ADDR_LEN_NOADDR, 1, 0) && !(FLASH_BUF[0] & 0x1C)) return 1;
 
   for (attempt = 0; attempt < 5; attempt++) {
     FLASH_BUF[0] = 0;
-    if (flash_write_enable() &&
-        flash_cmd(FLASH_CMD_WRSR, 0, FLASH_ADDR_LEN_NOADDR, 1, 1) &&
-        flash_wait_write() &&
-        flash_cmd(FLASH_CMD_RDSR, 0, FLASH_ADDR_LEN_NOADDR, 1, 0) &&
-        !(FLASH_BUF[0] & 0x1C)) return 1;
+    if (flash_write_enable() && flash_cmd(FLASH_CMD_WRSR, 0, FLASH_ADDR_LEN_NOADDR, 1, 1) && flash_wait_write() &&
+        flash_cmd(FLASH_CMD_RDSR, 0, FLASH_ADDR_LEN_NOADDR, 1, 0) && !(FLASH_BUF[0] & 0x1C)) return 1;
   }
   return 0;
 }
@@ -107,9 +100,7 @@ static uint8_t flash_unlock(void) {
 }
 
 static uint8_t flash_erase_sector(uint32_t address) {
-  if (!flash_unlock() || !flash_write_enable() ||
-      !flash_cmd(FLASH_CMD_SECTOR_ERASE, address, FLASH_ADDR_LEN_3BYTE, 0, 0) ||
-      !flash_wait_write()) {
+  if (!flash_unlock() || !flash_write_enable() || !flash_cmd(FLASH_CMD_SECTOR_ERASE, address, FLASH_ADDR_LEN_3BYTE, 0, 0) || !flash_wait_write()) {
     flash_unlocked = 0;
     return 0;
   }
@@ -117,12 +108,8 @@ static uint8_t flash_erase_sector(uint32_t address) {
 }
 
 static uint8_t flash_program_page(uint32_t address, uint16_t length) {
-  if (!length || length > 256 || ((address & 0xFF) + length) > 0x100)
-    return 0;
-  if (!flash_unlock() || !flash_write_enable() ||
-      !flash_cmd(FLASH_CMD_PAGE_PROGRAM, address, FLASH_ADDR_LEN_3BYTE,
-                 length, 1) ||
-      !flash_wait_write()) {
+  if (!length || length > 256 || ((address & 0xFF) + length) > 0x100) return 0;
+  if (!flash_unlock() || !flash_write_enable() || !flash_cmd(FLASH_CMD_PAGE_PROGRAM, address, FLASH_ADDR_LEN_3BYTE, length, 1) || !flash_wait_write()) {
     flash_unlocked = 0;
     return 0;
   }
@@ -145,8 +132,7 @@ static uint8_t flash_read_otp(__xdata otp_t *out) {
   return out->checksum == checksum;
 }
 
-static uint8_t flash_read(uint32_t address, __xdata uint8_t *dst,
-                          uint16_t length) {
+static uint8_t flash_read(uint32_t address, __xdata uint8_t *dst, uint16_t length) {
   while (length) {
     uint16_t chunk = length < FLASH_BUFFER_SIZE ? length : FLASH_BUFFER_SIZE;
     if (!flash_cmd(FLASH_CMD_READ, address, FLASH_ADDR_LEN_3BYTE, chunk, 0)) return 0;

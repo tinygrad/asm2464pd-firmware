@@ -43,8 +43,7 @@ static void mem_set(void *dst, uint8_t val, uint8_t n) {
   while (n--) *d++ = val;
 }
 
-static void xmemcpy(__xdata uint8_t *dst, __xdata const uint8_t *src,
-                    uint16_t length) {
+static void xmemcpy(__xdata uint8_t *dst, __xdata const uint8_t *src, uint16_t length) {
   while (length--) *dst++ = *src++;
 }
 
