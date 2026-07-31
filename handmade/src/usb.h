@@ -53,17 +53,6 @@ static __code const uint8_t usb_cfg_desc[] = {
 
 #define usb_cfg_desc_ss usb_cfg_desc
 
-static __code const uint8_t usb_device_qualifier_desc[] = {
-  0x0A, USB_DESC_TYPE_DEVICE_QUALIFIER, U16_LE(0x0200),
-  0x00, 0x00, 0x00, 0x40, 0x01, 0x00,
-};
-
-static __code const uint8_t usb_other_speed_cfg_desc[] = {
-  0x09, USB_DESC_TYPE_OTHER_SPEED_CONFIG, U16_LE(18),
-  0x01, 0x01, 0x00, 0xC0, 0x00,
-  0x09, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00,
-};
-
 #else
 
 #define USB_STR_PRODUCT         "custom v0.1"
@@ -339,12 +328,6 @@ static void usb_handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint1
     else         { src = usb_cfg_desc_ss; desc_len = sizeof(usb_cfg_desc_ss); }
   } else if (desc_type == USB_DESC_TYPE_BOS) {
     src = usb_bos_desc; desc_len = sizeof(usb_bos_desc);
-#ifdef BOOTSTUB
-  } else if (desc_type == USB_DESC_TYPE_DEVICE_QUALIFIER && is_usb2) {
-    src = usb_device_qualifier_desc; desc_len = sizeof(usb_device_qualifier_desc);
-  } else if (desc_type == USB_DESC_TYPE_OTHER_SPEED_CONFIG && is_usb2) {
-    src = usb_other_speed_cfg_desc; desc_len = sizeof(usb_other_speed_cfg_desc);
-#endif
   } else if (desc_type == USB_DESC_TYPE_STRING) {
     /* Built directly into DESC_BUF; bypass desc_copy. */
     if (desc_idx == USB_STR_IDX_LANG) {
