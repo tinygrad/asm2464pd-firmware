@@ -9,6 +9,7 @@
 #include "usb.h"
 
 #define BOOTSTUB_ABI_VERSION    0x01U
+#define BOOTSTUB_UNLOCK_MAGIC   0xB007A24FUL
 
 #define USERFW_FLASH_OFFSET     0x4000UL
 #define USERFW_HEADER_CHECKSUM_LEN 0x20U
@@ -49,6 +50,7 @@ __xdata static uint32_t xfer_addr;
 enum { XOP_NONE = 0, XOP_ERASE, XOP_WRITE, XOP_READ };
 __xdata static uint8_t  xfer_op;
 __xdata static uint16_t xfer_op_len;
+__xdata static uint8_t  bootstub_unlocked;
 
 static void stall_ep0(void) {
     xfer_op = XOP_NONE;
@@ -56,7 +58,9 @@ static void stall_ep0(void) {
 }
 
 static uint8_t dfu_range_ok(uint32_t addr, uint32_t len, uint32_t end) {
-    return len && addr >= USERFW_FLASH_OFFSET && addr <= end && len <= end - addr;
+    if (!len) return 0;
+    if (addr < USERFW_FLASH_OFFSET) return bootstub_unlocked && len <= USERFW_FLASH_OFFSET - addr;
+    return addr <= end && len <= end - addr;
 }
 
 // Check the same bytes written to CODE RAM, avoiding a validate/load race.
@@ -118,6 +122,12 @@ static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, 
         *(__xdata uint32_t *)(DESC_BUF + 12) = USERFW_FLASH_END;
         DESC_BUF[16] = BOOTSTUB_ABI_VERSION;
         usb_send_data(DFU_INFO_SIZE);
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB5) {
+        uint32_t magic = ((uint32_t)REG_USB_SETUP_WIDX_H << 24) | ((uint32_t)REG_USB_SETUP_WIDX_L << 16) |
+                         ((uint16_t)wValH << 8) | wValL;
+        if (wLen != 0 || magic != BOOTSTUB_UNLOCK_MAGIC) { stall_ep0(); return true; }
+        bootstub_unlocked = 1;
+        usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEB) {
         if (wLen != 0) { stall_ep0(); return true; }
         usb_send_zlp();
@@ -197,6 +207,7 @@ static void dfu_loop(void) {
 
     xfer_op = XOP_NONE;
     xfer_addr = 0;
+    bootstub_unlocked = 0;
 
     while (1) {
         uint8_t s = REG_USB_PERIPH_STATUS;
