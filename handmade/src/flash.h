@@ -173,22 +173,12 @@ static uint8_t flash_read_otp(__xdata otp_t *out) {
   return out->checksum == checksum;
 }
 
-/* FLASH_BUF[0] is unreliable after multi-byte DMA reads. */
 static uint8_t flash_read(uint32_t address, __xdata uint8_t *dst,
                           uint16_t length) {
   while (length) {
-    uint16_t chunk;
-    if (address == 0) {
-      if (!flash_cmd(FLASH_CMD_READ, 0, FLASH_ADDR_LEN_3BYTE, 1, 0)) return 0;
-      *dst++ = FLASH_BUF[0];
-      address++;
-      length--;
-      continue;
-    }
-    chunk = length < FLASH_BUFFER_SIZE - 1 ? length : FLASH_BUFFER_SIZE - 1;
-    if (!flash_cmd(FLASH_CMD_READ, address - 1, FLASH_ADDR_LEN_3BYTE,
-                   chunk + 1, 0)) return 0;
-    xmemcpy(dst, FLASH_BUF + 1, chunk);
+    uint16_t chunk = length < FLASH_BUFFER_SIZE ? length : FLASH_BUFFER_SIZE;
+    if (!flash_cmd(FLASH_CMD_READ, address, FLASH_ADDR_LEN_3BYTE, chunk, 0)) return 0;
+    xmemcpy(dst, FLASH_BUF, chunk);
     dst += chunk;
     address += chunk;
     length -= chunk;
