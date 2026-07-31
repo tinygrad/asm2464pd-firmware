@@ -71,6 +71,12 @@
 #define XDATA_REG16V(addr) (*(__xdata volatile uint16_t *)(addr))
 #define XDATA_REG32V(addr) (*(__xdata volatile uint32_t *)(addr))
 
+// 8051 special-function registers
+SFR(0x87) PCON;
+#define PCON_MEMSEL 0x10 // Redirect MOVX writes to CODE
+SFR(0x93) DPX;           // XDATA bank select
+SFR(0xA8) IE;            // Interrupt enable
+
 //=============================================================================
 // Memory Buffers
 //=============================================================================
@@ -382,7 +388,7 @@
 #define   USB_CTRL_PHASE_SETUP    0x01  // Bit 0: Setup packet received
 #define   USB_CTRL_PHASE_STAT_OUT 0x02  // Bit 1: Status phase (OUT/host-to-device)
 #define   USB_CTRL_PHASE_DATA_OUT 0x04  // Bit 2: OUT data received from host
-#define   USB_CTRL_PHASE_DATA_IN  0x08  // Bit 3: IN data phase ready (poll for GET_DESC)
+#define   USB_CTRL_PHASE_DATA_IN  0x08  // Bit 3: IN data phase ready; EP0 buffer is writable
 #define   USB_CTRL_PHASE_STAT_IN  0x10  // Bit 4: Status phase (IN/device-to-host, SET_ADDR)
 #define   USB_CTRL_PHASE_ALL      (USB_CTRL_PHASE_SETUP | USB_CTRL_PHASE_STAT_OUT | \
                                    USB_CTRL_PHASE_DATA_OUT | USB_CTRL_PHASE_DATA_IN | \
@@ -1640,8 +1646,8 @@
 #define   FLASH_ADDR_LEN_MASK     0xFC  // Bits 2-7 (stock code reads & masks these)
 #define   FLASH_ADDR_LEN_NOADDR   0x04  // No address bytes sent (bits 0-1 = 0)
 #define   FLASH_ADDR_LEN_3BYTE    0x07  // 3 address bytes sent (bits 0-1 = 0x03)
-#define REG_FLASH_MODE          XDATA_REG8(0xC8AD)
-#define   FLASH_MODE_ENABLE       0x01  // Bit 0: Flash mode enable
+#define REG_FLASH_MODE          XDATA_REG8(0xC8AD)  /* I/O/write mode; clear between transactions */
+#define   FLASH_MODE_WRITE        0x01  // Bit 0: buffer-to-flash direction
 #define REG_FLASH_BUF_OFFSET    XDATA_REG16(0xC8AE)
 #define REG_FLASH_BUF_OFFSET_LO XDATA_REG8(0xC8AE)  /* Flash buffer offset low byte */
 #define REG_FLASH_BUF_OFFSET_HI XDATA_REG8(0xC8AF)  /* Flash buffer offset high byte */

@@ -13,7 +13,7 @@ HDR_SIZE = 0x40
 HASH_OFF = 0x20
 BODY_MAX = 0xD000
 GITVERSION_SIZE = 23
-BOOT_ABI_VERSION = 1
+BOOTSTUB_ABI_VERSION = 1
 
 
 if __name__ == "__main__":
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     MAGIC
     + gitversion
     + b"\x00" * (GITVERSION_SIZE - len(gitversion))
-    + bytes([BOOT_ABI_VERSION])
+    + bytes([BOOTSTUB_ABI_VERSION])
     + struct.pack("<I", len(body))
   )
   assert len(pre) == HASH_OFF

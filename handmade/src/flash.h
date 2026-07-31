@@ -24,25 +24,9 @@ typedef struct {
 
 __xdata static uint8_t flash_unlocked;
 
-static void flash_clear_dma_status(void) {
-  REG_DMA_TRIGGER = 0;
-  REG_DMA_CHAN_CTRL2 = 0;
-  REG_DMA_STATUS = 0;
-  REG_DMA_STATUS2 = 0;
-}
-
 static uint8_t flash_poll_busy(void) {
   uint32_t timeout = 0xFFFFFUL;
   while (REG_FLASH_CSR & 0x01) {
-    if (!--timeout) return 0;
-  }
-  return 1;
-}
-
-static uint8_t flash_poll_dma_idle(void) {
-  uint16_t timeout = 0xFFFF;
-  while ((REG_DMA_TRIGGER & DMA_TRIGGER_START) ||
-         (REG_DMA_CHAN_CTRL2 & DMA_CHAN_CTRL2_ACTIVE)) {
     if (!--timeout) return 0;
   }
   return 1;
@@ -58,7 +42,6 @@ static void flash_init(void) {
   REG_FLASH_ADDR_LEN = 0;
   REG_FLASH_BUF_OFFSET_LO = 0;
   REG_FLASH_BUF_OFFSET_HI = 0;
-  flash_clear_dma_status();
   flash_unlocked = 0;
 }
 
@@ -66,18 +49,12 @@ static uint8_t flash_cmd(uint8_t command, uint32_t address,
                          uint8_t address_mode, uint16_t length,
                          uint8_t write) {
   uint8_t ok;
-  uint8_t read = length && !write;
 
   if (address_mode > FLASH_ADDR_LEN_3BYTE || length > FLASH_BUFFER_SIZE ||
       !flash_poll_busy()) return 0;
-  if (read) {
-    flash_clear_dma_status();
-    if (!flash_poll_dma_idle()) return 0;
-  }
 
   REG_FLASH_CON = 0;
-  if (write) REG_FLASH_MODE |= FLASH_MODE_ENABLE;
-  else       REG_FLASH_MODE &= (uint8_t)~FLASH_MODE_ENABLE;
+  REG_FLASH_MODE = write ? FLASH_MODE_WRITE : 0;
   REG_FLASH_BUF_OFFSET_LO = 0;
   REG_FLASH_BUF_OFFSET_HI = 0;
   REG_FLASH_CMD = command;
@@ -90,10 +67,7 @@ static uint8_t flash_cmd(uint8_t command, uint32_t address,
   REG_FLASH_CSR = 0x01;
 
   ok = flash_poll_busy();
-  if (ok && read) ok = flash_poll_dma_idle();
-  // flash_clear_io_modes
-  REG_FLASH_MODE &= (uint8_t)~(FLASH_MODE_ENABLE | 0xF0);
-  if (read) flash_clear_dma_status();
+  REG_FLASH_MODE = 0;
   return ok;
 }
 
@@ -161,13 +135,11 @@ static uint8_t flash_read_otp(__xdata otp_t *out) {
   uint8_t checksum = 0;
 
   if (!flash_cmd(FLASH_CMD_ENSO, 0, FLASH_ADDR_LEN_NOADDR, 0, 0)) return 0;
-  for (i = 0; i < sizeof(otp_t); i++) {
-    if (!flash_cmd(FLASH_CMD_READ, i, FLASH_ADDR_LEN_3BYTE, 1, 0)) {
-      (void)flash_cmd(FLASH_CMD_EXSO, 0, FLASH_ADDR_LEN_NOADDR, 0, 0);
-      return 0;
-    }
-    bytes[i] = FLASH_BUF[0];
+  if (!flash_cmd(FLASH_CMD_READ, 0, FLASH_ADDR_LEN_3BYTE, sizeof(otp_t), 0)) {
+    (void)flash_cmd(FLASH_CMD_EXSO, 0, FLASH_ADDR_LEN_NOADDR, 0, 0);
+    return 0;
   }
+  for (i = 0; i < sizeof(otp_t); i++) bytes[i] = FLASH_BUF[i];
   if (!flash_cmd(FLASH_CMD_EXSO, 0, FLASH_ADDR_LEN_NOADDR, 0, 0)) return 0;
   for (i = 0; i < 4; i++) checksum ^= out->serial[i];
   return out->checksum == checksum;

@@ -19,11 +19,11 @@ PAGE_SS = 512
 USERFW_IMAGE_END = 0x11040
 USERFW_ERASE_END = (USERFW_IMAGE_END + SECTOR_SIZE - 1) & ~(SECTOR_SIZE - 1)
 TIMEOUT_MS = 5000
-DFU_INFO = struct.Struct("<4sBBHHII")
+DFU_INFO = struct.Struct("<4sHHIIB")
 USB_SYSFS = Path("/sys/bus/usb/devices")
 TB_SYSFS = Path("/sys/bus/thunderbolt/devices")
 TB_DEBUGFS = Path("/sys/kernel/debug/thunderbolt")
-BOOT_ABI_VERSION = 1
+BOOTSTUB_ABI_VERSION = 1
 
 
 def usb_nodes(vid, pid=None):
@@ -54,8 +54,8 @@ def disconnect_request(h, request):
 
 def get_info(h):
   info = DFU_INFO.unpack(control(h, 0xB4, read=DFU_INFO.size))
-  magic, protocol, abi, page, sector, start, end = info
-  valid = (magic == b"A24D" and protocol == 1 and abi == BOOT_ABI_VERSION and
+  magic, page, sector, start, end, abi = info
+  valid = (magic == b"A24D" and abi == BOOTSTUB_ABI_VERSION and
            page in (PAGE, PAGE_SS) and sector == SECTOR_SIZE and
            start == USERFW_FLASH_OFFSET and end == USERFW_IMAGE_END)
   assert valid, f"incompatible DFU: {info}"

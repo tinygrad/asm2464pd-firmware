@@ -1,4 +1,4 @@
-/* userfw @ SPI 0x4000: A24F | git[23] | ABI8 | len32le | crc32le | zero[28] | body.
+/* userfw @ SPI 0x4000: A24F | git[23] | bootstub ABI8 | len32le | crc32le | zero[28] | body.
  * CRC covers bytes 0x00..0x1f + body; body loads at CODE 0x3000. */
 
 #define BOOTSTUB 1
@@ -8,7 +8,7 @@
 #include "util.h"
 #include "usb.h"
 
-#define BOOT_ABI_VERSION        0x01U
+#define BOOTSTUB_ABI_VERSION    0x01U
 #define BOOT_TRACK_MARK         0xB0075B00UL
 #define BOOT_TRACK_MASK         0xFFFFFF00UL
 #define BOOT_MAX_ATTEMPTS       3
@@ -22,7 +22,7 @@
 typedef struct {
     uint8_t  magic[4];
     uint8_t  gitversion[23];
-    uint8_t  boot_abi;
+    uint8_t  bootstub_abi;
     uint32_t body_len;
     uint32_t crc;
     uint8_t  reserved[28];
@@ -32,16 +32,12 @@ typedef struct {
 #define USERFW_ERASE_END        ((USERFW_FLASH_END + USERFW_SECTOR_SIZE - 1) & \
                                  ~(USERFW_SECTOR_SIZE - 1))
 
-__sfr __at(0x87) PCON;       // bit 4 = MEMSEL: redirects MOVX writes to CODE
-__sfr __at(0xA8) IE;
-
-#define DFU_PROTOCOL_VERSION    0x01
-#define DFU_INFO_SIZE           18
+#define DFU_INFO_SIZE           17
 
 static void code_write(uint16_t addr, uint8_t val) {
     uint8_t old = PCON;
     // Keep MEMSEL scoped to this store; SDCC may use MOVX for temporaries.
-    PCON = old | 0x10;
+    PCON = old | PCON_MEMSEL;
     *(__xdata volatile uint8_t *)addr = val;
     PCON = old;
 }
@@ -53,7 +49,7 @@ static void dfu_loop(void);
 
 __xdata static uint32_t xfer_addr;
 
-enum { XOP_NONE = 0, XOP_ERASE, XOP_WRITE };
+enum { XOP_NONE = 0, XOP_ERASE, XOP_WRITE, XOP_READ };
 __xdata static uint8_t  xfer_op;
 __xdata static uint16_t xfer_op_len;
 
@@ -149,27 +145,21 @@ static void handle_setup(void) {
         xfer_op_len = wLen;
         xfer_op = XOP_WRITE;
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB3) {
-        uint16_t n = wLen;
-        if (n == 0 || n > USB_EP0_SIZE ||
-            !dfu_range_ok(xfer_addr, n, USERFW_FLASH_END)) {
+        if (wLen == 0 || wLen > USB_EP0_SIZE ||
+            !dfu_range_ok(xfer_addr, wLen, USERFW_FLASH_END)) {
             stall_ep0(); return;
         }
-        if (!usb_wait_ep0_dma_idle()) { stall_ep0(); return; }
-        // Direct FLASH_BUF -> DESC_BUF copies are unreliable on hardware.
-        if (!flash_read(xfer_addr, scratch, n)) { stall_ep0(); return; }
-        xmemcpy(DESC_BUF, scratch, n);
-        xfer_addr += n;
-        usb_send_data(n);
+        xfer_op_len = wLen;
+        xfer_op = XOP_READ;
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB4) {
         // send_dfu_info
         if (wLen != DFU_INFO_SIZE) { stall_ep0(); return; }
         DESC_BUF[0] = 'A'; DESC_BUF[1] = '2'; DESC_BUF[2] = '4'; DESC_BUF[3] = 'D';
-        DESC_BUF[4] = DFU_PROTOCOL_VERSION;
-        DESC_BUF[5] = BOOT_ABI_VERSION;
-        *(__xdata uint16_t *)(DESC_BUF + 6) = USB_EP0_SIZE;
-        *(__xdata uint16_t *)(DESC_BUF + 8) = USERFW_SECTOR_SIZE;
-        *(__xdata uint32_t *)(DESC_BUF + 10) = USERFW_FLASH_OFFSET;
-        *(__xdata uint32_t *)(DESC_BUF + 14) = USERFW_FLASH_END;
+        *(__xdata uint16_t *)(DESC_BUF + 4) = USB_EP0_SIZE;
+        *(__xdata uint16_t *)(DESC_BUF + 6) = USERFW_SECTOR_SIZE;
+        *(__xdata uint32_t *)(DESC_BUF + 8) = USERFW_FLASH_OFFSET;
+        *(__xdata uint32_t *)(DESC_BUF + 12) = USERFW_FLASH_END;
+        DESC_BUF[16] = BOOTSTUB_ABI_VERSION;
         usb_send_data(DFU_INFO_SIZE);
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEB) {
         if (wLen != 0) { stall_ep0(); return; }
@@ -181,19 +171,29 @@ static void handle_setup(void) {
     }
 }
 
-static uint8_t run_deferred_xfer_op(void) {
-    if (xfer_op == XOP_WRITE) {
+static void run_deferred_xfer_op(void) {
+    if (xfer_op == XOP_READ) {
+        uint16_t len = xfer_op_len;
+        xfer_op = XOP_NONE;
+        if (!flash_read(xfer_addr, DESC_BUF, len)) {
+            stall_ep0();
+            return;
+        }
+        xfer_addr += len;
+        usb_send_data(len);
+        return;
+    } else if (xfer_op == XOP_WRITE) {
         uint32_t addr = xfer_addr;
         uint16_t len = xfer_op_len;
         xfer_op = XOP_NONE;
         if (!usb_wait_ep0_dma_idle()) {
             stall_ep0();
-            return 0;
+            return;
         }
         // Unlock DMA touches FLASH_BUF, so it must precede payload staging.
         if (!flash_unlock()) {
             stall_ep0();
-            return 0;
+            return;
         }
         uint16_t off = 0;
         while (off < len) {
@@ -202,17 +202,16 @@ static uint8_t run_deferred_xfer_op(void) {
             xmemcpy(FLASH_BUF, DESC_BUF + off, chunk);
             if (!flash_program_page(addr + off, chunk)) {
                 stall_ep0();
-                return 0;
+                return;
             }
             off += chunk;
         }
         xfer_addr = addr + len;
-        return 1;
     } else {
         xfer_op = XOP_NONE;
         if (!usb_wait_ep0_dma_idle()) {
             stall_ep0();
-            return 0;
+            return;
         }
         uint32_t addr = *(__xdata const uint32_t *)DESC_BUF;
         uint32_t len  = *(__xdata const uint32_t *)(DESC_BUF + 4);
@@ -220,16 +219,16 @@ static uint8_t run_deferred_xfer_op(void) {
             (len & (USERFW_SECTOR_SIZE - 1)) ||
             !dfu_range_ok(addr, len, USERFW_ERASE_END)) {
             stall_ep0();
-            return 0;
+            return;
         }
         for (uint32_t off = 0; off < len; off += USERFW_SECTOR_SIZE) {
             if (!flash_erase_sector(addr + off)) {
                 stall_ep0();
-                return 0;
+                return;
             }
         }
-        return 1;
     }
+    usb_send_zlp();
 }
 
 static void dfu_loop(void) {
@@ -256,12 +255,7 @@ static void dfu_loop(void) {
                 REG_USB_CTRL_PHASE  = USB_CTRL_PHASE_STAT_OUT;
             } else if ((phase & USB_CTRL_PHASE_DATA_IN) || (phase & USB_CTRL_PHASE_STAT_IN)) {
                 if (xfer_op != XOP_NONE) {
-                    if (run_deferred_xfer_op()) {
-                        usb_send_zlp();
-                    } else {
-                        // Ack the phase without overwriting USB_DMA_STALL.
-                        REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
-                    }
+                    run_deferred_xfer_op();
                 } else {
                     if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
                     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
@@ -306,7 +300,7 @@ void main(void) {
         uart_puts("[BS bad-magic]\n");
         dfu_loop();
     }
-    if (hdr.boot_abi != BOOT_ABI_VERSION) {
+    if (hdr.bootstub_abi != BOOTSTUB_ABI_VERSION) {
         uart_puts("[BS bad-abi]\n");
         dfu_loop();
     }

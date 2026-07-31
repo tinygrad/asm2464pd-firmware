@@ -9,7 +9,7 @@
     .org    0x0000
 __reset:
     ljmp    __sdcc_program_startup
-
+; Interrupts re-routed to userfw
     .org    0x0003
     ljmp    0x3003
 
