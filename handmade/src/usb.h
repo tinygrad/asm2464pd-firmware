@@ -30,21 +30,8 @@ static uint8_t usb_configuration;
 
 #ifdef BOOTSTUB
 
+#define USB_PID                 0xB007
 #define USB_STR_PRODUCT         "bootstub"
-
-static __code const uint8_t usb_dev_desc[] = {
-  0x12, 0x01, U16_LE(0x0200),
-  0x00, 0x00, 0x00, 0x40,
-  U16_LE(USB_VID), U16_LE(0xB007), U16_LE(0x0002),
-  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL, 0x01,
-};
-
-static __code const uint8_t usb_dev_desc_ss[] = {
-  0x12, 0x01, U16_LE(0x0320),
-  0x00, 0x00, 0x00, 0x09,
-  U16_LE(USB_VID), U16_LE(0xB007), U16_LE(0x0002),
-  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL, 0x01,
-};
 
 static __code const uint8_t usb_cfg_desc[] = {
   0x09, 0x02, U16_LE(18), 0x01, 0x01, 0x00, 0xC0, 0x00,
@@ -55,29 +42,8 @@ static __code const uint8_t usb_cfg_desc[] = {
 
 #else
 
+#define USB_PID                 0x0001
 #define USB_STR_PRODUCT         "custom v0.1"
-
-/*=== Device descriptors ===*/
-
-static __code const uint8_t usb_dev_desc[] = {
-  0x12, 0x01,                 /* bLength=18, bDescriptorType=DEVICE */
-  U16_LE(0x0200),             /* bcdUSB = 2.00 */
-  0x00, 0x00, 0x00,           /* bDeviceClass / SubClass / Protocol */
-  0x40,                       /* bMaxPacketSize0 = 64 */
-  U16_LE(USB_VID), U16_LE(0x0001), U16_LE(0x0001),
-  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL,
-  0x01,                       /* bNumConfigurations */
-};
-
-static __code const uint8_t usb_dev_desc_ss[] = {
-  0x12, 0x01,                 /* bLength=18, bDescriptorType=DEVICE */
-  U16_LE(0x0320),             /* bcdUSB = 3.20 */
-  0x00, 0x00, 0x00,           /* bDeviceClass / SubClass / Protocol */
-  0x09,                       /* bMaxPacketSize0 = 2^9 = 512 (SuperSpeed) */
-  U16_LE(USB_VID), U16_LE(0x0001), U16_LE(0x0001),
-  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL,
-  0x01,                       /* bNumConfigurations */
-};
 
 /*=== Configuration descriptors ===*/
 
@@ -118,6 +84,22 @@ static __code const uint8_t usb_cfg_desc_ss[] = {
 };
 
 #endif
+
+/*=== Device descriptors ===*/
+
+static __code const uint8_t usb_dev_desc[] = {
+  0x12, 0x01, U16_LE(0x0200),
+  0x00, 0x00, 0x00, 0x40,
+  U16_LE(USB_VID), U16_LE(USB_PID), U16_LE(0x0001),
+  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL, 0x01,
+};
+
+static __code const uint8_t usb_dev_desc_ss[] = {
+  0x12, 0x01, U16_LE(0x0320),
+  0x00, 0x00, 0x00, 0x09,
+  U16_LE(USB_VID), U16_LE(USB_PID), U16_LE(0x0001),
+  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL, 0x01,
+};
 
 /*=== BOS descriptor ===*/
 
