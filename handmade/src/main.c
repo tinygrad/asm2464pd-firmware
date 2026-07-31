@@ -66,6 +66,7 @@ static void pcie_power_on(void) {
   REG_HDDPC_CTRL |= 0x20;                      // enable 3.3V
   REG_CPU_CTRL_CA81 = 0x0E;
   REG_CPU_MODE_NEXT = 0x21;
+  REG_PCIE_LANE_CTRL_C659 |= PCIE_LANE_CTRL_ENABLE;
   REG_PHY_TIMER_CTRL_E764 = 0x1C;              // start link training
   REG_PCIE_TUNNEL_CFG = PCIE_TLP_CTRL_TUNNEL;  // fix late issue in RDNA3
   REG_PCIE_PERST_CTRL = 0x00;                  // deassert PERST#
@@ -95,9 +96,6 @@ static void pcie_power_on(void) {
     timer_delay_ms(100);
   }
   if (stable_samples < 3) uart_puts("[PCIe timeout]\n");
-
-  /* Stock firmware only sets this once training is done. */
-  REG_PCIE_LANE_CTRL_C659 |= 0x01;
 
   // green = PCIe link up, red = link down
   bool link_up = (stable_samples >= 3);

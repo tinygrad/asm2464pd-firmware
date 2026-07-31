@@ -270,6 +270,11 @@ static void cc_pd_timer_tick(void) {
   if (REG_CPU_DMA_INT & 0x02) {                 /* CC91.1: 1s sender-response timeout -> commit USB4 mode */
     REG_CPU_DMA_INT = 0x02;
     uart_puts("[1 sec time out]\n");
+    if (!u4_boot.pd_seen) {
+      pd_drive_hard_reset();
+      // USB4 power-cycles us; USB3-only hosts return and continue to fallback.
+      timer_delay_ms(50);
+    }
     u4_cfg.route_mode = 0x04;
     u4_entered_usb_mode = usb4_mode_entry_commit();
   }

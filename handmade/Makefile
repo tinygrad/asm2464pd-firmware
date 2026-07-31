@@ -16,7 +16,7 @@ BOOTSTUB_CFLAGS = $(COMMON_CFLAGS) --model-large --opt-code-size
 # 0x0B60-0x0BFF stays valid and clear of the mailbox/FSM state.
 APP_RAM_LDFLAGS = --xram-loc 0x0B60 --xram-size 0xA0 --iram-size 0x100
 LDFLAGS = --code-loc 0x0000 --code-size 0x10000 $(APP_RAM_LDFLAGS)
-BOOTSTUB_LDFLAGS = --code-loc 0x0000 --code-size 0x3000 --xram-loc 0x0000 --xram-size 0x5FF8 --iram-size 0x100
+BOOTSTUB_LDFLAGS = --code-loc 0x0000 --code-size 0x3000 --xram-loc 0x0C00 --xram-size 0x400 --iram-size 0x100
 USERFW_LDFLAGS = --code-loc 0x3030 --code-size 0xCFD0 $(APP_RAM_LDFLAGS)
 
 # Directories
