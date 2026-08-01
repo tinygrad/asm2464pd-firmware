@@ -3,6 +3,7 @@
 
 
 static void boot_phy_set_link_mode(uint8_t param);  /* dd42 */
+static void u4c_uart_drain_wait(void);
 
 static uint8_t P1_REG8_rd(uint16_t off) {
   uint8_t v;
@@ -748,13 +749,15 @@ static void u4c_native_hw_status(void) {
   u4c_router_cfg_u32_write(USB4_ROUTER_CS_OPCODE, USB4_ROUTER_OP_TINY_HW_STATUS);
 }
 static void u4c_native_routerop_service(void) {
+  static __xdata volatile uint16_t dfu_spin;
   uint32_t op, metadata;
   if (!u4_boot.sb_asserted) return;
   op = u4c_router_cfg_dword_read(USB4_ROUTER_CS_OPCODE);
   if (!(op & USB4_ROUTER_OP_OV)) return;
 
   metadata = u4c_router_cfg_dword_read(USB4_ROUTER_CS_METADATA);
-  switch ((uint8_t)op) {
+  // Compare all 16 bits so 0xXXC0/0xXXEC cannot alias custom TINY ops.
+  switch ((uint16_t)op) {
   case USB4_ROUTER_OP_DROM_READ:
     u4c_native_drom_read(metadata);
     break;
@@ -767,6 +770,14 @@ static void u4c_native_routerop_service(void) {
     break;
   case USB4_ROUTER_OP_TINY_HW_STATUS:
     u4c_native_hw_status();
+    break;
+  case USB4_ROUTER_OP_TINY_ENTER_DFU:
+    // u4c_native_enter_dfu
+    // Ack before resetting the live tunnel.
+    u4c_router_cfg_u32_write(USB4_ROUTER_CS_METADATA, 0x00000000UL);
+    u4c_router_cfg_u32_write(USB4_ROUTER_CS_OPCODE, USB4_ROUTER_OP_TINY_ENTER_DFU);
+    for (dfu_spin = 0xFFFF; dfu_spin; dfu_spin--) { }
+    boot_enter_dfu();
     break;
   default:
     u4c_router_cfg_u32_write(USB4_ROUTER_CS_OPCODE, (op & 0x0000FFFFUL) | USB4_ROUTER_OP_UNSUPPORTED);

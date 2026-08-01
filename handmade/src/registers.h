@@ -71,6 +71,10 @@
 #define XDATA_REG16V(addr) (*(__xdata volatile uint16_t *)(addr))
 #define XDATA_REG32V(addr) (*(__xdata volatile uint32_t *)(addr))
 
+// 8051 special-function registers shared by application headers.
+SFR(0x93) DPX;  // XDATA bank select
+SFR(0xA8) IE;   // Interrupt enable
+
 //=============================================================================
 // Memory Buffers
 //=============================================================================
@@ -380,8 +384,9 @@
 #define   USB_CTRL_PHASE_SETUP    0x01  // Bit 0: Setup packet received
 #define   USB_CTRL_PHASE_STAT_OUT 0x02  // Bit 1: Status phase (OUT/host-to-device)
 #define   USB_CTRL_PHASE_DATA_OUT 0x04  // Bit 2: OUT data received from host
-#define   USB_CTRL_PHASE_DATA_IN  0x08  // Bit 3: IN data phase ready (poll for GET_DESC)
+#define   USB_CTRL_PHASE_DATA_IN  0x08  // Bit 3: IN data phase ready; EP0 buffer is writable
 #define   USB_CTRL_PHASE_STAT_IN  0x10  // Bit 4: Status phase (IN/device-to-host, SET_ADDR)
+#define   USB_CTRL_PHASE_ALL      (USB_CTRL_PHASE_SETUP | USB_CTRL_PHASE_STAT_OUT | USB_CTRL_PHASE_DATA_OUT | USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN)
 
 /*
  * USB EP0 DMA Control Register (0x9092)
@@ -719,6 +724,8 @@
  *          at 0xc465. If clear → link is down → writes E710 and clears CC3B bit 1.
  */
 #define REG_USB_PHY_CTRL_91C0   XDATA_REG8(0x91C0)
+#define   USB_PHY_91C0_INIT_TOGGLE 0x01
+#define   USB_PHY_91C0_FORCE_HS   0x10
 #define   USB_PHY_91C0_LINK_UP    0x02  // Bit 1: SS link up (checked in 91D1 bit 0 handler)
 #define REG_USB_PHY_CTRL_91C1   XDATA_REG8(0x91C1)
 #define REG_USB_PHY_CTRL_91C3   XDATA_REG8(0x91C3)
@@ -2446,6 +2453,7 @@
  *   bits 31:16 = INA231 shunt current in signed mA
  */
 #define USB4_ROUTER_OP_TINY_HW_STATUS    0xC0u
+#define USB4_ROUTER_OP_TINY_ENTER_DFU    0xECu
 #define REG_BANK_2269           XDATA_REG8(0x2269)  /* Bank register at 0x2269 */
 
 //=============================================================================

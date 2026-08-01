@@ -184,7 +184,9 @@ static void pd_keystone_init(void) {
   u4_cfg.mode_flag = USB4_MODE_FLAGS;
   cc_pd_phy_term_init();
   pd_internal_state_init();
-  /* Arm the 1s DMA timer once at boot (stock fw func_e352). */
+  // Clear preserved timer state; mask-clearing CC90 breaks cold boot.
+  REG_CPU_DMA_INT = 0x04;
+  REG_CPU_DMA_INT = 0x02;
   REG_CPU_DMA_CTRL_CC90 = (uint8_t)(REG_CPU_DMA_CTRL_CC90 | 0x05);
   REG_CPU_DMA_DATA_LO = 0x00;
   REG_CPU_DMA_DATA_HI = 0xC8;
