@@ -536,7 +536,7 @@ class Emulator:
         """
         Start USB device emulation using raw-gadget.
 
-        This makes the emulator appear as a real USB device (VID:PID ADD1:0001)
+        This makes the emulator appear as a real USB device (VID:PID 3801:0001)
         that can be accessed with lsusb and python/usb.py.
 
         Requires: sudo modprobe dummy_hcd && sudo modprobe raw_gadget
@@ -566,7 +566,7 @@ class Emulator:
         try:
             self.usb_device.start(driver, device, USBSpeed.USB_SPEED_HIGH)
             print(f"[USB] Device started on {device}")
-            print(f"[USB] Device should appear as ADD1:0001 in lsusb")
+            print(f"[USB] Device should appear as 3801:0001 in lsusb")
 
             # Start USB event handling in background thread
             self.usb_running = True
@@ -715,7 +715,7 @@ Examples:
     parser.add_argument('--proxy-mask', type=str, action='append', default=[],
                         help='MMIO range to emulate instead of proxy (e.g. 0x9000-0x9100 or 0x9000). Can repeat.')
     parser.add_argument('--vidpid', type=str, default=None,
-                        help='Override USB VID:PID in descriptor (e.g. ADD1:0001)')
+                        help='Override USB VID:PID in descriptor (e.g. 3801:0001)')
 
     args = parser.parse_args()
 

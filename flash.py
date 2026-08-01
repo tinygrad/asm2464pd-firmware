@@ -9,7 +9,7 @@ from tinygrad.runtime.support.usb import USB3
 SUPPORTED_CONTROLLERS = [
   (0x174C, 0x2464),
   (0x174C, 0x2463),
-  (0xADD1, 0x0001),
+  (0x3801, 0x0001),
 ]
 if getenv("USBDEV", ""): SUPPORTED_CONTROLLERS.insert(0, (int(x, 16) for x in getenv("USBDEV", "").split(":")))
 

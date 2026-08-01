@@ -8,7 +8,7 @@ from tinygrad.runtime.autogen import libusb
 class UASDev:
     def __init__(self, max_streams=4):
         # use_bot=False triggers SET_INTERFACE alt=1, stream alloc
-        self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04, use_bot=False, max_streams=max_streams)
+        self.usb = USB3(0x3801, 0x0001, 0x81, 0x83, 0x02, 0x04, use_bot=False, max_streams=max_streams)
         print(f"UAS mode: use_streams={self.usb.use_streams} max_streams={self.usb.max_streams}")
 
     def scsi(self, cdb, xfer_len=0, direction_in=True, timeout=10000):

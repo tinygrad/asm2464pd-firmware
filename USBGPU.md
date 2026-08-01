@@ -134,7 +134,7 @@ The patch also changes the device identity via config blocks:
 
 ```
 Original:  VID=0x174C PID=0x2464 (ASMedia USB4 NVMe)
-Patched:   VID=0xADD1 PID=0x0001 ("tiny")
+Patched:   VID=0x3801 PID=0x0001 ("tiny")
 ```
 
 This allows tinygrad to identify its patched devices.
@@ -291,7 +291,7 @@ bus mastering for high-throughput data movement.
 
 ```python
 # From usb.py line 117
-self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04)
+self.usb = USB3(0x3801, 0x0001, 0x81, 0x83, 0x02, 0x04)
 #              VID     PID     data_in stat_in data_out cmd_out
 ```
 

@@ -7,7 +7,7 @@ from tinygrad.runtime.autogen import libusb
 
 class BOTDev:
     def __init__(self):
-        self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04, use_bot=True)
+        self.usb = USB3(0x3801, 0x0001, 0x81, 0x83, 0x02, 0x04, use_bot=True)
         self._tag = 0
 
     def scsi(self, cdb, xfer_len=0, direction_in=True, timeout=10000):

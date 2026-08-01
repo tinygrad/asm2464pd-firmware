@@ -1127,7 +1127,7 @@
  *   0x01 = Detect.Active (checking for receiver impedance)
  *   0x10+ = Polling (TS1/TS2 exchange started)
  *   0x48 = L0 (link trained, normal operation) — observed on ASMedia 174C:2463 stock
- *   0x78 = L0 (link trained) — observed on tinygrad ADD1:0001 stock
+ *   0x78 = L0 (link trained) — observed on tinygrad 3801:0001 stock
  *
  * B450 oscillating between 0x00 and 0x01 means the local PHY detects receiver
  * impedance (GPU present) but cannot advance to Polling. In non-USB4 direct

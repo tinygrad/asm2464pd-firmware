@@ -23,7 +23,7 @@ from tinygrad.runtime.autogen import libusb
 # USB transport — raw 0xE4/0xE5 control transfers
 # =============================================================================
 
-VID, PID = 0xADD1, 0x0001
+VID, PID = 0x3801, 0x0001
 
 def usb_open():
     """Open the USB device, return (handle, ctx)."""

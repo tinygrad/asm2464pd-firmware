@@ -32,7 +32,7 @@ RESET = "\033[0m"
 
 class Dev:
     def __init__(self):
-        self.usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04)
+        self.usb = USB3(0x3801, 0x0001, 0x81, 0x83, 0x02, 0x04)
 
     def read8(self, addr):
         buf = (ctypes.c_ubyte * 1)()

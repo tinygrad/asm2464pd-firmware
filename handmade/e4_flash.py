@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'pcie'))
 from tinygrad.runtime.autogen import libusb
 from pcie_probe import xdata_read, xdata_write
 
-VID, PID = 0xADD1, 0x0001
+VID, PID = 0x3801, 0x0001
 EP_OUT = 0x02
 
 def flash_init(h):

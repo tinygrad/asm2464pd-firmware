@@ -8,7 +8,7 @@
 #define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
 
 /*=== USB device identification ===*/
-#define USB_VID                 0xADD1
+#define USB_VID                 0x3801
 #define USB_PID                 0x0001
 #define USB_BCD_DEVICE          0x0001
 #define USB_LANG_ID             0x0409   /* US English */

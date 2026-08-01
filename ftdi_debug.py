@@ -75,7 +75,7 @@ class USBGPUDebug:
     SUPPORTED_CONTROLLERS = [
       (0x174C, 0x2464),
       (0x174C, 0x2463),
-      (0xADD1, 0x0001),
+      (0x3801, 0x0001),
     ]
     start = time.time()
     while time.time() - start < timeout:
@@ -120,4 +120,3 @@ if __name__ == "__main__":
         if args.timeout is not None and (time.perf_counter() - start_time) >= args.timeout:
           break
         time.sleep(0.001)
-

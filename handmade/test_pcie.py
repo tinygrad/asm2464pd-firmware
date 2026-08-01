@@ -10,7 +10,7 @@ Single-TLP data (mode 0) returns raw PCIe completion bytes (DATA_0..DATA_3).
 import ctypes, struct, unittest, time, sys, os, array, pytest
 from tinygrad.runtime.autogen import libusb
 
-VID, PID = 0xADD1, 0x0001
+VID, PID = 0x3801, 0x0001
 EP_OUT, EP_IN = 0x02, 0x81
 MWR64, MRD64 = 0x60, 0x20
 GPU_BUS = 4

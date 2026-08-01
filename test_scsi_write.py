@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test SCSI WRITE(16) against add1:0001 stock firmware using tinygrad's ASM24Controller.
+Test SCSI WRITE(16) against 3801:0001 stock firmware using tinygrad's ASM24Controller.
 Uses UAS (streams) mode, exactly like tinygrad does it.
 
 Usage:
@@ -11,7 +11,7 @@ sys.path.insert(0, "/home/geohot/tinygrad")
 
 from tinygrad.runtime.support.usb import ASM24Controller
 
-print("Connecting via ASM24Controller (add1:0001, UAS mode)...")
+print("Connecting via ASM24Controller (3801:0001, UAS mode)...")
 ctrl = ASM24Controller()
 print("Connected + initialized!")
 
