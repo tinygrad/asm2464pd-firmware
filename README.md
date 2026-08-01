@@ -2,12 +2,25 @@
 
 Open-source C firmware for the ASM2464PD USB4/Thunderbolt to NVMe bridge controller.
 
-Build and flash the firmware for tinygrad with
+Install the bootstub and initial tinygrad firmware from the factory/debug
+connection with
+
+```bash
+make -C handmade nrecover
+```
+
+After the bootstub is installed, update only the application over USB with
 
 ```bash
 make -C handmade flash
 ```
-Source is at `handmade/src/main.c` it's short and readable
+
+Application source is at `handmade/src/main.c`. The self-contained USB2
+recovery bootstub is in `handmade/src/bootstub/`.
+
+The bootstub enumerates as `ADD1:B007` and uses a small vendor-specific EP0
+protocol. It is not USB class DFU and is intentionally unable to modify the
+bootstub region below flash offset `0x4000`.
 
 There's a 0xF0 control message that reads/writes PCIe TLPs that gets 3.6 MB/s write, 1.8 MB/s read.
 This is slow, but it can read and write anywhere on the PCIe BAR.

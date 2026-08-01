@@ -10,36 +10,10 @@
 #include "usb.h"
 #include "gpio.h"
 
-__sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
-__sfr __at(0xA8) IE;
-__sfr __at(0x88) TCON;
-
 #define IE_EX1  0x04
 #define IE_ET0  0x02
 #define IE_EX0  0x01
 
-void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
-void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
-static void uart_puthex(uint8_t val) {
-  static __code const char hex[] = "0123456789ABCDEF";
-  uart_putc(hex[val >> 4]);
-  uart_putc(hex[val & 0x0F]);
-}
-
-#define TIMER1_MODE_HALF_MS     0x04U
-/* Millisecond busy-sleep on Timer1; must never touch the CC10-CC13 PHY/PD mailbox. */
-static void sleep(uint16_t milliseconds) {
-  REG_TIMER1_CSR = TIMER_CSR_CLEAR;
-  REG_TIMER1_CSR = TIMER_CSR_EXPIRED;
-  REG_TIMER1_DIV = (REG_TIMER1_DIV & 0xF8) | TIMER1_MODE_HALF_MS;
-  uint16_t threshold = 2*milliseconds;
-  REG_TIMER1_THRESHOLD_HI = threshold >> 8;
-  REG_TIMER1_THRESHOLD_LO = threshold & 0xFF;
-  REG_TIMER1_CSR = TIMER_CSR_ENABLE;
-  { uint32_t g = 0; while (!(REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && ++g < 4000000UL); }
-}
-
-static uint8_t is_usb2;
 static uint32_t __xdata usb4_skip_magic;
 #define USB4_SKIP_MAGIC 0x5AA55AA5UL
 
@@ -118,7 +92,7 @@ static void pcie_power_on(void) {
     } else {
       stable_samples = 0;
     }
-    sleep(100);
+    timer_delay_ms(100);
   }
   if (stable_samples < 3) uart_puts("[PCIe timeout]\n");
 
@@ -144,17 +118,7 @@ static void do_usb_bulk_in(void) {
 
 /*=== USB Control Handler ===*/
 
-static void handle_usb_control(void) {
-  uint8_t phase;
-  phase = REG_USB_CTRL_PHASE;
-  if (phase & USB_CTRL_PHASE_SETUP) {
-    uint8_t bmReq, bReq, wValL, wValH;
-    uint16_t wLen;
-    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
-    bmReq = REG_USB_SETUP_BMREQ; bReq = REG_USB_SETUP_BREQ;
-    wValL = REG_USB_SETUP_WVAL_L; wValH = REG_USB_SETUP_WVAL_H;
-    wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
-
+static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, uint8_t wValH, uint16_t wLen) {
     if (!(bmReq & USB_SETUP_TYPE_VENDOR)) {
       uart_puts("[C ");
       uart_puthex(bmReq);
@@ -165,22 +129,7 @@ static void handle_usb_control(void) {
       uart_puts("]\n");
     }
 
-    if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
-      usb_handle_set_address(wValL);
-      uart_puts("[A]\n");
-    } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-      usb_handle_get_descriptor(is_usb2, wValH, wValL, wLen);
-    } else if ((bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_DEVICE) ||
-                bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) ||
-                bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_ENDPOINT)) &&
-               bReq == USB_REQ_GET_STATUS && wValL == 0x00 && wValH == 0x00 &&
-               wLen == 2) {
-      /* The configuration descriptors advertise a self-powered device.
-       * This firmware maintains no interface or endpoint status bits. */
-      DESC_BUF[0] = (bmReq == USB_SETUP_DIR_DEV_TO_HOST) ? 0x01 : 0x00;
-      DESC_BUF[1] = 0x00;
-      usb_send_data(2);
-    } else if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
+    if (bmReq == USB_SETUP_RECIP_ENDPOINT && bReq == USB_REQ_CLEAR_FEATURE && wValL == 0x00) {
       /* CLEAR_FEATURE(ENDPOINT_HALT) — reset bulk endpoint and cancel streaming.
        * bmRequestType=0x02 (host-to-dev, standard, endpoint), wValue=0 (ENDPOINT_HALT),
        * wIndex = endpoint address (0x02=OUT, 0x81=IN). */
@@ -192,7 +141,7 @@ static void handle_usb_control(void) {
       }
       dma_dwords = 0;
       usb_send_zlp();
-    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
+    } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION && wValH == 0 && wValL <= 1 && wLen == 0) {
       /* USB reset leaves the C4xx DMA active; cycle its buffer and bridge. */
       if (REG_NVME_CMD_STATUS_50 != 0) {
         REG_NVME_DOORBELL |= NVME_DOORBELL_BIT0;
@@ -210,6 +159,7 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
+      usb_configuration = wValL;
       usb_send_zlp();
       uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
@@ -226,8 +176,7 @@ static void handle_usb_control(void) {
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
       uint16_t addr = ((uint16_t)wValH << 8) | wValL;
       uint8_t bank = REG_USB_SETUP_WIDX_H;
-      uint16_t maxlen = is_usb2 ? 64 : 512;
-      uint16_t rlen = (wLen > maxlen) ? maxlen : wLen;
+      uint16_t rlen = (wLen > USB_EP0_SIZE) ? USB_EP0_SIZE : wLen;
       uint16_t vi;
       for (vi = 0; vi < rlen; vi++) {
         if (bank) DPX = bank;
@@ -248,10 +197,10 @@ static void handle_usb_control(void) {
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF2) {
       /* 0xF2: SRAM DMA — init DMA engine and arm for bulk transfer.
-      *   wValue bit 15 = direction: 0=BULK OUT (host→SRAM), 1=BULK IN (SRAM→host)
-      *   wValue bits 0-14 = total sector count (C426:C427)
-      *   wIndex low  = start slot (slot_sel for C429, C414 base)
-      *   wIndex high = number of slots (for C415 end range; 0 means 1 slot) */
+       *   wValue bit 15 = direction: 0=BULK OUT (host→SRAM), 1=BULK IN (SRAM→host)
+       *   wValue bits 0-14 = total sector count (C426:C427)
+       *   wIndex low  = start slot (slot_sel for C429, C414 base)
+       *   wIndex high = number of slots (for C415 end range; 0 means 1 slot) */
       uint8_t bulk_in = wValH & 0x80;  /* bit 15 of wValue = direction flag */
       uint16_t sectors = (((uint16_t)(wValH & 0x7F)) << 8) | wValL;
       uint8_t slot_sel = REG_USB_SETUP_WIDX_L;
@@ -277,12 +226,16 @@ static void handle_usb_control(void) {
         pcie_power_off();
       }
       usb_send_zlp();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xEC && wLen == 0) {
+      usb_send_zlp();
+      (void)usb_wait_ep0_dma_idle();
+      boot_enter_dfu();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
       /* 0xF0 OUT: PCIe TLP engine.
-      *   wValue = fmt_type | (byte_enable << 8)
-      *   wIndex low[1:0] = mode (0=single TLP, 1=stream write, 2=stream read)
-      *   wIndex low[7:2] = dwords per read chunk (0 → 128 for writes)
-      *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 LE] */
+       *   wValue = fmt_type | (byte_enable << 8)
+       *   wIndex low[1:0] = mode (0=single TLP, 1=stream write, 2=stream read)
+       *   wIndex low[7:2] = dwords per read chunk (0 → 128 for writes)
+       *   DATA_OUT: 12 bytes = addr_lo[4 LE] + addr_hi[4 LE] + value[4 LE] */
       /* Don't configure yet — wait for DATA_OUT phase.
        * SETUP params (wValue/wIndex) are readable from registers in DATA_OUT. */
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xF0) {
@@ -317,8 +270,16 @@ static void handle_usb_control(void) {
       DESC_BUF[7] = ret_status;
       usb_send_data(8);
     } else {
-      if (wLen == 0) usb_send_zlp();
+      return false;
     }
+    return true;
+}
+
+static void handle_usb_control(void) {
+  uint8_t phase = REG_USB_CTRL_PHASE;
+  if (phase & USB_CTRL_PHASE_SETUP) {
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_SETUP;
+    usb_handle_setup();
   } else if (phase & USB_CTRL_PHASE_STAT_OUT) {
     REG_USB_DMA_TRIGGER = USB_DMA_RECV;
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
@@ -421,6 +382,7 @@ void int0_isr(void) __interrupt(0) {
     periph_status = REG_USB_PERIPH_STATUS;
 
     if (periph_status & USB_PERIPH_BUS_RESET) {
+      usb_configuration = 0;
       /* 0x91D1 USB-SS / USB4-router link-event demux. */
       uint8_t link_event = REG_USB_PHY_CTRL_91D1;
       if (link_event & USB_91D1_FLAG) {
@@ -456,9 +418,7 @@ void int0_isr(void) __interrupt(0) {
       if (ep & BUF_CFG_9300_SS_FAIL) {
         if (!IS_USB4()) {
           uart_puts("[USB2 fallback]\n");
-          is_usb2 = 1;
-          REG_CPU_MODE = CPU_MODE_USB2;
-          REG_USB_PHY_CTRL_91C0 = 0x10;
+          usb_fallback_to_usb2();
         }
         /* In USB4 mode, SS_FAIL is expected — the SS link goes through
          * the tunnel, not the direct USB3 PHY.  Just ack the event. */
@@ -508,8 +468,7 @@ void int1_isr(void) __interrupt(1) {
 static void usb4_fallback_to_usb3(void) {
   uart_puts("[USB4 fallback]\n");
   usb4_skip_magic = USB4_SKIP_MAGIC;
-  REG_CPU_RESET = CPU_RESET_TRIGGER;
-  while (1) { }
+  cpu_reset();
 }
 
 static void usb4_reinit_usb3_after_reset_fallback(void) {
@@ -552,9 +511,12 @@ void main(void) {
     usb_pipe_engine_init();
     usb4_phy_arm();
   } else {
+    // USB4/PCIe cleanup before USB attach wedges post-reset SuperSpeed.
     usb_phy_tune();
-    usb4_reinit_usb3_after_reset_fallback();
+    usb_reinit_controller();
+    usb_attach_controller();
 
+    usb4_reinit_usb3_after_reset_fallback();
     REG_PCIE_TLP_CTRL   = 0x01;
     REG_PCIE_TLP_LENGTH = 0x20;
     pcie_apply_x2_rxphy_tuning();
@@ -571,8 +533,6 @@ void main(void) {
      * (after PD/tunnel are up).  Clear it at boot so the USB function
      * can enumerate as soon as the host connects. */
     REG_USB_INT_MASK_9090 &= 0x7F;
-  } else {
-    usb_init_controller(0);
   }
 
   // enable interrupts (EX1 = PD/USB4 INT1)
@@ -660,7 +620,7 @@ void main(void) {
         continue;
       }
       if (u4_boot.sb_asserted) { uint32_t b; for (b = 0; b < 60000UL; b++) { __asm nop __endasm; } }
-      else             { sleep(500); }
+      else             { timer_delay_ms(500); }
       /* Give the host a settle window before each Hard Reset kick. Repeated immediate kicks can keep
        * power-cycling the device before the PD contract completes. */
       { static uint8_t pd_settle = 0;
