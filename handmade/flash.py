@@ -13,11 +13,10 @@ from tinygrad.runtime.support.usb import USB3, checked
 USERFW_ID = (0x3801, 0x0001)
 BOOTSTUB_ID = (0x3801, 0xB007)
 TIMEOUT_MS = 5000
-DFU_INFO = struct.Struct("<4sHHIIB")
+DFU_INFO = struct.Struct("<4sHHII")
 USB_SYSFS = Path("/sys/bus/usb/devices")
 TB_SYSFS = Path("/sys/bus/thunderbolt/devices")
 TB_DEBUGFS = Path("/sys/kernel/debug/thunderbolt")
-BOOTSTUB_ABI_VERSION = 1
 
 
 def usb_nodes(vid, pid=None):
@@ -46,8 +45,8 @@ def disconnect_request(h, request):
 
 def get_info(h):
   info = DFU_INFO.unpack(control(h, 0xB4, read=DFU_INFO.size))
-  magic, page, sector, start, end, abi = info
-  valid = (magic == b"A24D" and abi == BOOTSTUB_ABI_VERSION and page and not (page & (page - 1)) and sector
+  magic, page, sector, start, end = info
+  valid = (magic == b"A24D" and page and not (page & (page - 1)) and sector
            and not (sector & (sector - 1)) and page <= sector and not (start & (sector - 1)) and start < end <= 0x1000000)
   assert valid, f"incompatible DFU: {info}"
   return page, sector, start, end

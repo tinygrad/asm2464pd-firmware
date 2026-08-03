@@ -8,11 +8,10 @@ import subprocess
 
 
 MAGIC = b"A24F"
-HDR_SIZE = 0x40
-HASH_OFF = 0x20
+HDR_SIZE = 0x3F
+HASH_OFF = 0x1F
 BODY_MAX = 0xD000
 GITVERSION_SIZE = 23
-BOOTSTUB_ABI_VERSION = 1
 CHECKSUM_SEED = 0xA52464F1
 
 
@@ -34,7 +33,6 @@ if __name__ == "__main__":
     MAGIC
     + gitversion
     + b"\x00" * (GITVERSION_SIZE - len(gitversion))
-    + bytes([BOOTSTUB_ABI_VERSION])
     + struct.pack("<I", len(body))
   )
   assert len(pre) == HASH_OFF

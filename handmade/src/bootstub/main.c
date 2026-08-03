@@ -1,4 +1,4 @@
-/* userfw @ SPI 0x4000: A24F | git[23] | bootstub ABI8 | len32le | xor32le | zero[28] | body.
+/* userfw @ SPI 0x4000: A24F | git[23] | len32le | xor32le | zero[28] | body.
  * XOR covers bytes 0x00..0x1f + body; body loads at CODE 0x3000. */
 
 #include "types.h"
@@ -7,14 +7,13 @@
 #include "flash.h"
 #include "usb.h"
 
-#define BOOTSTUB_ABI_VERSION    0x01U
 #define BOOTSTUB_UNLOCK_MAGIC   0xB007A24FUL
 #define BOOT_SESSION_COOKIE     (*(__xdata volatile uint32_t *)0x5FFC)
 #define BOOT_SESSION_MAGIC      0xB007C01DUL
 #define BOOT_WINDOW_MS          1750U
 
 #define USERFW_FLASH_OFFSET     0x4000UL
-#define USERFW_HEADER_CHECKSUM_LEN 0x20U
+#define USERFW_HEADER_CHECKSUM_LEN 0x1FU
 #define USERFW_CHECKSUM_SEED    0xA52464F1UL
 #define USERFW_CODE_BASE        0x3000U
 #define USERFW_BODY_LIMIT       0xD000UL
@@ -23,7 +22,6 @@
 typedef struct {
   uint8_t  magic[4];
   uint8_t  gitversion[23];
-  uint8_t  bootstub_abi;
   uint32_t body_len;
   uint32_t checksum;
   uint8_t  reserved[28];
@@ -32,7 +30,7 @@ typedef struct {
 #define USERFW_FLASH_END        (USERFW_FLASH_OFFSET + sizeof(userfw_hdr_t) + USERFW_BODY_LIMIT)
 #define USERFW_ERASE_END        ((USERFW_FLASH_END + USERFW_SECTOR_SIZE - 1) & ~(USERFW_SECTOR_SIZE - 1))
 
-#define DFU_INFO_SIZE           17
+#define DFU_INFO_SIZE           16
 
 static void code_write(uint16_t addr, uint8_t val) {
   uint8_t old = PCON;
@@ -123,7 +121,6 @@ static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, 
     *(__xdata uint16_t *)(DESC_BUF + 6) = USERFW_SECTOR_SIZE;
     *(__xdata uint32_t *)(DESC_BUF + 8) = USERFW_FLASH_OFFSET;
     *(__xdata uint32_t *)(DESC_BUF + 12) = USERFW_FLASH_END;
-    DESC_BUF[16] = BOOTSTUB_ABI_VERSION;
     usb_send_data(DFU_INFO_SIZE);
   } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB5) {
     uint32_t magic = ((uint32_t)REG_USB_SETUP_WIDX_H << 24) | ((uint32_t)REG_USB_SETUP_WIDX_L << 16) |
@@ -279,11 +276,6 @@ void main(void) {
     uart_puts("[BS bad-magic]\n");
     dfu_loop();
   }
-  if (hdr.bootstub_abi != BOOTSTUB_ABI_VERSION) {
-    uart_puts("[BS bad-abi]\n");
-    dfu_loop();
-  }
-
   if (hdr.body_len == 0 || hdr.body_len > USERFW_BODY_LIMIT) {
     uart_puts("[BS bad-size]\n");
     dfu_loop();
