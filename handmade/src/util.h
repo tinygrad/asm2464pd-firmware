@@ -1,5 +1,4 @@
-#ifndef UTIL_H
-#define UTIL_H
+#pragma once
 
 #include "types.h"
 #include "registers.h"
@@ -63,5 +62,3 @@ static void uart_puthex(uint8_t val) {
   uart_putc(hex[val >> 4]);
   uart_putc(hex[val & 0x0F]);
 }
-
-#endif /* UTIL_H */

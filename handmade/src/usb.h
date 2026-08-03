@@ -1,5 +1,4 @@
-#ifndef USB_H
-#define USB_H
+#pragma once
 
 #include "types.h"
 #include "registers.h"
@@ -281,5 +280,3 @@ static void usb_handle_get_descriptor(uint8_t is_usb2, uint8_t desc_type,
   usb_desc_copy(src, desc_len);
   usb_send_data(wlen < desc_len ? wlen : desc_len);
 }
-
-#endif /* USB_H */

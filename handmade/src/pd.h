@@ -1,5 +1,4 @@
-#ifndef PD_H
-#define PD_H
+#pragma once
 /*
  * USB-PD / Type-C CC-controller driver: PD attach + power-contract bring-up.
  * Touches the PD engine (E4xx), CC controller (CCxx), interrupt-enable group and PD state RAM.
@@ -857,5 +856,3 @@ static void vdm_tx_dispatch(void) {
 
   vdm_tx_strobe_commit();
 }
-
-#endif /* PD_H */

@@ -10,14 +10,8 @@ import time
 from tinygrad.runtime.autogen import libusb
 from tinygrad.runtime.support.usb import USB3, checked
 
-USERFW_ID = (0xADD1, 0x0001)
-BOOTSTUB_ID = (0xADD1, 0xB007)
-USERFW_FLASH_OFFSET = 0x4000
-SECTOR_SIZE = 0x1000
-PAGE = 64
-PAGE_SS = 512
-USERFW_IMAGE_END = 0x11040
-USERFW_ERASE_END = (USERFW_IMAGE_END + SECTOR_SIZE - 1) & ~(SECTOR_SIZE - 1)
+USERFW_ID = (0x3801, 0x0001)
+BOOTSTUB_ID = (0x3801, 0xB007)
 TIMEOUT_MS = 5000
 DFU_INFO = struct.Struct("<4sHHIIB")
 USB_SYSFS = Path("/sys/bus/usb/devices")
@@ -53,10 +47,10 @@ def disconnect_request(h, request):
 def get_info(h):
   info = DFU_INFO.unpack(control(h, 0xB4, read=DFU_INFO.size))
   magic, page, sector, start, end, abi = info
-  valid = (magic == b"A24D" and abi == BOOTSTUB_ABI_VERSION and page in (PAGE, PAGE_SS) and sector == SECTOR_SIZE
-           and start == USERFW_FLASH_OFFSET and end == USERFW_IMAGE_END)
+  valid = (magic == b"A24D" and abi == BOOTSTUB_ABI_VERSION and page and not (page & (page - 1)) and sector
+           and not (sector & (sector - 1)) and page <= sector and not (start & (sector - 1)) and start < end <= 0x1000000)
   assert valid, f"incompatible DFU: {info}"
-  return page
+  return page, sector, start, end
 
 
 def set_addr(h, addr):
@@ -66,7 +60,7 @@ def set_addr(h, addr):
 
 def router_regs():
   routers = [p.parent.name for p in TB_SYSFS.glob("*/vendor") if int(p.read_text(), 16) == USERFW_ID[0]]
-  assert len(routers) <= 1, f"{len(routers)} ADD1 USB4 routers present"
+  assert len(routers) <= 1, f"{len(routers)} ASM USB4 routers present"
   return TB_DEBUGFS / routers[0] / "regs" if routers else None
 
 
@@ -115,29 +109,30 @@ if __name__ == "__main__":
   parser.add_argument("--timeout", type=float, default=60)
   args = parser.parse_args()
 
-  assert len(usb_nodes(USERFW_ID[0])) <= 1, "multiple ADD1 USB devices present"
+  assert len(usb_nodes(USERFW_ID[0])) <= 1, "multiple ASM USB devices present"
   if args.command == "flash":
     assert args.image, "flash requires an image"
     image = Path(args.image).read_bytes()
-    assert 0 < len(image) <= USERFW_IMAGE_END - USERFW_FLASH_OFFSET
+    assert image
     enter_dfu()
     h = wait_dfu()
-    page = get_info(h)
+    page, sector, start, end = get_info(h)
+    assert len(image) <= end - start
     print(f"bootstub up: {page}-byte writes")
 
-    erase_len = (len(image) + SECTOR_SIZE - 1) & ~(SECTOR_SIZE - 1)
-    assert erase_len <= USERFW_ERASE_END - USERFW_FLASH_OFFSET
-    print(f"  erasing {erase_len // SECTOR_SIZE} sectors")
-    control(h, 0xB0, data=struct.pack("<II", USERFW_FLASH_OFFSET, erase_len), timeout=max(TIMEOUT_MS, 2000 * erase_len // SECTOR_SIZE))
+    erase_len = (len(image) + sector - 1) & ~(sector - 1)
+    assert start + erase_len <= (end + sector - 1) & ~(sector - 1)
+    print(f"  erasing {erase_len // sector} sectors")
+    control(h, 0xB0, data=struct.pack("<II", start, erase_len), timeout=max(TIMEOUT_MS, 2000 * erase_len // sector))
 
     print(f"  writing {len(image)} bytes")
     for off in range(0, len(image), page):
-      set_addr(h, USERFW_FLASH_OFFSET + off)
+      set_addr(h, start + off)
       control(h, 0xB2, data=image[off:off + page])
 
     if args.verify:
-      set_addr(h, USERFW_FLASH_OFFSET)
-      got = b"".join(control(h, 0xB3, read=min(PAGE, len(image) - off)) for off in range(0, len(image), PAGE))
+      set_addr(h, start)
+      got = b"".join(control(h, 0xB3, read=min(page, len(image) - off)) for off in range(0, len(image), page))
       assert got == image, "flash verification failed"
       print("  verify OK")
     if not args.no_reboot:
@@ -149,7 +144,7 @@ if __name__ == "__main__":
     print(f"application up: {wait_app(args.timeout)}")
     enter_dfu()
     h = wait_dfu(args.timeout)
-    print(f"bootstub up: {get_info(h)}-byte writes")
+    print(f"bootstub up: {get_info(h)[0]}-byte writes")
     disconnect_request(h, 0xEB)
     libusb.libusb_close(h)
     print(f"application up: {wait_app(args.timeout)}")

@@ -1,5 +1,4 @@
-#ifndef SB_H
-#define SB_H
+#pragma once
 
 
 static void boot_phy_set_link_mode(uint8_t param);  /* dd42 */
@@ -1530,6 +1529,3 @@ static void sb_router_event_handler(void) {
 
   (void)SB_RD(SB_EVENT_CLEAR_F6);
 }
-
-
-#endif

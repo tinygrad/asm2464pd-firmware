@@ -1,5 +1,4 @@
-#ifndef __REGISTERS_H__
-#define __REGISTERS_H__
+#pragma once
 
 #include "types.h"
 
@@ -2787,5 +2786,3 @@ SFR(0xA8) IE;            // Interrupt enable
 #define P1_PCIE_PHY_7041       0x7041u
 #define P1_PCIE_PHY_7104       0x7104u
 #define P1_TUNNEL_PHY_2805     0x2805u
-
-#endif /* __REGISTERS_H__ */

@@ -21,6 +21,7 @@ jobs:
           make -C handmade clean
           make -C handmade
           make -C handmade wrapped
+          make -C handmade bootstub
 
       - name: Archive firmware artifacts
         uses: actions/upload-artifact@v4
@@ -29,3 +30,4 @@ jobs:
           path: |
             handmade/build/firmware.bin
             handmade/build/firmware_wrapped.bin
+            handmade/build/bootstub_wrapped.bin
