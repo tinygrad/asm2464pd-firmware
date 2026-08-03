@@ -9,6 +9,9 @@
 
 #define BOOTSTUB_ABI_VERSION    0x01U
 #define BOOTSTUB_UNLOCK_MAGIC   0xB007A24FUL
+#define BOOT_SESSION_COOKIE     (*(__xdata volatile uint32_t *)0x5FFC)
+#define BOOT_SESSION_MAGIC      0xB007C01DUL
+#define BOOT_WINDOW_MS          1750U
 
 #define USERFW_FLASH_OFFSET     0x4000UL
 #define USERFW_HEADER_CHECKSUM_LEN 0x20U
@@ -50,6 +53,7 @@ enum { XOP_NONE = 0, XOP_ERASE, XOP_WRITE, XOP_READ };
 __xdata static uint8_t  xfer_op;
 __xdata static uint16_t xfer_op_len;
 __xdata static uint8_t  bootstub_unlocked;
+__xdata static bool     recovery_window;
 
 static void stall_ep0(void) {
     xfer_op = XOP_NONE;
@@ -135,6 +139,7 @@ static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, 
     } else {
         return false;
     }
+    recovery_window = false;
     return true;
 }
 
@@ -205,6 +210,14 @@ static void dfu_loop(void) {
     xfer_op = XOP_NONE;
     xfer_addr = 0;
     bootstub_unlocked = 0;
+    if (recovery_window) {
+        REG_TIMER1_CSR = TIMER_CSR_CLEAR;
+        REG_TIMER1_CSR = TIMER_CSR_EXPIRED;
+        REG_TIMER1_DIV = (REG_TIMER1_DIV & 0xF8) | 0x04U;
+        REG_TIMER1_THRESHOLD_HI = (2U * BOOT_WINDOW_MS) >> 8;
+        REG_TIMER1_THRESHOLD_LO = (2U * BOOT_WINDOW_MS) & 0xFF;
+        REG_TIMER1_CSR = TIMER_CSR_ENABLE;
+    }
 
     while (1) {
         uint8_t s = REG_USB_PERIPH_STATUS;
@@ -235,6 +248,7 @@ static void dfu_loop(void) {
             uint8_t e = REG_USB_PHY_CTRL_91D1;
             REG_USB_PHY_CTRL_91D1 = e;
         }
+        if (recovery_window && (REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && !(s & USB_PERIPH_CONTROL) && usb_wait_ep0_dma_idle()) return;
     }
 }
 
@@ -245,9 +259,19 @@ void main(void) {
     REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
     flash_init();
 
+    recovery_window = false;
+    bool cold_boot = BOOT_SESSION_COOKIE != BOOT_SESSION_MAGIC;
+    BOOT_SESSION_COOKIE = BOOT_SESSION_MAGIC;
+
     if (DFU_COOKIE == DFU_COOKIE_MAGIC) {
         DFU_COOKIE = 0;
         dfu_loop();
+    }
+
+    if (cold_boot) {
+        recovery_window = true;
+        dfu_loop();
+        cpu_reset();
     }
 
     if (!flash_read(USERFW_FLASH_OFFSET, (__xdata uint8_t *)&hdr, sizeof(hdr)) || hdr.magic[0] != 'A' || hdr.magic[1] != '2' ||
