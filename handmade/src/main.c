@@ -505,6 +505,7 @@ static void usb4_reinit_usb3_after_reset_fallback(void) {
   usb4_skip_magic = USB4_SKIP_MAGIC;
   usb_pipe_engine_init();
   REG_CPU_MODE = CPU_MODE_USB3;
+  REG_USB_PHY_CTRL_91C0 &= (uint8_t)~USB_PHY_91C0_FORCE_HS;
   REG_CPU_MODE_NEXT &= 0x1F;
   REG_CPU_CTRL_CA81 &= 0xFE;
   boot_phy_set_link_mode(0);
@@ -566,6 +567,7 @@ void main(void) {
     REG_USB_MODE = 0x01;
     usb_init_controller(0);
     REG_CPU_MODE = CPU_MODE_USB3;
+    REG_USB_PHY_CTRL_91C0 &= (uint8_t)~USB_PHY_91C0_FORCE_HS;
     REG_USB_PHY_CTRL_91C0 |= USB_PHY_91C0_INIT_TOGGLE;
     REG_USB_PHY_CTRL_91C0 &= (uint8_t)~USB_PHY_91C0_INIT_TOGGLE;
     REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL;
