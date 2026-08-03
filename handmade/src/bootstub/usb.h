@@ -1,3 +1,4 @@
+// small USB2-only implementation for bootstub work
 #pragma once
 
 #include "types.h"
