@@ -116,6 +116,7 @@ static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, 
   } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xB4) {
     // send_dfu_info
     if (wLen != DFU_INFO_SIZE) { stall_ep0(); return true; }
+    recovery_window = false;
     DESC_BUF[0] = 'A'; DESC_BUF[1] = '2'; DESC_BUF[2] = '4'; DESC_BUF[3] = 'D';
     *(__xdata uint16_t *)(DESC_BUF + 4) = USB_EP0_SIZE;
     *(__xdata uint16_t *)(DESC_BUF + 6) = USERFW_SECTOR_SIZE;
@@ -136,7 +137,6 @@ static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, 
   } else {
     return false;
   }
-  recovery_window = false;
   return true;
 }
 
@@ -245,7 +245,7 @@ static void dfu_loop(void) {
       uint8_t e = REG_USB_PHY_CTRL_91D1;
       REG_USB_PHY_CTRL_91D1 = e;
     }
-    if (recovery_window && (REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && !(s & USB_PERIPH_CONTROL) && usb_wait_ep0_dma_idle()) return;
+    if (recovery_window && (REG_TIMER1_CSR & TIMER_CSR_EXPIRED)) return;
   }
 }
 
