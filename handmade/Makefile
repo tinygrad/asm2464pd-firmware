@@ -27,8 +27,8 @@ OBJ_DIR = $(BUILD_DIR)/obj
 # Object files
 CRT0_OBJ = $(OBJ_DIR)/crt0.rel
 MAIN_OBJ = $(OBJ_DIR)/main.rel
-BOOTSTUB_CRT0_OBJ = $(OBJ_DIR)/crt0_bootstub.rel
-BOOTSTUB_OBJ = $(OBJ_DIR)/bootstub.rel
+BOOTSTUB_CRT0_OBJ = $(OBJ_DIR)/bootstub/crt0.rel
+BOOTSTUB_OBJ = $(OBJ_DIR)/bootstub/main.rel
 USERFW_CRT0_OBJ = $(OBJ_DIR)/crt0_userfw.rel
 OBJS = $(CRT0_OBJ) $(MAIN_OBJ)
 
@@ -46,29 +46,27 @@ all: $(BIN)
 	@echo "Built: $(BIN)"
 	@ls -la $(BIN)
 
-# Create directories
-$(OBJ_DIR):
-	mkdir -p $(OBJ_DIR)
-
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-# Assemble startup code
-$(OBJ_DIR)/%.rel: $(SRC_DIR)/%.s | $(OBJ_DIR)
+# Assemble startup code.
+$(OBJ_DIR)/%.rel: $(SRC_DIR)/%.s
+	@mkdir -p $(@D)
 	$(AS) -l -o -s $<
-	mv $(SRC_DIR)/$*.rel $@
-	-mv $(SRC_DIR)/$*.lst $(OBJ_DIR)/ 2>/dev/null || true
-	-mv $(SRC_DIR)/$*.sym $(OBJ_DIR)/ 2>/dev/null || true
+	mv $(basename $<).rel $@
+	-mv $(basename $<).lst $(@:.rel=.lst) 2>/dev/null || true
+	-mv $(basename $<).sym $(@:.rel=.sym) 2>/dev/null || true
 
 # Compile C sources. Header deps need a second pass because SDCC has no -MMD.
 $(MAIN_OBJ): FW_CFLAGS = $(CFLAGS)
 $(BOOTSTUB_OBJ): FW_CFLAGS = $(BOOTSTUB_CFLAGS)
 
-$(OBJ_DIR)/%.rel: $(SRC_DIR)/%.c | $(OBJ_DIR)
+$(OBJ_DIR)/%.rel: $(SRC_DIR)/%.c
+	@mkdir -p $(@D)
 	$(CC) $(FW_CFLAGS) -c $< -o $@
-	@$(CC) $(FW_CFLAGS) -MM $< 2>/dev/null | sed 's|^[^:]*:|$@:|' > $(OBJ_DIR)/$*.d
+	@$(CC) $(FW_CFLAGS) -MM $< 2>/dev/null | sed 's|^[^:]*:|$@:|' > $(@:.rel=.d)
 
--include $(OBJ_DIR)/main.d $(OBJ_DIR)/bootstub.d
+-include $(MAIN_OBJ:.rel=.d) $(BOOTSTUB_OBJ:.rel=.d)
 
 # Link object files to Intel HEX
 $(HEX): $(OBJS) | $(BUILD_DIR)

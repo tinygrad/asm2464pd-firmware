@@ -1,4 +1,4 @@
-; Startup skips GSINIT; writable initializers are forbidden.
+; Bootstub startup skips GSINIT; writable initializers are forbidden.
 
     .module bootstub_crt0
     .globl  _main

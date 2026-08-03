@@ -1,11 +1,10 @@
 /* userfw @ SPI 0x4000: A24F | git[23] | bootstub ABI8 | len32le | xor32le | zero[28] | body.
  * XOR covers bytes 0x00..0x1f + body; body loads at CODE 0x3000. */
 
-#define BOOTSTUB 1
-
 #include "types.h"
 #include "registers.h"
 #include "util.h"
+#include "flash.h"
 #include "usb.h"
 
 #define BOOTSTUB_ABI_VERSION    0x01U
@@ -199,11 +198,9 @@ static void run_deferred_xfer_op(void) {
 
 static void dfu_loop(void) {
     uart_puts("[DFU]\n");
-    usb_phy_tune();
-    usb_reinit_controller();
+    usb_init();
     // PERIPH_STATUS updates only while IE.EA is set.
     IE = 0x80;
-    usb_attach_controller();
 
     xfer_op = XOP_NONE;
     xfer_addr = 0;
@@ -235,15 +232,8 @@ static void dfu_loop(void) {
             // INT_MASK_9090[6:0] does not reset with the USB bus.
             REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL;
             xfer_addr = 0;
-            usb_configuration = 0;
             uint8_t e = REG_USB_PHY_CTRL_91D1;
             REG_USB_PHY_CTRL_91D1 = e;
-        } else if (s & USB_PERIPH_LINK_EVENT) {
-            uint8_t e = REG_BUF_CFG_9300;
-            if (e & BUF_CFG_9300_SS_FAIL) {
-                usb_fallback_to_usb2();
-            }
-            REG_BUF_CFG_9300 = (e & BUF_CFG_9300_SS_EVENT) ? BUF_CFG_9300_SS_FAIL : e;
         }
     }
 }
@@ -253,7 +243,6 @@ void main(void) {
     uart_puts("\n[BS]\n");
 
     REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
-    usb_init_endpoint_state();
     flash_init();
 
     if (DFU_COOKIE == DFU_COOKIE_MAGIC) {
@@ -271,7 +260,6 @@ void main(void) {
         dfu_loop();
     }
 
-    // An empty body has a valid CRC but no reset vector.
     if (hdr.body_len == 0 || hdr.body_len > USERFW_BODY_LIMIT) {
         uart_puts("[BS bad-size]\n");
         dfu_loop();

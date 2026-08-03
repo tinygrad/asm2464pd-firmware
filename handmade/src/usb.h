@@ -4,21 +4,18 @@
 #include "types.h"
 #include "registers.h"
 #include "flash.h"
-#include "util.h"
 
 #define DESC_BUF ((__xdata uint8_t *)USB_CTRL_BUF_BASE)
 
-static uint8_t is_usb2;
-static uint8_t usb_configuration;
-
-#define USB_EP0_SIZE (is_usb2 ? 64U : 512U)
-
 /*=== USB device identification ===*/
 #define USB_VID                 0x3801
+#define USB_PID                 0x0001
+#define USB_BCD_DEVICE          0x0001
 #define USB_LANG_ID             0x0409   /* US English */
 
 /* String descriptors */
 #define USB_STR_MFG             "tiny"
+#define USB_STR_PRODUCT         "custom v0.1"
 
 #define USB_STR_IDX_LANG        0
 #define USB_STR_IDX_MFG         1
@@ -28,22 +25,27 @@ static uint8_t usb_configuration;
 /*=== Helpers ===*/
 #define U16_LE(v)               ((v) & 0xFF), (((v) >> 8) & 0xFF)
 
-#ifdef BOOTSTUB
+/*=== Device descriptors ===*/
 
-#define USB_PID                 0xB007
-#define USB_STR_PRODUCT         "bootstub"
-
-static __code const uint8_t usb_cfg_desc[] = {
-  0x09, 0x02, U16_LE(18), 0x01, 0x01, 0x00, 0xC0, 0x00,
-  0x09, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00,
+static __code const uint8_t usb_dev_desc[] = {
+  0x12, 0x01,                 /* bLength=18, bDescriptorType=DEVICE */
+  U16_LE(0x0200),             /* bcdUSB = 2.00 */
+  0x00, 0x00, 0x00,           /* bDeviceClass / SubClass / Protocol */
+  0x40,                       /* bMaxPacketSize0 = 64 */
+  U16_LE(USB_VID), U16_LE(USB_PID), U16_LE(USB_BCD_DEVICE),
+  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL,
+  0x01,                       /* bNumConfigurations */
 };
 
-#define usb_cfg_desc_ss usb_cfg_desc
-
-#else
-
-#define USB_PID                 0x0001
-#define USB_STR_PRODUCT         "custom v0.1"
+static __code const uint8_t usb_dev_desc_ss[] = {
+  0x12, 0x01,                 /* bLength=18, bDescriptorType=DEVICE */
+  U16_LE(0x0320),             /* bcdUSB = 3.20 */
+  0x00, 0x00, 0x00,           /* bDeviceClass / SubClass / Protocol */
+  0x09,                       /* bMaxPacketSize0 = 2^9 = 512 (SuperSpeed) */
+  U16_LE(USB_VID), U16_LE(USB_PID), U16_LE(USB_BCD_DEVICE),
+  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL,
+  0x01,                       /* bNumConfigurations */
+};
 
 /*=== Configuration descriptors ===*/
 
@@ -81,24 +83,6 @@ static __code const uint8_t usb_cfg_desc_ss[] = {
   0x07, 0x05, 0x04, 0x02, U16_LE(1024), 0x00,           /* EP4 OUT Data-Out */
   0x06, 0x30, 0x00, 0x00, U16_LE(0x0000),
   0x04, 0x24, 0x01, 0x00,
-};
-
-#endif
-
-/*=== Device descriptors ===*/
-
-static __code const uint8_t usb_dev_desc[] = {
-  0x12, 0x01, U16_LE(0x0200),
-  0x00, 0x00, 0x00, 0x40,
-  U16_LE(USB_VID), U16_LE(USB_PID), U16_LE(0x0001),
-  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL, 0x01,
-};
-
-static __code const uint8_t usb_dev_desc_ss[] = {
-  0x12, 0x01, U16_LE(0x0320),
-  0x00, 0x00, 0x00, 0x09,
-  U16_LE(USB_VID), U16_LE(USB_PID), U16_LE(0x0001),
-  USB_STR_IDX_MFG, USB_STR_IDX_PRODUCT, USB_STR_IDX_SERIAL, 0x01,
 };
 
 /*=== BOS descriptor ===*/
@@ -183,6 +167,20 @@ static void usb_phy_tune(void) {
     usb_serdes_tune_lane(0xC300);  /* lane 1 */
 }
 
+static void usb_init_controller(uint8_t force_usb2) {
+    REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
+    REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
+    REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
+    REG_USB_EP0_CFG = 0xF0;
+    REG_USB_DATA_L = 0x00;
+    REG_USB_EP_MGMT = 0x00;
+    REG_BUF_CFG_9303 = 0x33;
+    if (force_usb2) {
+        REG_CPU_MODE = CPU_MODE_USB2;
+        REG_USB_PHY_CTRL_91C0 = 0x10;
+    }
+}
+
 /* Bring up the USB PIPE/PHY engine; run unconditionally at boot. */
 static void usb_pipe_engine_init(void) {
     REG_POWER_ENABLE      = (REG_POWER_ENABLE & 0x7F) | 0x80;
@@ -222,47 +220,6 @@ static void usb4_phy_arm(void) {
     REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
 }
 
-/* CPU reset preserves USB state. */
-static void usb_reinit_controller(void) {
-    is_usb2 = 0;
-    usb_configuration = 0;
-    REG_DMA_CONFIG = DMA_CONFIG_DISABLE;
-    usb_init_endpoint_state();
-    // usb_init_controller
-    REG_POWER_STATUS &= ~POWER_STATUS_USB_PATH;
-    REG_INT_STATUS_C800 = INT_STATUS_GLOBAL;
-    REG_USB_CONFIG = USB_CONFIG_MSC_INIT;
-    REG_USB_EP0_CFG = 0xF0;
-    REG_USB_DATA_L = 0x00;
-    REG_USB_EP_MGMT = 0x00;
-    REG_BUF_CFG_9303 = 0x33;
-    REG_CPU_MODE = CPU_MODE_USB3;
-    REG_USB_PHY_CTRL_91C0 |= USB_PHY_91C0_INIT_TOGGLE;
-    REG_USB_PHY_CTRL_91C0 &= (uint8_t)~USB_PHY_91C0_INIT_TOGGLE;
-}
-
-static void usb_fallback_to_usb2(void) {
-    is_usb2 = 1;
-    REG_CPU_MODE = CPU_MODE_USB2;
-    REG_USB_PHY_CTRL_91C0 = USB_PHY_91C0_FORCE_HS;
-}
-
-static void usb_attach_controller(void) {
-    REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL;
-    REG_USB_POWER_CYCLE = 0;
-    timer_delay_ms(25);
-    REG_USB_POWER_CYCLE = USB_POWER_CYCLE_TRIGGER;
-    timer_delay_ms(25);
-}
-
-static uint8_t usb_wait_ep0_dma_idle(void) {
-    uint16_t timeout = 0xFFFF;
-    do {
-        if (REG_USB_DMA_TRIGGER == 0) return 1;
-    } while (--timeout);
-    return 0;
-}
-
 /* EP0 IN: send `len` bytes of DESC_BUF, or a zero-length ack. */
 static void usb_send_data(uint16_t len) {
     REG_USB_EP0_LEN_H = (uint8_t)(len >> 8);
@@ -271,16 +228,19 @@ static void usb_send_data(uint16_t len) {
     REG_USB_CTRL_PHASE  = USB_CTRL_PHASE_DATA_IN;
 }
 static void usb_send_zlp(void) { usb_send_data(0); }
-static void usb_stall_ep0(void) {
-    REG_USB_DMA_TRIGGER = USB_DMA_STALL;
-    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_ALL;
-}
 
 static void usb_desc_copy(__code const uint8_t *src, uint8_t len) {
     for (uint8_t i = 0; i < len; i++) DESC_BUF[i] = src[i];
 }
 
-static void usb_handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint16_t wlen) {
+static void usb_handle_set_address(uint8_t wValL) {
+    REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
+    REG_USB_EP_CTRL_91D0  = 0x02;
+    usb_send_zlp();
+}
+
+static void usb_handle_get_descriptor(uint8_t is_usb2, uint8_t desc_type,
+                                      uint8_t desc_idx, uint16_t wlen) {
   __code const uint8_t *src;
   uint8_t desc_len;
 
@@ -296,8 +256,8 @@ static void usb_handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint1
     /* Built directly into DESC_BUF; bypass desc_copy. */
     if (desc_idx == USB_STR_IDX_LANG) {
       DESC_BUF[0] = 4; DESC_BUF[1] = 0x03;
-      DESC_BUF[2] = (uint8_t)USB_LANG_ID;
-      DESC_BUF[3] = USB_LANG_ID >> 8;
+      DESC_BUF[2] = USB_LANG_ID & 0xFF;
+      DESC_BUF[3] = (USB_LANG_ID >> 8) & 0xFF;
       desc_len = 4;
     } else if (desc_idx == USB_STR_IDX_SERIAL) {
       desc_len = usb_build_serial_desc(DESC_BUF);
@@ -313,59 +273,13 @@ static void usb_handle_get_descriptor(uint8_t desc_type, uint8_t desc_idx, uint1
     usb_send_data(wlen < desc_len ? wlen : desc_len);
     return;
   } else {
-    usb_stall_ep0();
+    REG_USB_DMA_TRIGGER = USB_DMA_STALL;
+    REG_USB_CTRL_PHASE = USB_CTRL_PHASE_ALL;
     return;
   }
 
   usb_desc_copy(src, desc_len);
   usb_send_data(wlen < desc_len ? wlen : desc_len);
-}
-
-static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, uint8_t wValH, uint16_t wLen);
-
-static void usb_handle_setup(void) {
-  uint8_t bmReq = REG_USB_SETUP_BMREQ;
-  uint8_t bReq = REG_USB_SETUP_BREQ;
-  uint8_t wValL = REG_USB_SETUP_WVAL_L;
-  uint8_t wValH = REG_USB_SETUP_WVAL_H;
-  uint16_t wLen = ((uint16_t)REG_USB_SETUP_WLEN_H << 8) | REG_USB_SETUP_WLEN_L;
-
-  if (usb_handle_custom_setup(bmReq, bReq, wValL, wValH, wLen)) {
-    return;
-  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS && wValH == 0 && wLen == 0) {
-    REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL | (wValL & 0x7F);
-    REG_USB_EP_CTRL_91D0 = 0x02;
-    usb_send_zlp();
-  } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
-    usb_handle_get_descriptor(wValH, wValL, wLen);
-  } else if ((bmReq == USB_SETUP_DIR_DEV_TO_HOST || bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) ||
-              bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_ENDPOINT)) &&
-             bReq == USB_REQ_GET_STATUS && wValL == 0 && wValH == 0 && wLen == 2) {
-    DESC_BUF[0] = bmReq == USB_SETUP_DIR_DEV_TO_HOST;
-    DESC_BUF[1] = 0;
-    usb_send_data(2);
-  } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_CONFIGURATION && wLen == 1) {
-    DESC_BUF[0] = usb_configuration;
-    usb_send_data(1);
-  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION && wValH == 0 && wValL <= 1 && wLen == 0) {
-    usb_configuration = wValL;
-    usb_send_zlp();
-  } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_GET_INTERFACE && wLen == 1) {
-    DESC_BUF[0] = 0;
-    usb_send_data(1);
-  } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE &&
-             wValH == 0 && wValL == 0 && wLen == 0) {
-    usb_send_zlp();
-  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_SEL && wLen == 6) {
-    // Accept and ignore the payload.
-  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ISOCH_DELAY && wLen == 0) {
-    usb_send_zlp();
-  } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && (bReq == USB_REQ_SET_FEATURE || bReq == USB_REQ_CLEAR_FEATURE) &&
-             wValH == 0 && (wValL == 48 || wValL == 49) && wLen == 0) {
-    usb_send_zlp();
-  } else {
-    usb_stall_ep0();
-  }
 }
 
 #endif /* USB_H */
