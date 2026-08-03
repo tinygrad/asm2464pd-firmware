@@ -19,6 +19,11 @@ static void flash_poll_busy(void) {
   } while (--timeout);
 }
 
+static void flash_wait_buffer(void) {
+  // BUSY drops before the flash DMA's XDATA writes are visible to the CPU.
+  for (uint8_t i = 0; i < 8; i++) __asm nop __endasm;
+}
+
 /* Issue a flash command. addr_len: 0x04 = no address byte; 0x07 = 24-bit
  * address. data_len: bytes the controller will clock in / out via the
  * 0x7000 buffer. */
@@ -35,8 +40,8 @@ static void flash_cmd(uint8_t cmd, uint32_t addr, uint8_t addr_len, uint16_t dat
   REG_FLASH_DATA_BYTE_OFS = data_len & 0xFF;
   REG_FLASH_CSR = 0x01;
   flash_poll_busy();
-  REG_FLASH_MODE = 0; REG_FLASH_MODE = 0;
-  REG_FLASH_MODE = 0; REG_FLASH_MODE = 0;
+  if (data_len) flash_wait_buffer();
+  REG_FLASH_MODE = 0;
 }
 
 /* OTP layout (programmed by provisioning scripts): 4-byte serial +

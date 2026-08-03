@@ -20,6 +20,11 @@ static uint8_t flash_poll_busy(void) {
     return 1;
 }
 
+static void flash_wait_buffer(void) {
+    // BUSY drops before the flash DMA's XDATA writes are visible to the CPU.
+    for (uint8_t i = 0; i < 8; i++) __asm nop __endasm;
+}
+
 static void flash_init(void) {
     REG_CPU_EXEC_STATUS_2 = 0x04;
     REG_INT_AUX_STATUS = 0x02;
@@ -51,6 +56,7 @@ static uint8_t flash_cmd(uint8_t command, uint32_t address, uint8_t address_mode
     REG_FLASH_CSR = FLASH_CSR_BUSY;
 
     ok = flash_poll_busy();
+    if (ok && length && !write) flash_wait_buffer();
     REG_FLASH_MODE = 0;
     return ok;
 }
