@@ -84,6 +84,7 @@
  * Also doubles as the SPI flash controller's data buffer for read/write
  * (see flash.h).
  */
+#define REG_FLASH_BUF_BYTE(off) XDATA_REG8(FLASH_BUFFER_BASE + (off))
 #define FLASH_BUF               ((__xdata uint8_t *)FLASH_BUFFER_BASE)
 
 // Flash buffer control registers (0x7041, 0x78AF-0x78B2)
@@ -628,6 +629,7 @@
 #define REG_USB_SETUP_WLEN_L    XDATA_REG8(0x910A)  /* wLength low */
 #define REG_USB_SETUP_WLEN_H    XDATA_REG8(0x910B)  /* wLength high */
 
+
 /*
  * USB Bulk OUT Byte Count (0x910D-0x910E)
  *
@@ -746,6 +748,7 @@
 #define   USB_91D1_LINK_RESET     0x04  // Bit 2: Link reset ack (C6A8|=1, clears flags)
 #define   USB_91D1_POWER_MGMT     0x08  // Bit 3: Power management U1/U2 entry (CC3B&=~2, TLP_BASE_LO=1)
 #define   USB_91D1_ALL            0x0F  // All event bits (for init clear)
+
 
 // USB control registers (0x9200-0x92BF)
 #define REG_USB_CTRL_9200       XDATA_REG8(0x9200)  /* USB control base */
@@ -1108,7 +1111,7 @@
 #define REG_TUNNEL_LINK_STATUS  XDATA_REG8(0xB431)  // Tunnel link training status (stock=0x0C when trained)
 #define   PCIE_LINK_WIDTH_x2    0xC
 #define   PCIE_LINK_WIDTH_x1    0xE
-#define REG_POWER_CTRL_B432     XDATA_REG8(0xB432)  // Low bits reach 0x07 once the USB4 PCIe-down path is powered
+#define REG_POWER_CTRL_B432     XDATA_REG8(0xB432)  // Power control for lanes (low 3 bits = link width)
 #define REG_TUNNEL_CTRL_B403    XDATA_REG8(0xB403)  // Tunnel control (stock=0x01 when trained, set by PHY events)
 #define REG_PCIE_LINK_STATE     XDATA_REG8(0xB434)  // PCIe link state (low nibble = lane enable mask)
 #define   PCIE_LINK_STATE_MASK    0x0F  // Bits 0-3: PCIe link state/lane mask
@@ -1129,9 +1132,9 @@
  *   0x48 = L0 (link trained, normal operation) — observed on ASMedia 174C:2463 stock
  *   0x78 = L0 (link trained) — observed on tinygrad 3801:0001 stock
  *
- * B450 oscillating between 0x00 and 0x01 means the local PHY detects receiver
- * impedance (GPU present) but cannot advance to Polling. In non-USB4 direct
- * PCIe mode this indicates a PHY configuration or power issue.
+ * B450 oscillating between 0x00 and 0x01 means the PHY detects receiver
+ * impedance (GPU present) but cannot advance to Polling. This indicates
+ * a PHY configuration or power issue, not a missing device.
  */
 #define REG_PCIE_LTSSM_STATE    XDATA_REG8(0xB450)
 #define   LTSSM_DETECT_QUIET      0x00
@@ -1501,15 +1504,12 @@
 #define   PHY_EXT_SIGNAL_CFG      HDDPC_ENABLE        // Legacy alias
 /*
  * PCIe Lane Control (0xC659)
- * Bit 0: downstream PCIe lane/power enable. Direct PCIe and stock USB4 both
- *   set this before the endpoint LTSSM can leave Detect.
- * Bit 3: companion lane/PHY control bit preserved by the USB4 tunnel path.
- *
- * Failure signature: USB4 tunnel exists but endpoint is absent, LTSSM=0x00,
- * REG_PHY_PCIE_LINK_INFO=Gen1 x1, and C659.0 is clear.
+ * Bit 0: Lane enable control.
+ *   Stock firmware clears it during init (E612 with r7 bit 0 set).
+ *   Gets SET back during link training by PHY event handlers.
+ *   Stock trained value: 0x01. Custom untrained value: 0x00.
  */
 #define REG_PCIE_LANE_CTRL_C659 XDATA_REG8(0xC659)
-#define   PCIE_LANE_CTRL_ENABLE    0x01
 #define REG_PHY_CFG_C65A        XDATA_REG8(0xC65A)  /* PHY config (bit 3 set by flash_set_bit3) */
 #define   PHY_CFG_C65A_BIT3       0x08  // Bit 3: PHY config flag
 #define REG_PHY_EXT_5B          XDATA_REG8(0xC65B)
@@ -1695,7 +1695,6 @@
 #define REG_TIMER0_THRESHOLD    XDATA_REG16(0xCC12)
 #define REG_TIMER0_THRESHOLD_HI XDATA_REG8(0xCC12)  /* Timer 0 threshold high byte */
 #define REG_TIMER0_THRESHOLD_LO XDATA_REG8(0xCC13)  /* Timer 0 threshold low byte */
-/* Timer1 is independent of the CC10-CC13 PHY/PD command mailbox. */
 #define REG_TIMER1_DIV          XDATA_REG8(0xCC16)
 #define REG_TIMER1_CSR          XDATA_REG8(0xCC17)
 #define REG_TIMER1_THRESHOLD    XDATA_REG16(0xCC18)
@@ -1862,8 +1861,8 @@
 #define REG_XFER_DMA_DATA_HI    XDATA_REG8(0xCC9B)  /* Transfer DMA data high */
 // Secondary transfer DMA controller
 #define REG_XFER2_DMA_CTRL      XDATA_REG8(0xCCD8)  /* Transfer 2 DMA control */
-#define REG_XFER2_DMA_STATUS    XDATA_REG8(0xCCD9)  /* Transfer 2 DMA status/doorbell */
-#define   XFER2_DMA_STATUS_ACK   0x02  // Bit 1: stock 97ef writes 0x04 then 0x02; ISR acks bit 1
+#define REG_XFER2_DMA_STATUS    XDATA_REG8(0xCCD9)  /* Transfer 2 DMA status */
+#define   XFER2_DMA_STATUS_ACK   0x02  // Bit 1: Acknowledge status
 #define REG_TIMER5_CSR          XDATA_REG8(0xCCB9)  /* Timer 5 control/status (alternate) */
 #define REG_XFER2_DMA_ADDR_LO   XDATA_REG8(0xCCDA)  /* Transfer 2 DMA address low */
 #define REG_XFER2_DMA_ADDR_HI   XDATA_REG8(0xCCDB)  /* Transfer 2 DMA address high */
@@ -2302,6 +2301,7 @@
 // Timer/CPU Control (0xCC00-0xCCFF)
 //=============================================================================
 
+
 //=============================================================================
 // Debug/Interrupt (0xE600-0xE6FF)
 //=============================================================================
@@ -2369,18 +2369,18 @@
 #define REG_SYS_CTRL_E763       REG_PHY_RXPLL_TRIGGER // Legacy alias
 /*
  * PHY Timer Control (0xE764)
- * Downstream PCIe LTSSM/training control. Direct PCIe bring-up writes 0x1c
- * after enabling rails/PERST; the USB4 tunnel path must also write 0x1c after
- * programming the USB4 width/rate or the endpoint remains in Detect.
+ * Configured during hw_init (written 0x14 four times).
+ * Stock trained value: 0x19 (bits 0,3,4 set) — bits 0,3 get set during link training.
+ * Custom untrained value: 0x14 (bit 2,4 set).
  */
 #define REG_PHY_TIMER_CTRL_E764 XDATA_REG8(0xE764)
-#define   PHY_TIMER_PCIE_TRAIN_USB4 0x1C
 #define REG_SYS_CTRL_E765       XDATA_REG8(0xE765)  /* System control E765 */
 #define   SYS_CTRL_E765_PCIE_LINK_UP  0x02           /*   Bit 1: PCIe link is up */
 #define REG_SYS_CTRL_E76C       XDATA_REG8(0xE76C)  /* System control */
 #define REG_SYS_CTRL_E774       XDATA_REG8(0xE774)  /* System control */
 #define REG_SYS_CTRL_E77C       XDATA_REG8(0xE77C)  /* System control */
 #define REG_SYS_CTRL_E780       XDATA_REG8(0xE780)  /* System control */
+#define REG_FLASH_READY_STATUS  XDATA_REG8(0xE795)
 #define REG_PHY_LINK_CTRL       XDATA_REG8(0xE7E3)
 #define   PHY_LINK_CTRL_BIT6      0x40  // Bit 6: PHY link control flag
 #define   PHY_LINK_CTRL_BIT7      0x80  // Bit 7: PHY link ready
@@ -2412,40 +2412,10 @@
 #define REG_BANK_0200           XDATA_REG8(0x0200)  /* Bank register at 0x0200 */
 #define REG_BANK_1200           XDATA_REG8(0x1200)  /* Bank register at 0x1200 */
 #define REG_BANK_1235           XDATA_REG8(0x1235)  /* Bank register at 0x1235 */
-/* Direct page-1 accessors used by the src/ firmware (handmade uses the P1_USB4_* addresses below). */
-#define REG_BANK_1407           XDATA_REG8(0x1407)  /* Bank register at 0x1407 (= P1_USB4_ADP_EVENT_STATUS_1407) */
+#define REG_BANK_1407           XDATA_REG8(0x1407)  /* Bank register at 0x1407 */
 #define REG_BANK_1504           XDATA_REG8(0x1504)  /* Bank register at 0x1504 */
-#define REG_BANK_1507           XDATA_REG8(0x1507)  /* Bank register at 0x1507 (= P1_USB4_TUNNEL_EVENT_MASK_1507) */
-#define REG_BANK_1603           XDATA_REG8(0x1603)  /* Bank register at 0x1603 (= P1_USB4_BOOT_TAIL_EVENT_1603) */
-/* USB4 page-1 config-space and event registers. Use P1_RD/P1_WR, not direct XDATA_REG8. */
-#define P1_USB4_WIDTH_EVENT_1203        0x1203u  /* width-event flag .7, W1C, a522 gate to c8c7 */
-#define P1_USB4_CFG_ENABLE_121E         0x121Eu  /* config/control-adapter enable .0; d894 tail */
-#define P1_USB4_ADP_EVENT_MASK_1406     0x1406u  /* secondary-adapter event aggregation mask */
-#define P1_USB4_ADP_EVENT_STATUS_1407   0x1407u  /* .0 width event, .3 tunnel event; c105 source */
-#define P1_USB4_TUNNEL_EVENT_MASK_1507  0x1507u  /* tunnel-event aggregation mask */
-#define P1_USB4_TUNNEL_EVENT_STATUS_1508 0x1508u /* tunnel event bits: enable/dispatch/reset */
-#define P1_USB4_BOOT_TAIL_CTRL_1602     0x1602u  /* d894 boot-tail event control */
-#define P1_USB4_BOOT_TAIL_EVENT_1603    0x1603u  /* d894 boot-tail W1C event register */
-#define P1_USB4_DROM_SHADOW_0240        0x0240u  /* router DROM shadow base; bytes served by native DROM_READ */
-/*
- * USB4 router native operation config-space dwords. The host writes CS_25
- * metadata and CS_26 with the OV bit set, then polls for firmware to clear OV.
- * Responses are returned in CS_9+ with CS_25 holding the response dword count.
- */
-#define USB4_ROUTER_CS_DATA0             0x09u
-#define USB4_ROUTER_CS_METADATA          0x19u
-#define USB4_ROUTER_CS_OPCODE            0x1Au
-#define USB4_ROUTER_OP_OV                0x80000000UL
-#define USB4_ROUTER_OP_UNSUPPORTED       0x40000000UL
-#define USB4_ROUTER_OP_DROM_READ         0x24u
-#define USB4_ROUTER_OP_NVM_SECTOR_SIZE   0x25u
-#define USB4_ROUTER_OP_BUFFER_ALLOC      0x33u
-/*
- * Custom tiny native op. Returns one dword in CS_9:
- *   bits 15:0  = INA231 bus voltage in mV
- *   bits 31:16 = INA231 shunt current in signed mA
- */
-#define USB4_ROUTER_OP_TINY_HW_STATUS    0xC0u
+#define REG_BANK_1507           XDATA_REG8(0x1507)  /* Bank register at 0x1507 */
+#define REG_BANK_1603           XDATA_REG8(0x1603)  /* Bank register at 0x1603 */
 #define REG_BANK_2269           XDATA_REG8(0x2269)  /* Bank register at 0x2269 */
 
 //=============================================================================
@@ -2516,263 +2486,5 @@
 //=============================================================================
 #define TIMEOUT_NVME            5000
 #define TIMEOUT_DMA             10000
-
-/* USB4 lane-train / PHY-orient / lane-rate registers. */
-#define REG_PHY_ORIENT_C2C3      XDATA_REG8V(0xC2C3)
-#define REG_LANE_RATE_C8FF       XDATA_REG8V(0xC8FF)
-#define REG_LANE_TRAIN_CTRL      XDATA_REG8V(0xCCE0)
-#define REG_LANE_TRAIN_ARM       XDATA_REG8V(0xCCE1)
-#define REG_LANE_TRAIN_MASK_LO   XDATA_REG8V(0xCCE2)
-#define REG_LANE_TRAIN_MASK_HI   XDATA_REG8V(0xCCE3)
-#define REG_LANE_WIDTH_CNT_HI    XDATA_REG8V(0xCCE4)
-#define REG_LANE_WIDTH_CNT_LO    XDATA_REG8V(0xCCE5)
-
-/* USB4 PHY/PD/router-op register labels. */
-#define REG_PCIE_LINK_STATE_HI_B435        XDATA_REG8V(0xB435)  /* PCIe link-state adjacent byte (no label) */
-#define REG_PCIE_LANE_CONFIG_HI_B437       XDATA_REG8V(0xB437)  /* PCIe lane-config adjacent byte (no label) */
-#define REG_PHY_CDR_SEED_C210              XDATA_REG8V(0xC210)  /* PHY RXPLL/CDR descriptor seed (c306 trim) */
-#define REG_PHY_CDR_SEED_C211              XDATA_REG8V(0xC211)  /* PHY RXPLL/CDR descriptor seed (c306 trim) */
-#define REG_PHY_CDR_SEED_C212              XDATA_REG8V(0xC212)  /* PHY RXPLL/CDR descriptor seed (c306 trim) */
-#define REG_PHY_CDR_SEED_C214              XDATA_REG8V(0xC214)  /* PHY RXPLL/CDR descriptor seed (c307 trim) */
-#define REG_PHY_CDR_SEED_C215              XDATA_REG8V(0xC215)  /* PHY RXPLL/CDR descriptor seed (c307 trim) */
-#define REG_PHY_CDR_SEED_C216              XDATA_REG8V(0xC216)  /* PHY RXPLL/CDR descriptor seed (c307 trim) */
-#define REG_PHY_CDR_SEED_C217              XDATA_REG8V(0xC217)  /* PHY RXPLL/CDR descriptor seed (c307 trim) */
-#define REG_PHY_LINK_CTRL_C21C             XDATA_REG8V(0xC21C)  /* PHY link control bit6 (e373 b796 set) */
-#define REG_PHY_LINK_CTRL_C21D             XDATA_REG8V(0xC21D)  /* PHY link control bits7:6 (8f8e set) */
-#define REG_PHY_LINK_CTRL_C21F             XDATA_REG8V(0xC21F)  /* PHY link control; 8e31 c390 then = (C2A8&0x3F)|0x40 (lane-A rate-START commit) */
-#define REG_PHY_LANEA_C282                 XDATA_REG8V(0xC282)  /* PHY lane-A equalizer trim (DAC8 init) */
-#define REG_PHY_LANEA_C283                 XDATA_REG8V(0xC283)  /* PHY lane-A trim (gen6 bits2:3 clear) */
-#define REG_PHY_LANEA_C289                 XDATA_REG8V(0xC289)  /* PHY lane-A equalizer trim (DAC8 init) */
-#define REG_PHY_LANEA_C28B                 XDATA_REG8V(0xC28B)  /* PHY lane-A equalizer trim (DAC8 init) */
-#define REG_PHY_LANEA_C28C                 XDATA_REG8V(0xC28C)  /* PHY lane-A trim (paired C30C) */
-#define REG_PHY_LANEA_C290                 XDATA_REG8V(0xC290)  /* PHY lane-A equalizer trim (paired C310) */
-#define REG_PHY_LANEA_C292                 XDATA_REG8V(0xC292)  /* PHY lane-A equalizer trim (paired C312) */
-#define REG_PHY_LANEA_C293                 XDATA_REG8V(0xC293)  /* PHY lane-A eq retrim bits1:0 (paired C313) */
-#define REG_PHY_LANEA_C294                 XDATA_REG8V(0xC294)  /* PHY lane-A eq retrim bits3:0 (paired C314) */
-#define REG_PHY_LANEA_C295                 XDATA_REG8V(0xC295)  /* PHY lane-A trim (paired C315) */
-#define REG_PHY_LANEA_LOCK_C297            XDATA_REG8V(0xC297)  /* PHY lane-A trim/lock (bit5=locked gate) */
-#define REG_PHY_LANEA_C29A                 XDATA_REG8V(0xC29A)  /* PHY lane-A trim bits3:0 (paired C31A) */
-#define REG_PHY_LANEA_C29B                 XDATA_REG8V(0xC29B)  /* PHY lane-A trim (bits5:0 clear) */
-#define REG_PHY_LANEA_C2A0                 XDATA_REG8V(0xC2A0)  /* PHY lane-A trim (paired C320) */
-#define REG_PHY_LANEA_C2A1                 XDATA_REG8V(0xC2A1)  /* PHY lane-A trim bits6:5 (paired C321) */
-#define REG_PHY_LANEA_C2A4                 XDATA_REG8V(0xC2A4)  /* PHY lane-A trim (paired C324) */
-#define REG_PHY_LANEA_LOCK_C2A7            XDATA_REG8V(0xC2A7)  /* PHY lane-A trim/lock (bit5=locked gate) */
-#define REG_PHY_LANEA_RATE_START_C2A8      XDATA_REG8V(0xC2A8)  /* PHY lane-A rate-desc START (bit7) trim */
-#define REG_PHY_LANEA_C2AB                 XDATA_REG8V(0xC2AB)  /* PHY lane-A trim (bits5:0 clear) */
-#define REG_PHY_LANEA_C2BC                 XDATA_REG8V(0xC2BC)  /* PHY lane-A trim bits1:0 (paired C33C) */
-#define REG_PHY_LANEA_C2C4                 XDATA_REG8V(0xC2C4)  /* PHY lane-A DPX cfg bit6 (paired C344) */
-#define REG_PHY_LANEA_C2C5                 XDATA_REG8V(0xC2C5)  /* PHY lane-A eq trim bits3:0 (paired C345) */
-#define REG_PHY_LANEA_RATE_DESC_C2C9       XDATA_REG8V(0xC2C9)  /* PHY lane-A rate descriptor (from C2EC) */
-#define REG_PHY_LANEA_CDR_C2CB             XDATA_REG8V(0xC2CB)  /* PHY lane-A CDR cfg bit2 (e35f, paired C34B) */
-#define REG_PHY_LANEA_C2CE                 XDATA_REG8V(0xC2CE)  /* PHY lane-A trim bits4:2 (paired C34E) */
-#define REG_PHY_LANEA_LOCK_C2D0            XDATA_REG8V(0xC2D0)  /* PHY lane-A lock status (bit5 rate,bit6 PLL) */
-#define REG_PHY_LANEA_MARGIN_PHASE_C2D2    XDATA_REG8V(0xC2D2)  /* PHY lane-A CDR phase margin (bits5:0) */
-#define REG_PHY_LANEA_MARGIN_EYE_C2D9      XDATA_REG8V(0xC2D9)  /* PHY lane-A CDR eye-margin sample lo */
-#define REG_PHY_LANEA_MARGIN_EYE_C2DA      XDATA_REG8V(0xC2DA)  /* PHY lane-A CDR eye-margin sample hi */
-#define REG_PHY_LANEA_C2DB                 XDATA_REG8V(0xC2DB)  /* PHY lane-A trim bits4:0 (paired C35B) */
-#define REG_PHY_LANEA_C2DC                 XDATA_REG8V(0xC2DC)  /* PHY lane-A DPX cfg (bits5:0 clear, paired C35C) */
-#define REG_PHY_LANEA_RATE_SRC_C2EC        XDATA_REG8V(0xC2EC)  /* PHY lane-A rate source bits5:3 (feeds C2C9) */
-#define REG_PHY_LANEB_C302                 XDATA_REG8V(0xC302)  /* PHY lane-B trim (paired C282) */
-#define REG_PHY_LANEB_C303                 XDATA_REG8V(0xC303)  /* PHY lane-B trim (gen6 bits2:3 clear) */
-#define REG_PHY_LANEB_C304                 XDATA_REG8V(0xC304)  /* PHY lane-B trim (paired C2B4-region) */
-#define REG_PHY_LANEB_C309                 XDATA_REG8V(0xC309)  /* PHY lane-B trim (paired C289) */
-#define REG_PHY_LANEB_C30B                 XDATA_REG8V(0xC30B)  /* PHY lane-B trim (paired C28B) */
-#define REG_PHY_LANEB_C30C                 XDATA_REG8V(0xC30C)  /* PHY lane-B trim (paired C28C) */
-#define REG_PHY_LANEB_C310                 XDATA_REG8V(0xC310)  /* PHY lane-B trim (paired C290) */
-#define REG_PHY_LANEB_C312                 XDATA_REG8V(0xC312)  /* PHY lane-B trim (paired C292) */
-#define REG_PHY_LANEB_C313                 XDATA_REG8V(0xC313)  /* PHY lane-B eq retrim bits1:0 (paired C293) */
-#define REG_PHY_LANEB_C314                 XDATA_REG8V(0xC314)  /* PHY lane-B eq retrim bits3:0 (paired C294) */
-#define REG_PHY_LANEB_C315                 XDATA_REG8V(0xC315)  /* PHY lane-B trim (paired C295) */
-#define REG_PHY_LANEB_LOCK_C317            XDATA_REG8V(0xC317)  /* PHY lane-B trim/lock (paired C297) */
-#define REG_PHY_LANEB_C31A                 XDATA_REG8V(0xC31A)  /* PHY lane-B trim bits3:0 (paired C29A) */
-#define REG_PHY_LANEB_C31B                 XDATA_REG8V(0xC31B)  /* PHY lane-B trim (bits5:0 clear, paired C29B) */
-#define REG_PHY_LANEB_C320                 XDATA_REG8V(0xC320)  /* PHY lane-B trim (paired C2A0) */
-#define REG_PHY_LANEB_C321                 XDATA_REG8V(0xC321)  /* PHY lane-B trim bits6:5 (paired C2A1) */
-#define REG_PHY_LANEB_C324                 XDATA_REG8V(0xC324)  /* PHY lane-B trim (paired C2A4) */
-#define REG_PHY_LANEB_RATE_START_C328      XDATA_REG8V(0xC328)  /* PHY lane-B rate-desc START (bit7) (paired C2A8) */
-#define REG_PHY_LANEB_C32B                 XDATA_REG8V(0xC32B)  /* PHY lane-B trim (bits5:0 clear, paired C2AB) */
-#define REG_PHY_LANEB_C33C                 XDATA_REG8V(0xC33C)  /* PHY lane-B trim bits1:0 (paired C2BC) */
-#define REG_PHY_LANEB_C344                 XDATA_REG8V(0xC344)  /* PHY lane-B DPX cfg bit6 (paired C2C4) */
-#define REG_PHY_LANEB_C345                 XDATA_REG8V(0xC345)  /* PHY lane-B eq trim bits3:0 (paired C2C5) */
-#define REG_PHY_LANEB_RATE_DESC_C349       XDATA_REG8V(0xC349)  /* PHY lane-B rate descriptor (from C36C) */
-#define REG_PHY_LANEB_CDR_C34B             XDATA_REG8V(0xC34B)  /* PHY lane-B CDR cfg bit2 (e36c, paired C2CB) */
-#define REG_PHY_LANEB_C34E                 XDATA_REG8V(0xC34E)  /* PHY lane-B trim bits4:2 (paired C2CE) */
-#define REG_PHY_LANEB_LOCK_C350            XDATA_REG8V(0xC350)  /* PHY lane-B lock status (bit5 rate,bit6 PLL) */
-#define REG_PHY_LANEB_MARGIN_PHASE_C352    XDATA_REG8V(0xC352)  /* PHY lane-B CDR phase margin (bits5:0) */
-#define REG_PHY_LANEB_MARGIN_EYE_C359      XDATA_REG8V(0xC359)  /* PHY lane-B CDR eye-margin sample lo */
-#define REG_PHY_LANEB_MARGIN_EYE_C35A      XDATA_REG8V(0xC35A)  /* PHY lane-B CDR eye-margin sample hi */
-#define REG_PHY_LANEB_C35B                 XDATA_REG8V(0xC35B)  /* PHY lane-B trim bits4:0 (paired C2DB) */
-#define REG_PHY_LANEB_C35C                 XDATA_REG8V(0xC35C)  /* PHY lane-B DPX cfg (bits5:0 clear, paired C2DC) */
-#define REG_PHY_LANEB_RATE_SRC_C36C        XDATA_REG8V(0xC36C)  /* PHY lane-B rate source bits5:3 (feeds C349) */
-#define REG_PHY_LINK_ARM_C698              XDATA_REG8V(0xC698)  /* PHY-ext link-arm ctrl; bit5 = USB4 link arm */
-#define REG_CPU_LINK_CTRL_CA00             XDATA_REG8V(0xCA00)  /* dcd4 link-controller pump: (CA00&0xC0)|7 */
-#define REG_CPU_LINK_GO_CA0A               XDATA_REG8V(0xCA0A)  /* dcd4 link-controller trigger; written 0x02 */
-#define REG_CMD_ARM_CAC4                   XDATA_REG8V(0xCAC4)  /* PD/USB4 link-arm strobe (bceb/clear bit0) */
-#define REG_TUNNEL_PHY_CFG_CCB0            XDATA_REG8V(0xCCB0)  /* c593 tunnel/PHY commit cfg: (CCB0&0xF8)|5 */
-#define REG_TUNNEL_PHY_CFG_CCB2            XDATA_REG8V(0xCCB2)  /* c593 tunnel/PHY commit cfg; cleared to 0 */
-#define REG_TUNNEL_PHY_TIMER_CCB3          XDATA_REG8V(0xCCB3)  /* c593 tunnel/PHY commit timer; set 0xC8 (200) */
-#define REG_CPU_LINK_DONE_CD4E             XDATA_REG8V(0xCD4E)  /* mode-1 link completion poll; bit0 then bit1 ready */
-#define REG_CMD_LINK_ARM_E313              XDATA_REG8V(0xE313)  /* PD/USB4 cmd link-arm; bit7 = USB4 link arm */
-#define REG_CMD_CFG_E401                   XDATA_REG8V(0xE401)  /* da51 PD RDO/CRC timing config; set to 0xB4 */
-#define REG_CMD_CFG_E406                   XDATA_REG8V(0xE406)  /* da51 PD RDO/CRC timing config; set to 0xA6 */
-#define REG_CMD_CFG_E407                   XDATA_REG8V(0xE407)  /* da51 PD RDO/CRC timing config; (E407&0xE0)|0x15 */
-#define REG_CMD_CFG_E408                   XDATA_REG8V(0xE408)  /* da51 PD RDO/CRC timing config; (E408&0xE0)|0x1C */
-#define REG_ROUTEROP_OPCODE_EA80           XDATA_REG8V(0xEA80)  /* USB4 CM router-op inbound opcode/path mailbox */
-#define REG_ROUTEROP_CFG_EA81              XDATA_REG8V(0xEA81)  /* USB4 CM router-op cfg read(0x50)/write(0x51) selector */
-#define REG_ROUTEROP_SPEED_LO_EA88         XDATA_REG8V(0xEA88)  /* router-op speed descriptor lo; seeded 100 */
-#define REG_ROUTEROP_SPEED_HI_EA89         XDATA_REG8V(0xEA89)  /* router-op speed descriptor hi; seeded 0x24 */
-#define REG_ROUTEROP_ENGINE_CTRL_EC00      XDATA_REG8V(0xEC00)  /* USB4 router-op engine enable; bit0 = enable */
-#define REG_ROUTEROP_CFG_EC05              XDATA_REG8V(0xEC05)  /* router-op init config; bit0 cleared at e56f */
-
-//=============================================================================
-// Page-1 (DPX=1) register offsets
-//=============================================================================
-// These are OFFSETS ONLY. Access goes through the per-access banking macros in
-// sb.h (SB_RD/SB_WR, P12_RD/P12_WR, P1_RD/P1_WR) which toggle DPX around each
-// MOVX.
-
-/* ---- Sideband transport regs: SB_RD/SB_WR, 0x2800 window ---- */
-#define SB_ADP0_CTRL        0x00u
-#define SB_ADP1_CTRL        0x01u
-#define SB_ADP0_EN          0x04u
-#define SB_ROUTEROP_COMMIT  0x06u
-#define SB_DESC_COUNT_GO    0x0Cu
-#define SB_DESC_CMD         0x15u
-#define SB_USB_MODE         0x1Cu
-#define SB_CH_ROUTE_LO(p)   (0x20u + (p))
-#define SB_CH_ROUTE_HI(p)   (0x22u + (p))
-#define SB_TRANSPORT_STAT   0x24u
-#define SB_ROUTEROP_EVENT   0x26u
-#define SB_CONN_EDGE(p)     (0x28u + 2u*(p))
-#define SB_CONNECT_EVENT    0x2Cu
-#define SB_CONNECT_STATE    0x2Du
-#define SB_LINK_REINIT_50   0x50u
-#define SB_LINK_REINIT_5A   0x5Au
-#define SB_LANE_PRESENT(l)  ((l) ? 0x60u : 0x56u)
-#define SB_CONNECT_PRESENT_57 0x57u
-#define SB_CONNECT_PRESENT_61 0x61u
-#define SB_CL0_ACK          0x64u
-#define SB_BOND_EVENT       0x66u
-#define SB_LINK_EDGE(p)     (0x81u + 2u*(p))
-#define SB_CL0_EVENT        0x9Eu
-#define SB_LANE_CL(l)       (0xA0u + (l))
-#define SB_CH2_ROUTE_LO(l)  (0xA4u + (l))
-#define SB_CH2_ROUTE_HI(l)  (0xA6u + (l))
-#define SB_KEYSTONE_BA      0xBAu
-#define SB_KEYSTONE_BD      0xBDu
-#define SB_PORT_SVC         0xC9u
-#define SB_PEER_CL0         0xD4u
-#define SB_ROUTE_ACK        0xD8u
-#define SB_ROUTE_GATE       0xEDu
-#define SB_EVENT_CLEAR_F6   0xF6u
-#define SB_LANESEL          0x40u
-#define SB_RATE_STROBE      0x65u
-#define SB_RATE_HI(l)       (0x6Au + 2u*(l))
-#define SB_RATE_LO(l)       (0x6Bu + 2u*(l))
-#define SB_WIDTH_LO         0x74u
-#define SB_WIDTH_HI         0x75u
-
-#define SB_KEYSTONE_05      0x05u
-#define SB_OP_CTRL          0x0Fu
-#define SB_OP_TRIGGER       0x10u
-#define SB_PHY_CTRL_1D      0x1Du
-#define SB_EVENT_CLR_27     0x27u
-#define SB_EVENT_CLR_29     0x29u
-#define SB_EVENT_CLR_2B     0x2Bu
-#define SB_PHY_CFG_49       0x49u
-#define SB_MASK_53          0x53u
-#define SB_MASK_5D          0x5Du
-#define SB_EVENT_CLR_67     0x67u
-#define SB_LINK_EDGE_STAT   0x80u
-#define SB_EVENT_CLR_82     0x82u
-#define SB_EVENT_CLR_84     0x84u
-#define SB_DESC_CFG_8F      0x8Fu
-#define SB_CFG_94           0x94u
-#define SB_CFG_95           0x95u
-#define SB_CFG_96           0x96u
-#define SB_CFG_98           0x98u
-#define SB_CFG_99           0x99u
-#define SB_EVENT_CLR_9F     0x9Fu
-#define SB_EVENT_CLR_C4     0xC4u
-#define SB_EVENT_CLR_C8     0xC8u
-#define SB_EVENT_CLR_CF     0xCFu
-#define SB_SERDES_CTRL      0xCEu
-#define SB_LANE_CFG_D1      0xD1u
-
-#define BOND_EVT_BONDED     0x01u
-#define BOND_EVT_L0_ABR2    0x04u
-#define BOND_EVT_L0_FAIL    0x08u
-#define BOND_EVT_L1_ABR2    0x20u
-#define BOND_EVT_L1_FAIL    0x40u
-#define CL0_EVT_L0          0x01u
-#define CL0_EVT_L1          0x02u
-#define CL0_EVT_L0_TRAIN    0x10u
-#define CL0_EVT_L1_TRAIN    0x20u
-#define ROUTEROP_EVT_PENDING 0x02u
-#define ROUTEROP_EVT_L0_DIS  0x04u
-#define ROUTEROP_EVT_L1_DIS  0x10u
-
-/* ---- SB TX window: SBTX_RD/SBTX_WR, 0x2900 ---- */
-#define SBTX_DESC_TYPE      0x00u
-#define SBTX_DESC_DIR       0x01u
-#define SBTX_DESC_BODY      0x02u
-
-/* ---- Host connect descriptor plane: SBP2_RD, 0x2A00 + (port<<8) ---- */
-#define SBP2_DESC_TYPE      0x00u
-#define SBP2_DESC_LEN       0x01u
-#define SBP2_DESC_BODY      0x02u
-
-/* ---- Router config-space / descriptor engine: P12_RD/P12_WR, 0x1200 ---- */
-#define DE_LANESEL          0x34u
-#define DE_CTRL             0x35u
-#define DE_OPCODE           0x36u
-#define DE_COMMIT           0x37u
-#define DE_KICK             0x38u
-#define DE_WR(i)            (0x3Cu + (i))
-#define DE_RD(i)            (0x40u + (i))
-#define DE_TRANSPORT(i)     (0x4Cu + (i))
-#define DE_ENG_RESET_03     0x03u
-#define DE_ENG_DATA_BASE    0x12u
-#define DE_ENG_RESET_7A     0x7Au
-#define DE_ENG_RESET_8F     0x8Fu
-#define DE_ENG_RESET_90     0x90u
-#define DE_TRANSPORT_TRIG   0x58u
-
-/* ---- Raw page-1 tunnel/link/event regs: P1_RD/P1_WR ---- */
-#define P1_PORT_CTRL_0000   0x0000u
-#define P1_LANE_FLIP(i)     (0x0100u + (i))
-#define P1_ROUTE_ACK        0x0109u
-#define P1_LANE_EN_010B     0x010Bu
-#define P1_ADP_LINK_CFG_1206   0x1206u
-#define P1_DESC_CTRL_1235      0x1235u
-#define P1_DESC_CMD_1236       0x1236u
-#define P1_DESC_COMMIT_1237    0x1237u
-#define P1_DESC_RESULT_1243    0x1243u
-#define P1_LINK_PHY_CFG_1267   0x1267u
-#define P1_TUNNEL_PHY_1285     0x1285u
-#define P1_TUNNEL_PHY_CTRL_1334 0x1334u
-#define P1_TUNNEL_PHY_CFG_1335 0x1335u
-#define P1_TUNNEL_PHY_134D     0x134Du
-#define P1_XPORT_LANE_EVT_1404 0x1404u
-#define P1_XPORT_LANE_EVT_1405 0x1405u
-#define P1_XPORT_TRIG_1511     0x1511u
-#define P1_XPORT_RESET_1802    0x1802u
-#define P1_RXPLL_CFG_1808      0x1808u
-#define P1_PCIE_LINK_1835      0x1835u
-#define P1_PCIE_LANE_SLOT(l)   (0x78AFu + 0x100u*(l))
-#define P1_LINK_MODE_011F      0x011Fu
-#define P1_USB4_WIDTH_EVT_124E 0x124Eu
-#define P1_TUNNEL_CFG_4084     0x4084u
-#define P1_PCIE_PHY_408D       0x408Du
-#define P1_LINK_GEN_40B0       0x40B0u
-#define P1_TUNNEL_CFG_5084     0x5084u
-#define P1_PCIE_PHY_508D       0x508Du
-#define P1_PCIE_PHY_508F       0x508Fu
-#define P1_PCIE_PHY_5204       0x5204u
-#define P1_TUNNEL_CFG_6025     0x6025u
-#define P1_TUNNEL_CFG_6043     0x6043u
-#define P1_PCIE_PHY_7041       0x7041u
-#define P1_PCIE_PHY_7104       0x7104u
-#define P1_TUNNEL_PHY_2805     0x2805u
 
 #endif /* __REGISTERS_H__ */

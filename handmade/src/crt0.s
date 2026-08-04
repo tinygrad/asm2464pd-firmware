@@ -12,9 +12,6 @@
     .globl  _int0_isr
     .globl  _int1_isr
 
-    ; Linker-computed stack base (start of SSEG, after all IDATA/overlay)
-    .globl  __start__stack
-
 ; Interrupt vectors in absolute area
     .area   VECTOR  (ABS,CODE)
 
@@ -43,11 +40,8 @@ clear_ram_loop:
     mov     @r0, a
     djnz    r0, clear_ram_loop
 
-    ; Set SP so the first push lands at SDCC's computed stack base
-    ; (__start__stack, placed right after all IDATA/overlay). Deriving it from
-    ; the linker symbol keeps the stack correct as internal-RAM usage changes,
-    ; instead of hardcoding an address that silently collides with data.
-    mov     sp, #(__start__stack - 1)
+    ; Initialize stack pointer
+    mov     sp, #0x72
 
     ; Initialize DPX = 0 (bank 0)
     mov     0x96, #0x00

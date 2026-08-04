@@ -1,6 +1,3 @@
-#ifndef USB_H
-#define USB_H
-
 #include "types.h"
 #include "registers.h"
 #include "flash.h"
@@ -181,45 +178,6 @@ static void usb_init_controller(uint8_t force_usb2) {
     }
 }
 
-/* Bring up the USB PIPE/PHY engine; run unconditionally at boot. */
-static void usb_pipe_engine_init(void) {
-    REG_POWER_ENABLE      = (REG_POWER_ENABLE & 0x7F) | 0x80;
-    REG_USB_PHY_CTRL_91D1 = 0x0F;
-    REG_BUF_CFG_9300      = 0x0C;
-    REG_BUF_CFG_9301      = 0xC0;
-    REG_BUF_CFG_9302      = 0xBF;
-    REG_USB_CTRL_PHASE    = 0x1F;
-    REG_USB_EP_CFG1       = 0x0F;
-    REG_USB_PHY_CTRL_91C1 = 0xF0;
-    REG_BUF_CFG_9303      = 0x33;
-    REG_BUF_CFG_9304      = 0x3F;
-    REG_BUF_CFG_9305      = 0x40;
-    REG_USB_CONFIG        = 0xE0;
-    REG_USB_EP0_CFG       = 0xF0;
-    REG_USB_MODE          = 0x01;
-    REG_USB_EP_MGMT      &= (uint8_t)~0x01;
-    REG_USB_MSC_CTRL      = 0x01;
-    REG_USB_MSC_STATUS   &= (uint8_t)~0x01;
-    REG_USB_PHY_CTRL_91C3 &= (uint8_t)~0x20;
-    REG_USB_PHY_CTRL_91C0 |= 0x01;
-    REG_USB_PHY_CTRL_91C0 &= (uint8_t)~0x01;
-}
-
-/* Arm USB4 PHY link-up once at boot: run Timer0 (CC10-CC13) as a bounded-wait
- * timeout while polling E318 for PHY link-up completion. */
-static void usb4_phy_arm(void) {
-    REG_TIMER0_CSR = TIMER_CSR_CLEAR;
-    REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
-    REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | 0x04;
-    REG_TIMER0_THRESHOLD_HI = 0x01;
-    REG_TIMER0_THRESHOLD_LO = 0x8F;
-    REG_TIMER0_CSR = TIMER_CSR_ENABLE;
-    { uint16_t spin = 0;
-      while (!((REG_PHY_COMPLETION_E318 & 0x10) || (REG_TIMER0_CSR & TIMER_CSR_EXPIRED)) && ++spin < 0xFFFF); }
-    REG_TIMER0_CSR = TIMER_CSR_CLEAR;
-    REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
-}
-
 /* EP0 IN: send `len` bytes of DESC_BUF, or a zero-length ack. */
 static void usb_send_data(uint16_t len) {
     REG_USB_EP0_LEN_H = (uint8_t)(len >> 8);
@@ -279,5 +237,3 @@ static void usb_handle_get_descriptor(uint8_t is_usb2, uint8_t desc_type,
   usb_desc_copy(src, desc_len);
   usb_send_data(wlen < desc_len ? wlen : desc_len);
 }
-
-#endif /* USB_H */

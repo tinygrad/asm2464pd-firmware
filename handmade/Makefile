@@ -9,14 +9,10 @@ CFLAGS = -mmcs51 --model-small --opt-code-speed --allow-unsafe-read
 CFLAGS += --std-c99
 CFLAGS += -I$(SRC_DIR)
 CFLAGS += --no-xinit-opt
-CFLAGS += $(CFLAGS_EXTRA)
 
 # Memory model settings
 LDFLAGS = --code-loc 0x0000 --code-size 0x10000
-# Place SDCC's auto-XDATA segment in the chip's low CM RAM. The USB4 lane-bond
-# path can stall on the 0x88xx scratch area once the tunnel is active, while
-# 0x0B60-0x0BFF stays valid and clear of the mailbox/FSM state.
-LDFLAGS += --xram-loc 0x0B60 --xram-size 0xA0
+LDFLAGS += --xram-loc 0x0000 --xram-size 0x10000
 LDFLAGS += --iram-size 0x100
 
 # Directories

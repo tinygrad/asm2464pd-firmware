@@ -1,12 +1,10 @@
 /*
- * ASM2464PD USB 3.0/USB4 Vendor-Class Firmware
+ * ASM2464PD USB 3.0 Vendor-Class Firmware
  * Bulk IN/OUT via MSC engine, control transfers for enumeration + vendor cmds.
  */
 
 #include "types.h"
-#include "util.h"
 #include "registers.h"
-#include "usb4_state.h"
 #include "usb.h"
 #include "gpio.h"
 
@@ -14,10 +12,12 @@ __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs
 __sfr __at(0xA8) IE;
 __sfr __at(0x88) TCON;
 
+#define IE_EA   0x80
 #define IE_EX1  0x04
 #define IE_ET0  0x02
 #define IE_EX0  0x01
 
+// blocking version: void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
 void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
 void uart_puts(__code const char *str) { while (*str) uart_putc(*str++); }
 static void uart_puthex(uint8_t val) {
@@ -26,33 +26,26 @@ static void uart_puthex(uint8_t val) {
   uart_putc(hex[val & 0x0F]);
 }
 
-#define TIMER1_MODE_HALF_MS     0x04U
-/* Millisecond busy-sleep on Timer1; must never touch the CC10-CC13 PHY/PD mailbox. */
+#define TIMER0_MODE_HALF_MS     0x04U
 static void sleep(uint16_t milliseconds) {
-  REG_TIMER1_CSR = TIMER_CSR_CLEAR;
-  REG_TIMER1_CSR = TIMER_CSR_EXPIRED;
-  REG_TIMER1_DIV = (REG_TIMER1_DIV & 0xF8) | TIMER1_MODE_HALF_MS;
+  REG_TIMER0_CSR = TIMER_CSR_CLEAR;
+  REG_TIMER0_CSR = TIMER_CSR_EXPIRED;
+  REG_TIMER0_DIV = (REG_TIMER0_DIV & 0xF8) | TIMER0_MODE_HALF_MS;
   uint16_t threshold = 2*milliseconds;
-  REG_TIMER1_THRESHOLD_HI = threshold >> 8;
-  REG_TIMER1_THRESHOLD_LO = threshold & 0xFF;
-  REG_TIMER1_CSR = TIMER_CSR_ENABLE;
-  { uint32_t g = 0; while (!(REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && ++g < 4000000UL); }
+  REG_TIMER0_THRESHOLD_HI = threshold >> 8;
+  REG_TIMER0_THRESHOLD_LO = threshold & 0xFF;
+  REG_TIMER0_CSR = TIMER_CSR_ENABLE;
+  while (!(REG_TIMER0_CSR & TIMER_CSR_EXPIRED));
 }
 
 static uint8_t is_usb2;
-static uint32_t __xdata usb4_skip_magic;
-#define USB4_SKIP_MAGIC 0x5AA55AA5UL
 
 /* Streaming PCIe state — configured via 0xF0 control message */
-static uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming transfer */
+static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer */
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
 #include "i2c.h"
-#include "pd.h"
-#include "sb.h"
-#include "usb4.h"
-#include "usb4_lanebond.h"
 
 /* Hardware status packet */
 typedef struct {
@@ -140,7 +133,6 @@ static void do_usb_bulk_in(void) {
   dma_dwords -= chunk;
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
-
 
 /*=== USB Control Handler ===*/
 
@@ -421,17 +413,11 @@ void int0_isr(void) __interrupt(0) {
     periph_status = REG_USB_PERIPH_STATUS;
 
     if (periph_status & USB_PERIPH_BUS_RESET) {
-      /* 0x91D1 USB-SS / USB4-router link-event demux. */
       uint8_t link_event = REG_USB_PHY_CTRL_91D1;
-      if (link_event & USB_91D1_FLAG) {
-        REG_USB_PHY_CTRL_91D1 = USB_91D1_FLAG;
-        if (IS_USB4()) u4c_lane_reinit_gate(0);
-      } else {
-        REG_USB_PHY_CTRL_91D1 = link_event;
-        uart_puts("[RST ");
-        uart_puthex(link_event);
-        uart_puts("]\n");
-      }
+      REG_USB_PHY_CTRL_91D1 = link_event;
+      uart_puts("[RST ");
+      uart_puthex(link_event);
+      uart_puts("]\n");
     } else if (periph_status & USB_PERIPH_CONTROL) {
       handle_usb_control();
     } else if (periph_status & USB_PERIPH_ALT_LINK) {
@@ -447,21 +433,15 @@ void int0_isr(void) __interrupt(0) {
       uart_puts("[EP_COMPLETE "); uart_puthex(ep); uart_puts("]\n");
       REG_USB_EP_READY = ep;
     } else if (periph_status & USB_PERIPH_LINK_EVENT) {
-      /* 0x9302 USB4-router link-event demux; service .2 then the 9300 SS event. */
-      if (REG_BUF_CFG_9302 & 0x04) {
-        REG_BUF_CFG_9302 = 0x04;
-        if (IS_USB4()) u4c_lane_reinit_gate(1);
-      }
       uint8_t ep = REG_BUF_CFG_9300;
       if (ep & BUF_CFG_9300_SS_FAIL) {
-        if (!IS_USB4()) {
-          uart_puts("[USB2 fallback]\n");
-          is_usb2 = 1;
-          REG_CPU_MODE = CPU_MODE_USB2;
-          REG_USB_PHY_CTRL_91C0 = 0x10;
-        }
-        /* In USB4 mode, SS_FAIL is expected — the SS link goes through
-         * the tunnel, not the direct USB3 PHY.  Just ack the event. */
+        uart_puts("[USB2 fallback]\n");
+        // fallback to USB2
+        is_usb2 = 1;
+        // without this, USB2 is flaky
+        REG_CPU_MODE = CPU_MODE_USB2;
+        // enable USB high speed mode
+        REG_USB_PHY_CTRL_91C0 = 0x10;
       }
       REG_BUF_CFG_9300 = ep;
       uart_puts("[LINK EVENT ");
@@ -494,38 +474,11 @@ void int0_isr(void) __interrupt(0) {
   }
 }
 
-/* INT1 / EX1: the PD / USB4 / system interrupt aggregate (C806/C80A/EC06). */
 void int1_isr(void) __interrupt(1) {
-  uint8_t saved_dpx = DPX;
-  DPX = 0x00;
-  if (IS_USB4() && (REG_INT_SYSTEM & INT_SYSTEM_EVENT)) cc_pd_timer_tick();
-  if (REG_CPU_EXEC_STATUS_2 & CPU_EXEC_STATUS_2_INT) { REG_CPU_EXEC_STATUS_2 = CPU_EXEC_STATUS_2_INT; }
-  if (IS_USB4() && (REG_INT_PCIE_NVME & INT_PCIE_NVME_STATUS)) pd_rx_isr();
-  if (IS_USB4()) usb4_int_demux();
-  DPX = saved_dpx;
-}
-
-static void usb4_fallback_to_usb3(void) {
-  uart_puts("[USB4 fallback]\n");
-  usb4_skip_magic = USB4_SKIP_MAGIC;
-  REG_CPU_RESET = CPU_RESET_TRIGGER;
-  while (1) { }
-}
-
-static void usb4_reinit_usb3_after_reset_fallback(void) {
-  usb4_skip_magic = USB4_SKIP_MAGIC;
-  usb_pipe_engine_init();
-  REG_CPU_MODE = CPU_MODE_USB3;
-  REG_CPU_MODE_NEXT &= 0x1F;
-  REG_CPU_CTRL_CA81 &= 0xFE;
-  boot_phy_set_link_mode(0);
-  boot_phy_lane_power(0x0F);
-  boot_phy_set_lane_width(0x0F);
-  u4lb_pcie_set_link_width(PCIE_LINK_WIDTH_x2);
+  uart_puts("[int1]\n");
 }
 
 void main(void) {
-
   // without this, UART has parity
   REG_UART_LCR &= ~LCR_PARITY_MASK;
 
@@ -536,139 +489,28 @@ void main(void) {
   // flash controller — needed for the USB serial OTP read on enumeration
   flash_init();
 
-  if (usb4_skip_magic == USB4_SKIP_MAGIC) {
-    usb4_skip_magic = 0;
-    u4_cfg.mode_flag = USB4_MODE_USB3_DIRECT;
-  } else {
-    u4_cfg.mode_flag = USB4_MODE_FLAGS;
-  }
-  uart_puts("[Mode ");
-  uart_puthex(u4_cfg.mode_flag);
-  uart_puts("]\n");
-  u4_entered_usb_mode = 0;
+  usb_phy_tune();
 
-  if (IS_USB4()) {
-    usb4_state_prepare();
-    usb_pipe_engine_init();
-    usb4_phy_arm();
-  } else {
-    usb_phy_tune();
-    usb4_reinit_usb3_after_reset_fallback();
+  // PCIe TLP engine values that don't change + tuning
+  REG_PCIE_TLP_CTRL   = 0x01;
+  REG_PCIE_TLP_LENGTH = 0x20;
+  pcie_apply_x2_rxphy_tuning();
+  pcie_power_off();
 
-    REG_PCIE_TLP_CTRL   = 0x01;
-    REG_PCIE_TLP_LENGTH = 0x20;
-    pcie_apply_x2_rxphy_tuning();
-    pcie_power_off();
+  // PCIe power on for backwards compatibility, can be removed
+  pcie_power_on();
 
-    // PCIe power on for backwards compatibility, can be removed
-    pcie_power_on();
-  }
+  // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
+  usb_init_controller(0);
 
-  if (IS_USB4()) {
-    usb4_policy_enable();
-    /* Clear USB interrupt global mask — usb4_mode_entry_commit does this
-     * when called from the 1s timeout, but the timeout fires too late
-     * (after PD/tunnel are up).  Clear it at boot so the USB function
-     * can enumerate as soon as the host connects. */
-    REG_USB_INT_MASK_9090 &= 0x7F;
-  } else {
-    usb_init_controller(0);
-  }
+  // enable interrupts
+  IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
 
-  // enable interrupts (EX1 = PD/USB4 INT1)
-  IE = (uint8_t)(IE_EA | IE_EX0 | (IS_USB4() ? (IE_EX1 | IE_ET0) : 0));
-
-  // INA231 power monitor: init in both modes so the 0xC0 hw_status vendor
-  // request works over USB3 and over the USB4-tunneled USB function.
   i2c_init();
   ina231_init();
 
-  uint8_t kicks = 0;
-  uint8_t usb4_fallback_ticks = 0;
-  uint8_t usb4_usb_inited = 0;
   while (1) {
-    if (IS_USB4()) {
-      /* Poll cc_pd_timer_tick from the main loop when PD hasn't connected yet.
-       * The 1s DMA timeout arms the USB4 mode entry fallback for USB3-only hosts
-       * where PD never arrives.  Once PD is seen, INT1 services cc_pd_timer_tick. */
-      if (!u4_boot.pd_seen) {
-        CRITICAL_ENTER();
-        cc_pd_timer_tick();
-        CRITICAL_EXIT();
-      }
-      /* After the 1s timeout commits USB4 mode on a USB3-only host (where PD
-       * never arrives), reset into USB3-direct mode.  Gated on !pd_seen
-       * so the USB4 card never enters this path. */
-      if (u4_entered_usb_mode && !usb4_usb_inited && !u4_boot.pd_seen) {
-        usb4_fallback_to_usb3();
-      }
-      /* On the USB4 card, after the sideband connection is fully established
-       * (sb_asserted), do the RX PLL reset to connect the USB function to
-       * the USB4 tunnel (stock fw usb_ss_link_train_engine / rst_rx_pll). */
-      if (u4_boot.sb_asserted && !usb4_usb_inited) {
-        usb4_usb_inited = 1;
-        /* RX PLL reset + PHY link mode switch to USB4 tunnel path.
-         * The USB function was already configured at boot by usb_pipe_engine_init.
-         * Just need to switch the PHY link to tunnel mode (4) and reset RX PLL. */
-        uart_puts("[RstRxpll...]");
-        { uint8_t b = REG_PHY_RXPLL_RESET; REG_PHY_RXPLL_RESET = b | 0x04; }
-        phy_cc10_cmd_wait(0, 2, 0);
-        REG_PHY_RXPLL_RESET = 0;
-        phy_cc10_cmd_wait(0, 2, 0);
-        uart_puts("[Done]");
-        boot_phy_set_link_mode(4);
-        REG_POWER_STATUS &= ~0x40;
-        uart_puts("[CDRV ok]");
-      }
-      if (u4_boot.pd_seen && !u4_pd.enter_usb_accepted && !u4_boot.sb_asserted) {
-        if (u4_pd.usb3_fallback_flag || usb4_fallback_ticks >= 12) {
-          usb4_fallback_to_usb3();
-          continue;
-        } else {
-          usb4_fallback_ticks++;
-        }
-      }
-      if (u4_sb.conn_consequence_done) {
-        CRITICAL_ENTER();
-        if (u4_sb.state != U4FSM_IDLE) {
-          uint16_t cur = u4lb_read_lane_width_cnt();
-          uint16_t snap = ((uint16_t)u4_sb.walk_throttle_snap_hi << 8) | u4_sb.walk_throttle_snap_lo;  /* 0x076A:0x076B */
-          if ((uint16_t)(snap - cur) >= 3) {
-            u4lb_fsm_step();
-            cur = u4lb_read_lane_width_cnt();
-            u4_sb.walk_throttle_snap_hi = (uint8_t)(cur >> 8);
-            u4_sb.walk_throttle_snap_lo = (uint8_t)cur;
-          }
-        }
-        if (u4_sb.routerop_resp_armed != 0) sb_routerop_response(u4lb_routerop_poll());
-        CRITICAL_EXIT();
-      }
-
-      CRITICAL_ENTER();
-      sb_connect_reservice();
-      u4c_native_routerop_service();
-      CRITICAL_EXIT();
-
-      if (SB_RD(0x26) & 0x02) {
-        CRITICAL_ENTER();
-        sb_routerop_pending();
-        if (SB_RD(0x26) & 0x02) SB_WR(0x26, 0x02);   // W1C SB[0x26].1 after response, like a066
-        CRITICAL_EXIT();
-      }
-
-      if (u4_sb.conn_consequence_done) {
-        continue;
-      }
-      if (u4_boot.sb_asserted) { uint32_t b; for (b = 0; b < 60000UL; b++) { __asm nop __endasm; } }
-      else             { sleep(500); }
-      /* Give the host a settle window before each Hard Reset kick. Repeated immediate kicks can keep
-       * power-cycling the device before the PD contract completes. */
-      { static uint8_t pd_settle = 0;
-        if (!u4_boot.pd_seen) {
-          if (pd_settle < 12) { pd_settle++; }
-          else if (kicks < 8) { pd_attach_hard_reset(); kicks++; pd_settle = 0; }
-        }
-      }
-    }
+    // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
   }
 }
+

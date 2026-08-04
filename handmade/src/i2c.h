@@ -103,7 +103,7 @@ static void ina231_init(void) {
 }
 
 static uint8_t ina231_read_u16(uint8_t reg, uint16_t *out) {
-  static __xdata uint8_t rx[2];
+  uint8_t rx[2];
   if (i2c_point(INA231_ADDR, reg) != I2C_CSR_WR_ADDR_ACK) return 0;
   if (i2c_read(INA231_ADDR, 2, rx) != I2C_CSR_RD_DONE) return 0;
   *out = ((uint16_t)rx[0] << 8) | rx[1];
