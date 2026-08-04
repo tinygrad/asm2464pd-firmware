@@ -36,7 +36,7 @@ def phase_set(b431):
     return False
 
 
-def phase_measure():
+def phase_measure(gen=2):
     import types
     from tinygrad import Device
     from tinygrad.runtime.ops_amd import AMDCopyQueue
@@ -55,14 +55,14 @@ def phase_measure():
             cap = (hdr >> 8) & 0xFF
 
     cap = pcie_cap(1)
-    # force Gen2 target + retrain for a constant-speed ladder
+    # force target speed + retrain for a constant-speed ladder
     lnkctl2 = usb.pcie_cfg_req(cap + 0x30, bus=1, dev=0, fn=0, size=4)
-    usb.pcie_cfg_req(cap + 0x30, bus=1, dev=0, fn=0, value=(lnkctl2 & ~0xF) | 0x2, size=2)
+    usb.pcie_cfg_req(cap + 0x30, bus=1, dev=0, fn=0, value=(lnkctl2 & ~0xF) | gen, size=2)
     lnkctl = usb.pcie_cfg_req(cap + 0x10, bus=1, dev=0, fn=0, size=2)
     usb.pcie_cfg_req(cap + 0x10, bus=1, dev=0, fn=0, value=lnkctl | 0x20, size=2)
     time.sleep(0.5)
     lnk = usb.pcie_cfg_req(cap + 0x10, bus=1, dev=0, fn=0, size=4)
-    gen, width = (lnk >> 16) & 0xF, (lnk >> 20) & 0x3F
+    gen_a, width = (lnk >> 16) & 0xF, (lnk >> 20) & 0x3F
 
     total = 64 << 20
     CHUNK = 0x40000
@@ -87,7 +87,7 @@ def phase_measure():
         gpu_us += float(s1.timestamp - s0.timestamp)
         done += n
     bw = total / (gpu_us * 1e-6) / 1e9
-    print(f"MEASURE: Gen{gen} x{width} = {bw:.2f} GB/s")
+    print(f"MEASURE: Gen{gen_a} x{width} = {bw:.2f} GB/s")
 
 
 if __name__ == "__main__":
@@ -95,4 +95,4 @@ if __name__ == "__main__":
         ok = phase_set(int(sys.argv[2], 0))
         sys.exit(0 if ok else 1)
     elif sys.argv[1] == "measure":
-        phase_measure()
+        phase_measure(int(sys.argv[2]) if len(sys.argv) > 2 else 2)
