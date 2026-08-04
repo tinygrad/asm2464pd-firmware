@@ -1080,9 +1080,13 @@
  * B401: bits 0-1 R/W. Tunnel enable; stock pulses 0->1->0 around the tunnel
  * adapter config and B482 mode set. Ends at 0x00 even when trained.
  * B402: bits 0-3 R/W. Cold 0x03, stock writes 0x01 (trained value).
- * B403: bit 0 R/W (bits 7-1 read-as-0). Set to 1 by stock during training
- * kick-off; comment in handmade: "fix PCIe link stability". Not required
- * for training (proxy-bisected) but kept to match stock.
+ * B403: bit 0 R/W (bits 7-1 read-as-0). **Gen3 cap**: writing 0x01 downgrades
+ * the port's advertised max link speed Gen4 -> Gen3 BEFORE training (the
+ * bank1 0x408C LNKCAP mirror changes 0x007B6C44 -> 0x007B6C43).  Stock
+ * firmware sets this deliberately (RDNA3 stability).  With B403=0 the port
+ * advertises Gen4 and attempts Gen4 EQ; on this channel EQ fails and the
+ * link falls back to Gen3 (stable without PHY tuning, Gen1 flapping with
+ * the 7900XTX-derived x2 tuning).
  * B404: bits 0-3 R/W. Reads 0x01 cold and trained.
  */
 #define REG_PCIE_TUNNEL_CTRL    XDATA_REG8(0xB401)  // PCIe tunnel control
@@ -2486,6 +2490,19 @@
  *   0x7BAF  PHY lane 3 register             (stock sets bit 7)
  */
 #define REG_PHY_PORT0_CFG       XDATA_REG8(0x4084)  /* Switch port 0 PHY config (bank 1) */
+/*
+ * Bank1 Config-Space Mirror Region (0x4000-0x40FF port 0, 0x5000-0x50FF port 1)
+ * The switch ports' PCIe config space is mirrored here in little-endian dword
+ * order (value = d[0]|d[1]<<8|d[2]<<16|d[3]<<24):
+ *   0x4000/0x5000  vendor/device ID (0x1B21:0x2464 cold, 0x2463 when trained)
+ *   0x4088/0x5088  DevCap/DevCtl region
+ *   0x408C         LNKCAP mirror.  Cold = 0x007B6C44 (max Gen4 x4).
+ *                  Downgraded to 0x007B6C43 (max Gen3) by writing B403=0x01,
+ *                  BEFORE training starts.  Hardware-driven; direct writes
+ *                  of the max-speed nibble do not stick.
+ *   0x4092         negotiated link info (low nibble = gen, high = lanes)
+ *   0x6088/0x6888  further LNKCAP mirrors on the tunnel side (same Gen4->3)
+ */
 #define REG_PHY_PCIE_LINK_INFO  XDATA_REG8(0x4092)  /* PCIe link info (bank 1): low nibble=gen, high nibble=lanes */
 #define REG_PHY_PORT1_CFG       XDATA_REG8(0x5084)  /* Switch port 1 PHY config (bank 1) */
 #define REG_PHY_TLP_ROUTING     XDATA_REG8(0x6025)  /* TLP routing control (bank 1) */
