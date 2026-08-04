@@ -94,7 +94,12 @@ static uint8_t load_and_verify_body(uint32_t total_body_len) {
 }
 
 static bool usb_handle_custom_setup(uint8_t bmReq, uint8_t bReq, uint8_t wValL, uint8_t wValH, uint16_t wLen) {
-  if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
+  if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
+    xfer_op = XOP_NONE;
+    xfer_addr = 0;
+    bootstub_unlocked = 0;
+    return false;
+  } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB0) {
     if (wLen != 8) { stall_ep0(); return true; }
     xfer_op = XOP_ERASE;
   } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xB1) {
@@ -239,6 +244,7 @@ static void dfu_loop(void) {
       }
     } else if (s & USB_PERIPH_BUS_RESET) {
       xfer_op = XOP_NONE;
+      bootstub_unlocked = 0;
       // INT_MASK_9090[6:0] does not reset with the USB bus.
       REG_USB_INT_MASK_9090 = USB_INT_MASK_GLOBAL;
       xfer_addr = 0;
