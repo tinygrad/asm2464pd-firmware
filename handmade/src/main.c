@@ -75,18 +75,27 @@ static void pcie_power_off(void) {
 }
 
 static void pcie_power_on(void) {
-  REG_TUNNEL_LINK_STATUS = PCIE_LINK_WIDTH_x2;
-  REG_TUNNEL_CTRL_B403 = 0x01;                 // fix PCIe link stability
   REG_PCIE_PERST_CTRL  = PCIE_PERST_ASSERT;    // assert PERST#
-  REG_TUNNEL_LINK_STATE = 0x00;                // clear tunnel link state
-  DPX = 0x01; REG_PHY_TLP_ROUTING = PHY_TLP_ROUTING_ENABLE; DPX = 0x00;
-  bank1_write(0x78AF, 0x4F); bank1_write(0x79AF, 0x4F); // rxphy lane commits
-  bank1_write(0x7AAF, 0xCF); bank1_write(0x7BAF, 0xCF);
+  REG_TUNNEL_CTRL_B403 = 0x01;                 // fix PCIe link stability
+  REG_TUNNEL_LINK_STATE &= (uint8_t)~0x01;     // clear tunnel link state (stock keeps bit 2)
+  DPX = 0x01; REG_PHY_TLP_ROUTING |= PHY_TLP_ROUTING_ENABLE; DPX = 0x00;
+  /* No rxphy lane commits (0x78AF-0x7BAF): they latch the x2 lane config and
+   * prevent x4 negotiation.  No B431 write: leaving it at its power-on
+   * default (0x00) lets the link negotiate up to x4. */
   REG_HDDPC_CTRL |= 0x20;                      // enable 3.3V
-  REG_CPU_CTRL_CA81 = 0x0E;
+  sleep(100);                                  // power settle: the slot device is not
+                                               // ready to answer Detect for ~20-50ms
+  REG_CPU_CTRL_CA81 = 0x0E;                    // clear bit 0, required for training
   REG_CPU_MODE_NEXT = 0x21;
-  REG_PHY_TIMER_CTRL_E764 = 0x1C;              // start link training
-  REG_PCIE_TUNNEL_CFG = PCIE_TLP_CTRL_TUNNEL;  // fix late issue in RDNA3
+  /* Start link training. 0x1C keeps the training engine retrying until the
+   * downstream device answers (hardware clears bit 4 if it gives up).  The
+   * stock E764 sequence ending at 0x19 is single-shot: it aborts when the
+   * device is still booting and the link never comes up. */
+  REG_PHY_TIMER_CTRL_E764 = 0x1C;
+  /* Lane enable. Order-critical: must be written AFTER the E764 training
+   * start, never before it, otherwise the LTSSM wedges in Config (0x4C). */
+  REG_PCIE_LANE_CTRL_C659 |= 0x01;
+  REG_PCIE_TUNNEL_CFG |= PCIE_TLP_CTRL_TUNNEL; // fix late issue in RDNA3
   REG_PCIE_PERST_CTRL = 0x00;                  // deassert PERST#
 
   // wait for stable link, bounded so we don't block forever when nothing is attached
@@ -114,9 +123,6 @@ static void pcie_power_on(void) {
     sleep(100);
   }
   if (stable_samples < 3) uart_puts("[PCIe timeout]\n");
-
-  /* Stock firmware only sets this once training is done. */
-  REG_PCIE_LANE_CTRL_C659 |= 0x01;
 
   // green = PCIe link up, red = link down
   bool link_up = (stable_samples >= 3);

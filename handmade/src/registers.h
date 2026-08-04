@@ -1066,11 +1066,25 @@
 #define   PCIE_STATUS_KICK        0x04  /* Command kick/write strobe value */
 #define   PCIE_STATUS_RESET       0x08  /* Request engine reset/re-arm value */
 #define REG_PCIE_TUNNEL_CFG     XDATA_REG8(0xB298)  // PCIe/NVMe bridge control
+/*
+ * B298 bit behavior (proxy-verified): bits 4,2,0 R/W, bits 7-5,3,1 read-as-0.
+ * Cold value 0x01, stock-trained 0x11. Stock does |= 0x10 (preserves bit 0) —
+ * do NOT absolute-write 0x10, bit 0 must be preserved.
+ */
 #define   PCIE_TLP_CTRL_DMA_RESET 0x04  // Bit 2: DMA bridge reset strobe
 #define   PCIE_TLP_CTRL_TUNNEL    0x10  // Bit 4: Tunnel enable
-#define REG_PCIE_CTRL_B2D5      XDATA_REG8(0xB2D5)  /* PCIe control */
+#define REG_PCIE_CTRL_B2D5      XDATA_REG8(0xB2D5)  /* PCIe control (reads 0x00, writes ignored) */
 
 // PCIe Tunnel Control (0xB401-0xB404)
+/*
+ * B401: bits 0-1 R/W. Tunnel enable; stock pulses 0->1->0 around the tunnel
+ * adapter config and B482 mode set. Ends at 0x00 even when trained.
+ * B402: bits 0-3 R/W. Cold 0x03, stock writes 0x01 (trained value).
+ * B403: bit 0 R/W (bits 7-1 read-as-0). Set to 1 by stock during training
+ * kick-off; comment in handmade: "fix PCIe link stability". Not required
+ * for training (proxy-bisected) but kept to match stock.
+ * B404: bits 0-3 R/W. Reads 0x01 cold and trained.
+ */
 #define REG_PCIE_TUNNEL_CTRL    XDATA_REG8(0xB401)  // PCIe tunnel control
 #define   PCIE_TUNNEL_ENABLE      0x01  // Bit 0: Tunnel enable
 #define REG_PCIE_CTRL_B402      XDATA_REG8(0xB402)
@@ -1079,8 +1093,15 @@
 #define REG_PCIE_LINK_PARAM_B404 XDATA_REG8(0xB404) // PCIe link parameters
 #define   PCIE_LINK_PARAM_MASK    0x0F  // Bits 0-3: Link parameters
 
-// PCIe Tunnel Adapter Configuration (0xB410-0xB42B)
-// These registers configure the USB4 PCIe tunnel adapter path
+/*
+ * PCIe Tunnel Adapter Configuration (0xB410-0xB42B)
+ * All bytes fully R/W and retain their values (proxy-verified).
+ * Cold defaults: B410=0x1B B411=0x21 B412=0x24 B413=0x64 (B420-B423 mirror
+ * these), everything else 0x00. Stock rewrites the whole block during
+ * bring-up: 0x1B/0x21 pairs, credits 0x24, mode 0x63 (note: changes B413
+ * bit 0 from the cold 0x64), caps 06/04/00.
+ * These registers configure the USB4 PCIe tunnel adapter path.
+ */
 #define REG_TUNNEL_CFG_A_LO     XDATA_REG8(0xB410)  // Tunnel config A low (from 0x0A53)
 #define REG_TUNNEL_CFG_A_HI     XDATA_REG8(0xB411)  // Tunnel config A high (from 0x0A52)
 #define REG_TUNNEL_CREDITS      XDATA_REG8(0xB412)  // Tunnel credits (from 0x0A55)
