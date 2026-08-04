@@ -12,7 +12,7 @@
 
 /* String descriptors */
 #define USB_STR_MFG             "tiny"
-#define USB_STR_PRODUCT         "custom v0.1"
+#define USB_STR_PRODUCT         GIT_VERSION
 
 #define USB_STR_IDX_LANG        0
 #define USB_STR_IDX_MFG         1
