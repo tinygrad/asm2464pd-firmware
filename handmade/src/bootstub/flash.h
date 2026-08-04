@@ -50,10 +50,6 @@ static uint8_t flash_cmd(uint8_t command, uint32_t address, uint8_t address_mode
   REG_FLASH_CSR = FLASH_CSR_BUSY;
 
   ok = flash_poll_busy();
-  if (ok && length && !write) {
-    // BUSY drops before the flash DMA's XDATA writes are visible to the CPU.
-    for (uint8_t i = 0; i < 8; i++) __asm nop __endasm;
-  }
   REG_FLASH_MODE = 0;
   return ok;
 }
@@ -105,9 +101,11 @@ static uint8_t flash_program_page(uint32_t address, uint16_t length) {
 
 static uint8_t flash_read(uint32_t address, __xdata uint8_t *dst, uint16_t length) {
   while (length) {
-    uint16_t chunk = length < FLASH_BUFFER_SIZE ? length : FLASH_BUFFER_SIZE;
-    if (!flash_cmd(FLASH_CMD_READ, address, FLASH_ADDR_LEN_3BYTE, chunk, 0)) return 0;
-    xmemcpy(dst, FLASH_BUF, chunk);
+    // The first DMA byte can be stale; read and discard a prefix when possible.
+    uint8_t skip = address != 0;
+    uint16_t chunk = length < FLASH_BUFFER_SIZE - skip ? length : FLASH_BUFFER_SIZE - skip;
+    if (!flash_cmd(FLASH_CMD_READ, address - skip, FLASH_ADDR_LEN_3BYTE, chunk + skip, 0)) return 0;
+    xmemcpy(dst, FLASH_BUF + skip, chunk);
     dst += chunk;
     address += chunk;
     length -= chunk;
