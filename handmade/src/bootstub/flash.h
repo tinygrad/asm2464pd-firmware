@@ -13,9 +13,22 @@
 
 __xdata static uint8_t flash_unlocked;
 
+static void flash_clear_dma_status(void) {
+  REG_DMA_TRIGGER = 0;
+  REG_DMA_CHAN_CTRL2 = 0;
+  REG_DMA_STATUS = 0;
+  REG_DMA_STATUS2 = 0;
+}
+
 static uint8_t flash_poll_busy(void) {
   uint32_t timeout = 0xFFFFFUL;
   while (REG_FLASH_CSR & FLASH_CSR_BUSY) if (!--timeout) return 0;
+  return 1;
+}
+
+static uint8_t flash_poll_dma_idle(void) {
+  uint16_t timeout = 0xFFFF;
+  while ((REG_DMA_TRIGGER & DMA_TRIGGER_START) || (REG_DMA_CHAN_CTRL2 & DMA_CHAN_CTRL2_ACTIVE)) if (!--timeout) return 0;
   return 1;
 }
 
@@ -29,12 +42,17 @@ static void flash_init(void) {
   REG_FLASH_ADDR_LEN = 0;
   REG_FLASH_BUF_OFFSET_LO = 0;
   REG_FLASH_BUF_OFFSET_HI = 0;
+  flash_clear_dma_status();
   flash_unlocked = 0;
 }
 
 static uint8_t flash_cmd(uint8_t command, uint32_t address, uint8_t address_mode, uint16_t length, uint8_t write) {
-  uint8_t ok;
+  uint8_t ok, read = length && !write;
   if (address_mode > FLASH_ADDR_LEN_3BYTE || length > FLASH_BUFFER_SIZE || !flash_poll_busy()) return 0;
+  if (read) {
+    flash_clear_dma_status();
+    if (!flash_poll_dma_idle()) return 0;
+  }
 
   REG_FLASH_CON = 0;
   REG_FLASH_MODE = write ? FLASH_MODE_WRITE : 0;
@@ -50,7 +68,13 @@ static uint8_t flash_cmd(uint8_t command, uint32_t address, uint8_t address_mode
   REG_FLASH_CSR = FLASH_CSR_BUSY;
 
   ok = flash_poll_busy();
-  REG_FLASH_MODE = 0;
+  if (ok && read) ok = flash_poll_dma_idle();
+  REG_FLASH_MODE &= (uint8_t)~0x10;
+  REG_FLASH_MODE &= (uint8_t)~0x20;
+  REG_FLASH_MODE &= (uint8_t)~0x40;
+  REG_FLASH_MODE &= (uint8_t)~0x80;
+  REG_FLASH_MODE &= (uint8_t)~FLASH_MODE_WRITE;
+  if (read) flash_clear_dma_status();
   return ok;
 }
 
@@ -101,11 +125,9 @@ static uint8_t flash_program_page(uint32_t address, uint16_t length) {
 
 static uint8_t flash_read(uint32_t address, __xdata uint8_t *dst, uint16_t length) {
   while (length) {
-    // The first DMA byte can be stale; read and discard a prefix when possible.
-    uint8_t skip = address != 0;
-    uint16_t chunk = length < FLASH_BUFFER_SIZE - skip ? length : FLASH_BUFFER_SIZE - skip;
-    if (!flash_cmd(FLASH_CMD_READ, address - skip, FLASH_ADDR_LEN_3BYTE, chunk + skip, 0)) return 0;
-    xmemcpy(dst, FLASH_BUF + skip, chunk);
+    uint16_t chunk = length < FLASH_BUFFER_SIZE ? length : FLASH_BUFFER_SIZE;
+    if (!flash_cmd(FLASH_CMD_READ, address, FLASH_ADDR_LEN_3BYTE, chunk, 0)) return 0;
+    xmemcpy(dst, FLASH_BUF, chunk);
     dst += chunk;
     address += chunk;
     length -= chunk;
