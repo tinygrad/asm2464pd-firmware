@@ -9,7 +9,7 @@ CFLAGS = -mmcs51 --model-small --opt-code-speed --allow-unsafe-read
 CFLAGS += --std-c99
 CFLAGS += -I$(SRC_DIR)
 CFLAGS += --no-xinit-opt
-CFLAGS += -DGIT_VERSION='"$(shell git rev-parse --short=8 HEAD)"'
+CFLAGS += -DGIT_VERSION='"$(shell git rev-parse --short=8 HEAD)-$(if $(shell git status --porcelain),DIRTY,CLEAN)"'
 
 # Memory model settings
 LDFLAGS = --code-loc 0x0000 --code-size 0x10000
