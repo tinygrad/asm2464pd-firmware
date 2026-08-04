@@ -69,6 +69,7 @@ static uint8_t flash_cmd(uint8_t command, uint32_t address, uint8_t address_mode
 
   ok = flash_poll_busy();
   if (ok && read) ok = flash_poll_dma_idle();
+  // collapsing these writes causes corruption
   REG_FLASH_MODE &= (uint8_t)~0x10;
   REG_FLASH_MODE &= (uint8_t)~0x20;
   REG_FLASH_MODE &= (uint8_t)~0x40;
