@@ -1080,13 +1080,19 @@
  * B401: bits 0-1 R/W. Tunnel enable; stock pulses 0->1->0 around the tunnel
  * adapter config and B482 mode set. Ends at 0x00 even when trained.
  * B402: bits 0-3 R/W. Cold 0x03, stock writes 0x01 (trained value).
- * B403: bit 0 R/W (bits 7-1 read-as-0). **Gen3 cap**: writing 0x01 downgrades
- * the port's advertised max link speed Gen4 -> Gen3 BEFORE training (the
- * bank1 0x408C LNKCAP mirror changes 0x007B6C44 -> 0x007B6C43).  Stock
- * firmware sets this deliberately (RDNA3 stability).  With B403=0 the port
- * advertises Gen4 and attempts Gen4 EQ; on this channel EQ fails and the
- * link falls back to Gen3 (stable without PHY tuning, Gen1 flapping with
- * the 7900XTX-derived x2 tuning).
+ * B403: bit 0 R/W (bits 7-1 read-as-0). **Advertised max link speed control.**
+ * Writes directly and reversibly control the port's advertised max speed
+ * (proxy-verified A/B/reversibility test, no other steps involved; the flip
+ * happens within ~250ms of the write):
+ *   B403=0 -> bank1 0x408C LNKCAP mirror reads 0x007B6C44 (max Gen4 x4)
+ *   B403=1 -> bank1 0x408C LNKCAP mirror reads 0x007B6C43 (max Gen3 x4)
+ * Stock firmware sets this during bring-up and thus negotiates Gen3.
+ * Shipping configuration is B403=1 (Gen3 cap): Gen4 equalization does not
+ * complete on this board's channel in any tested configuration, and with
+ * Gen4 advertised the LTSSM wastes time in failed speed-change retries
+ * (info flapping Gen1<->Gen3).  Keeping the cap gives a clean, stable
+ * Gen3 link.  Since the ASM completer caps throughput ~1.68 GB/s anyway,
+ * Gen3 x2 (B431=0x0C) is the intended operating point.
  * B404: bits 0-3 R/W. Reads 0x01 cold and trained.
  */
 #define REG_PCIE_TUNNEL_CTRL    XDATA_REG8(0xB401)  // PCIe tunnel control

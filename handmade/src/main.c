@@ -76,17 +76,20 @@ static void pcie_power_off(void) {
 
 static void pcie_power_on(void) {
   REG_PCIE_PERST_CTRL  = PCIE_PERST_ASSERT;    // assert PERST#
-  REG_TUNNEL_CTRL_B403 = 0x01;                 // fix PCIe link stability
+  REG_TUNNEL_CTRL_B403 = 0x01;                 // cap advertised speed at Gen3 (intended)
   REG_TUNNEL_LINK_STATE &= (uint8_t)~0x01;     // clear tunnel link state (stock keeps bit 2)
   DPX = 0x01; REG_PHY_TLP_ROUTING |= PHY_TLP_ROUTING_ENABLE; DPX = 0x00;
-  /* No rxphy lane commits (0x78AF-0x7BAF): they latch the x2 lane config and
-   * prevent x4 negotiation.  No B431 write: leaving it at its power-on
-   * default (0x00) lets the link negotiate up to x4. */
+  /* No rxphy lane commits (0x78AF-0x7BAF): they latch the lane config and
+   * break training on this board. */
   REG_HDDPC_CTRL |= 0x20;                      // enable 3.3V
   sleep(100);                                  // power settle: the slot device is not
                                                // ready to answer Detect for ~20-50ms
   REG_CPU_CTRL_CA81 = 0x0E;                    // clear bit 0, required for training
   REG_CPU_MODE_NEXT = 0x21;
+  /* x2 link: disable lanes 2,3 (B431 is a lane-disable mask, bits 3..0 =
+   * lanes 3..0).  Gen3 x2 measures ~1.66 GB/s, the same as Gen3 x4 — the
+   * ASM completer caps ~1.68 GB/s either way — with better signal margin. */
+  REG_TUNNEL_LINK_STATUS = PCIE_LINK_WIDTH_x2;
   /* Start link training. 0x1C keeps the training engine retrying until the
    * downstream device answers (hardware clears bit 4 if it gives up).  The
    * stock E764 sequence ending at 0x19 is single-shot: it aborts when the
