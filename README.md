@@ -17,4 +17,10 @@ It gets 700 MB/s read+write on 10 Gbps USB3. It is accessible on the PCIe BAR at
 The SRAM read needs a write from the PCIe device side at 0x822000 to trigger the read.
 You can see an example of this working / speed test with `pcie/test_sram_verify.py`
 
+The device-to-host vendor request 0xF4 returns a 16-byte firmware information
+record encoded as `<4sBBHII`: magic `TG24`, protocol major/minor, record length,
+capability bits, and semantic firmware revision. Capability definitions live in
+`handmade/src/protocol.h`; hosts must use them instead of matching the product
+string.
+
 See CLAUDE.md for more stuff like how to run the emulator.

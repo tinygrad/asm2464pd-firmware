@@ -9,6 +9,7 @@
 #include "usb4_state.h"
 #include "usb.h"
 #include "gpio.h"
+#include "protocol.h"
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
@@ -27,6 +28,13 @@ static void uart_puthex(uint8_t val) {
 }
 
 #define TIMER1_MODE_HALF_MS     0x04U
+static uint32_t __xdata usb4_skip_magic;
+static uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming transfer */
+static volatile uint16_t __xdata sram_stream_remaining;
+static volatile uint8_t __xdata sram_stream_first_slot;
+static volatile uint8_t __xdata sram_stream_slot;
+static volatile uint8_t __xdata sram_stream_slots;
+static volatile uint8_t __xdata sram_stream_dma_active;
 /* Millisecond busy-sleep on Timer1; must never touch the CC10-CC13 PHY/PD mailbox. */
 static void sleep(uint16_t milliseconds) {
   REG_TIMER1_CSR = TIMER_CSR_CLEAR;
@@ -36,15 +44,15 @@ static void sleep(uint16_t milliseconds) {
   REG_TIMER1_THRESHOLD_HI = threshold >> 8;
   REG_TIMER1_THRESHOLD_LO = threshold & 0xFF;
   REG_TIMER1_CSR = TIMER_CSR_ENABLE;
-  { uint32_t g = 0; while (!(REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && ++g < 4000000UL); }
+  { uint32_t g = 0; while (!sram_stream_remaining && !(REG_TIMER1_CSR & TIMER_CSR_EXPIRED) && ++g < 4000000UL); }
 }
 
 static uint8_t is_usb2;
-static uint32_t __xdata usb4_skip_magic;
 #define USB4_SKIP_MAGIC 0x5AA55AA5UL
 
 /* Streaming PCIe state — configured via 0xF0 control message */
-static uint32_t __xdata dma_dwords;    /* total dwords remaining for streaming transfer */
+
+/* Chained SRAM OUT state — configured via 0xF5 and advanced after DMA goes idle. */
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
@@ -69,6 +77,23 @@ static void hw_status_read(__xdata hw_status_t *s) {
                             / INA231_SHUNT_UOHM);                            /* / R (uOhm) = mA */
 }
 
+static void desc_put_u32(uint8_t offset, uint32_t value) {
+  DESC_BUF[offset + 0] = (uint8_t)(value >> 0);
+  DESC_BUF[offset + 1] = (uint8_t)(value >> 8);
+  DESC_BUF[offset + 2] = (uint8_t)(value >> 16);
+  DESC_BUF[offset + 3] = (uint8_t)(value >> 24);
+}
+
+static void firmware_info_write(void) {
+  DESC_BUF[0] = 'T'; DESC_BUF[1] = 'G'; DESC_BUF[2] = '2'; DESC_BUF[3] = '4';
+  DESC_BUF[4] = FW_PROTOCOL_MAJOR;
+  DESC_BUF[5] = FW_PROTOCOL_MINOR;
+  DESC_BUF[6] = FW_INFO_SIZE;
+  DESC_BUF[7] = 0;
+  desc_put_u32(8, FW_CAPABILITIES);
+  desc_put_u32(12, FW_REVISION);
+}
+
 static void pcie_power_off(void) {
   /* Hold the downstream device in reset before removing its rails. */
   REG_PCIE_PERST_CTRL = PCIE_PERST_ASSERT;
@@ -77,6 +102,79 @@ static void pcie_power_off(void) {
   REG_PCIE_LANE_CTRL_C659 &= (uint8_t)~0x01;
   REG_HDDPC_CTRL &= (uint8_t)~0x20;
   led_set_rgb(false, false, true);  // blue = PCIe powered down
+}
+
+static void pcie_dma_apertures_configure(void) {
+  /* The controller defaults end these windows at 0x02 and 0x22. GSP's
+   * direct queue aliases require the stock full-bringup limits 0x08/0x28. */
+  REG_PCIE_DMA_SIZE_A = 0x08;
+  REG_PCIE_DMA_SIZE_B = 0x00;
+  REG_PCIE_DMA_SIZE_C = 0x08;
+  REG_PCIE_DMA_SIZE_D = 0x08;
+  REG_PCIE_DMA_BUF_A = 0x08;
+  REG_PCIE_DMA_BUF_B = 0x20;
+  REG_PCIE_DMA_BUF_C = 0x08;
+  REG_PCIE_DMA_BUF_D = 0x28;
+  REG_PCIE_DMA_CFG_50 = 0x00;
+  REG_PCIE_DMA_CFG_51 = 0x00;
+}
+
+static void pcie_post_train_configure(void) {
+  uint8_t attempts;
+
+  REG_PCIE_LANE_CTRL_C659 |= 0x01;
+  pcie_dma_apertures_configure();
+
+  /* Keep the internal NVMe datapath enabled: the controller reuses it for
+   * host-to-PCIe forwarding even when the downstream device is a GPU. */
+  REG_NVME_QUEUE_CFG |= 0x20;
+  REG_NVME_CMD_STATUS_50 |= 0x04;
+  REG_NVME_LINK_CTRL &= (uint8_t)~0x01;
+  REG_NVME_PARAM_C4EB |= 0x01;
+  REG_NVME_DMA_CTRL_ED |= 0x01;
+  REG_CPU_MODE_NEXT &= (uint8_t)~0x40;
+
+  /* Bridge config shadow for the two internal tunnel ports. */
+  REG_CPU_MODE_NEXT &= (uint8_t)~0x10;
+  REG_TUNNEL_CFG_A_LO = 0x1B; REG_TUNNEL_CFG_A_HI = 0x21;
+  REG_TUNNEL_CREDITS = 0x24; REG_TUNNEL_CFG_MODE = 0x63;
+  REG_TUNNEL_CAP_0 = 0x06; REG_TUNNEL_CAP_1 = 0x04; REG_TUNNEL_CAP_2 = 0x00;
+  REG_TUNNEL_PATH_CREDITS = 0x24; REG_TUNNEL_PATH_MODE = 0x63;
+  REG_TUNNEL_LINK_CFG_LO = 0x1B; REG_TUNNEL_LINK_CFG_HI = 0x21;
+  REG_TUNNEL_DATA_LO = 0x1B; REG_TUNNEL_DATA_HI = 0x21;
+  REG_TUNNEL_STATUS_0 = 0x24; REG_TUNNEL_STATUS_1 = 0x63;
+  REG_TUNNEL_CAP2_0 = 0x06; REG_TUNNEL_CAP2_1 = 0x04; REG_TUNNEL_CAP2_2 = 0x00;
+  REG_TUNNEL_PATH2_CRED = 0x24; REG_TUNNEL_PATH2_MODE = 0x63;
+  REG_TUNNEL_AUX_CFG_LO = 0x1B; REG_TUNNEL_AUX_CFG_HI = 0x21;
+
+  REG_PCIE_TUNNEL_CTRL |= 0x01;
+  REG_TUNNEL_ADAPTER_MODE |= 0x01;
+  REG_TUNNEL_ADAPTER_MODE = (uint8_t)((REG_TUNNEL_ADAPTER_MODE & 0x0F) | 0xF0);
+  REG_PCIE_TUNNEL_CTRL &= (uint8_t)~0x01;
+  REG_PCIE_PERST_CTRL |= 0x01;
+  REG_TUNNEL_LINK_STATE &= (uint8_t)~0x01;
+  REG_PCIE_TUNNEL_CFG = (uint8_t)((REG_PCIE_TUNNEL_CFG & 0xEF) | 0x10);
+  REG_CPU_MODE_NEXT &= (uint8_t)~0x10;
+  REG_PCIE_PERST_CTRL |= 0x01;
+
+  bank1_write(0x4084, 0x22);
+  bank1_write(0x5084, 0x22);
+  bank1_write(0x6043, 0x70);
+  bank1_or_bits(0x6025, 0x80);
+  REG_PCIE_LINK_CTRL_B481 = (uint8_t)((REG_PCIE_LINK_CTRL_B481 & 0xFC) | 0x03);
+
+  /* Commit forwarding after all bridge and aperture state is visible. */
+  REG_PCIE_LTSSM_B455 = 0x02;
+  REG_PCIE_LTSSM_B455 = 0x04;
+  REG_PCIE_CTRL_B2D5 = 0x01;
+  REG_PCIE_STATUS = PCIE_STATUS_RESET;
+  for (attempts = 0; attempts < 200; attempts++) {
+    if (REG_PCIE_LTSSM_B455 & 0x02) {
+      REG_PCIE_LTSSM_B455 = 0x02;
+      break;
+    }
+    sleep(5);
+  }
 }
 
 static void pcie_power_on(void) {
@@ -120,8 +218,7 @@ static void pcie_power_on(void) {
   }
   if (stable_samples < 3) uart_puts("[PCIe timeout]\n");
 
-  /* Stock firmware only sets this once training is done. */
-  REG_PCIE_LANE_CTRL_C659 |= 0x01;
+  pcie_post_train_configure();
 
   // green = PCIe link up, red = link down
   bool link_up = (stable_samples >= 3);
@@ -137,6 +234,42 @@ static void do_usb_bulk_in(void) {
   REG_USB_BULK_IN_LEN_L = nbytes & 0xFF;
   dma_dwords -= chunk;
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
+}
+
+static void sram_stream_cancel(void) {
+  sram_stream_remaining = 0;
+  sram_stream_dma_active = 0;
+}
+
+static void sram_stream_arm(void) {
+  sram_stream_dma_active = 0;
+  REG_NVME_DOORBELL = 0x0;
+  REG_NVME_SECTOR_SIZE_HI = 0x02;
+  REG_NVME_SECTOR_SIZE_LO = 0x00;
+  REG_NVME_SLOT_START = NVME_SLOT_ENABLE | sram_stream_slot;
+  REG_NVME_SLOT_END = sram_stream_slots + sram_stream_slot;
+  REG_NVME_SECTOR_COUNT_HI = (uint8_t)(((uint16_t)sram_stream_slots * 32U) >> 8);
+  REG_NVME_SECTOR_COUNT_LO = (uint8_t)((uint16_t)sram_stream_slots * 32U);
+  REG_NVME_CTRL_STATUS = NVME_CTRL_DMA_START | NVME_CTRL_WRITE_DIR;
+  REG_NVME_CMD_PARAM = sram_stream_slot;
+  sram_stream_dma_active = 1;
+}
+
+static void sram_stream_poll(void) {
+  if (!sram_stream_remaining || !sram_stream_dma_active ||
+      (REG_NVME_CMD_STATUS_50 & NVME_CMD_STATUS_DMA_ACTIVE)) return;
+
+  CRITICAL_ENTER();
+  if (sram_stream_remaining && sram_stream_dma_active && !(REG_NVME_CMD_STATUS_50 & NVME_CMD_STATUS_DMA_ACTIVE)) {
+    sram_stream_dma_active = 0;
+    sram_stream_remaining--;
+    if (sram_stream_remaining) {
+      sram_stream_slot += sram_stream_slots;
+      if (sram_stream_slot + sram_stream_slots > 32) sram_stream_slot = sram_stream_first_slot;
+      sram_stream_arm();
+    }
+  }
+  CRITICAL_EXIT();
 }
 
 
@@ -179,6 +312,7 @@ static void handle_usb_control(void) {
         REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       }
       dma_dwords = 0;
+      sram_stream_cancel();
       usb_send_zlp();
     } else if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_CONFIGURATION) {
       // enable USB bulk mode (bypass MSC)
@@ -187,17 +321,23 @@ static void handle_usb_control(void) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
+      sram_stream_cancel();
       usb_send_zlp();
       uart_puts("[*** SET CONFIG ***]\n");
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_RECIP_INTERFACE) && bReq == USB_REQ_SET_INTERFACE) {
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_IN;
       REG_USB_EP_CFG2 = USB_EP_CFG2_CLEAR_OUT;
       dma_dwords = 0;
+      sram_stream_cancel();
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xC0) {
       /* 0xC0 IN: hw_status_t */
       hw_status_read((__xdata hw_status_t *)DESC_BUF);
       usb_send_data(sizeof(hw_status_t));
+    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == FW_INFO_REQUEST) {
+      /* 0xF4 IN: stable firmware protocol and capability record. */
+      firmware_info_write();
+      usb_send_data(wLen < FW_INFO_SIZE ? wLen : FW_INFO_SIZE);
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
       /* Vendor read XDATA via control.  wValue=addr, wLength=size.
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */
@@ -234,6 +374,7 @@ static void handle_usb_control(void) {
       uint8_t slot_sel = REG_USB_SETUP_WIDX_L;
       uint8_t num_slots = REG_USB_SETUP_WIDX_H;
       if (num_slots == 0) num_slots = 1;
+      sram_stream_cancel();
       /* DMA_INIT sequence for SRAM DMA */
       REG_NVME_DOORBELL       = 0x0;
       REG_NVME_SECTOR_SIZE_HI = 0x02;
@@ -244,6 +385,20 @@ static void handle_usb_control(void) {
       REG_NVME_SECTOR_COUNT_LO = (uint8_t)(sectors & 0xFF);
       REG_NVME_CTRL_STATUS = NVME_CTRL_DMA_START | (bulk_in ? 0 : NVME_CTRL_WRITE_DIR);
       REG_NVME_CMD_PARAM   = slot_sel;
+      usb_send_zlp();
+    } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF5) {
+      /* 0xF5: arm a sequence of equal, whole-slot SRAM OUT transfers.
+       * wValue = transfer count, wIndex low = first slot, wIndex high = slots/transfer. */
+      sram_stream_cancel();
+      if ((wValL || wValH) && REG_USB_SETUP_WIDX_H && REG_USB_SETUP_WIDX_L < 32 &&
+          REG_USB_SETUP_WIDX_L + REG_USB_SETUP_WIDX_H <= 32) {
+        dma_dwords = 0;
+        sram_stream_remaining = ((uint16_t)wValH << 8) | wValL;
+        sram_stream_first_slot = REG_USB_SETUP_WIDX_L;
+        sram_stream_slot = REG_USB_SETUP_WIDX_L;
+        sram_stream_slots = REG_USB_SETUP_WIDX_H;
+        sram_stream_arm();
+      }
       usb_send_zlp();
     } else if (bmReq == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) && bReq == 0xF3) {
       /* 0xF3: PCIe power control.
@@ -312,8 +467,9 @@ static void handle_usb_control(void) {
       uint8_t widx_l   = REG_USB_SETUP_WIDX_L;
       uint8_t mode  = widx_l & 0x03;
 
-      /* Reset any in-flight streaming transfer so stale ISRs are no-ops. */
+      /* Reset any in-flight transfer before reconfiguring the PCIe TLP engine. */
       dma_dwords = 0;
+      sram_stream_cancel();
 
       /* Configure PCIe TLP engine */
       REG_PCIE_FMT_TYPE   = fmt_type;
@@ -378,7 +534,7 @@ void handle_usb_bulk_data(void) {
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
     REG_USB_EP_CFG1 = USB_EP_CFG1_BULK_OUT_COMPLETE;
     uint16_t dword_count = (((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L) >> 2;
-    if (dma_dwords >= dword_count) {
+    if (!sram_stream_remaining && dma_dwords >= dword_count) {
       pcie_write_chunk((__xdata uint8_t *)0x7000, dword_count);
       dma_dwords -= dword_count;
       if (dma_dwords > 0) REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT; // re-arm OUT
@@ -398,6 +554,7 @@ void int0_isr(void) __interrupt(0) {
     periph_status = REG_USB_PERIPH_STATUS;
 
     if (periph_status & USB_PERIPH_BUS_RESET) {
+      sram_stream_cancel();
       /* 0x91D1 USB-SS / USB4-router link-event demux. */
       uint8_t link_event = REG_USB_PHY_CTRL_91D1;
       if (link_event & USB_91D1_FLAG) {
@@ -549,6 +706,9 @@ void main(void) {
     REG_USB_INT_MASK_9090 &= 0x7F;
   } else {
     usb_init_controller(0);
+    /* usb_init_controller restores several bridge defaults, so commit the
+     * complete post-training state only after USB is initialized. */
+    pcie_post_train_configure();
   }
 
   // enable interrupts (EX1 = PD/USB4 INT1)
@@ -563,6 +723,7 @@ void main(void) {
   uint8_t usb4_fallback_ticks = 0;
   uint8_t usb4_usb_inited = 0;
   while (1) {
+    sram_stream_poll();
     if (IS_USB4()) {
       /* Poll cc_pd_timer_tick from the main loop when PD hasn't connected yet.
        * The 1s DMA timeout arms the USB4 mode entry fallback for USB3-only hosts
