@@ -3146,7 +3146,12 @@ def create_hardware_hooks(memory: 'Memory', hw: HardwareState, proxy: 'UARTProxy
                     elif addr == 0x9E0B: value = (pid >> 8) & 0xFF
 
             proxy_ref.write(addr, value)
-            if proxy_ref.debug >= 2:
+            if proxy_ref.debug >= 3:
+                pc = hw_ref._cpu_ref.pc if hw_ref._cpu_ref else 0
+                cyc = hw_ref.cycles
+                bank = (hw_ref.memory.read_sfr(0x96) & 1) if hw_ref.memory else -1
+                print(f"[{cyc:8d}] PC=0x{pc:04X} bank={bank} Write 0x{addr:04X} = 0x{value:02X}")
+            elif proxy_ref.debug == 2:
                 pc = hw_ref._cpu_ref.pc if hw_ref._cpu_ref else 0
                 cyc = hw_ref.cycles
                 reg_name = get_register_name(addr)
