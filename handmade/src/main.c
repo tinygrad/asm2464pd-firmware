@@ -420,6 +420,7 @@ void int0_isr(void) __interrupt(0) {
   if (int0_type & INT_USB_GATE) {
     uint8_t periph_status;
     periph_status = REG_USB_PERIPH_STATUS;
+    if (REG_BUF_CFG_9302 & 0x20) REG_BUF_CFG_9302 = 0x20;
 
     if (periph_status & USB_PERIPH_BUS_RESET) {
       uint8_t link_event = REG_USB_PHY_CTRL_91D1;
