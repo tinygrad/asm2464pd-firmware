@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Toggle ATX PSU power via the custom USB adapter's GPIO 15 (ATX_EN).
+Also controls PCIe power (3.3V/12V rails) via vendor request 0xF3.
 
 Usage:
-  python3 atx_power.py on          # power on ATX PSU
-  python3 atx_power.py off         # power off ATX PSU
+  python3 atx_power.py on          # power on ATX PSU + PCIe
+  python3 atx_power.py off         # power off PCIe + ATX PSU
   python3 atx_power.py toggle      # toggle current state
   python3 atx_power.py status      # read current GPIO 15 state
 """
@@ -22,6 +23,10 @@ GPIO_HIGH   = 0x03  # drive high = ATX on
 # GPIO input register: 0xC650 + (15 >> 3) = 0xC651, bit (15 & 7) = bit 7
 GPIO_ATX_INPUT_REG = 0xC650 + (15 >> 3)
 GPIO_ATX_INPUT_BIT = 1 << (15 & 7)
+
+# PCIe power is controlled via vendor request 0xF3 (wValue=1 on, 0 off)
+PCIE_POWER_ON  = 1
+PCIE_POWER_OFF = 0
 
 
 def open_device():
@@ -57,14 +62,26 @@ def xdata_write(handle, addr, val):
     raise RuntimeError(f"E5 write 0x{addr:04X}=0x{val:02X} failed: {ret}")
 
 
+def pcie_power(handle, enabled):
+  """Toggle PCIe power rails via vendor request 0xF3."""
+  val = PCIE_POWER_ON if enabled else PCIE_POWER_OFF
+  ret = libusb.libusb_control_transfer(handle, 0x40, 0xF3, val, 0, None, 0, 5000)
+  if ret < 0:
+    state = 'on' if enabled else 'off'
+    raise RuntimeError(f"F3 PCIe power {state} failed: {ret}")
+
+
 def atx_on(handle):
   xdata_write(handle, GPIO_ATX_EN_REG, GPIO_HIGH)
-  print("ATX PSU powered on (GPIO 15 -> HIGH)")
+  time.sleep(0.5)  # let ATX rails stabilize before enabling PCIe
+  pcie_power(handle, enabled=True)
+  print("ATX PSU + PCIe powered on (GPIO 15 -> HIGH, PCIe power ON)")
 
 
 def atx_off(handle):
+  pcie_power(handle, enabled=False)
   xdata_write(handle, GPIO_ATX_EN_REG, GPIO_LOW)
-  print("ATX PSU powered off (GPIO 15 -> LOW)")
+  print("PCIe + ATX PSU powered off (PCIe power OFF, GPIO 15 -> LOW)")
 
 
 def atx_status(handle):
