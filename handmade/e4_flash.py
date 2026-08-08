@@ -27,6 +27,8 @@ from pcie_probe import xdata_read, xdata_write
 
 VID, PID = 0x3801, 0x0001
 EP_OUT = 0x02
+USB2_EP0_MAX_PACKET_SIZE = 64
+VERIFY_CHUNK_SIZE = 256
 
 def flash_init(h):
   """Initialize flash controller — required before any SPI operation."""
@@ -110,8 +112,15 @@ def flash_read(h, addr, size):
     flash_transaction(h, cmd=0x03, addr=addr + offset, data_len=dma_len, addr_len=0x07, mode=0x00)
     read = 0
     while read < want:
-      n = min(255, want - read)
-      result.extend(xdata_read(h, 0x7000 + read, n))
+      # The device may fall back from SuperSpeed to USB2, where the firmware
+      # limits E4 control responses to one 64-byte EP0 packet.  Keep this
+      # transport limit separate from the higher-level read/verify size.
+      n = min(USB2_EP0_MAX_PACKET_SIZE, want - read)
+      chunk_addr = 0x7000 + read
+      chunk = xdata_read(h, chunk_addr, n)
+      if len(chunk) != n:
+        raise IOError(f"Short E4 read at 0x{chunk_addr:04X}: {len(chunk)}/{n} bytes")
+      result.extend(chunk)
       read += n
     offset += want
   return bytes(result)
@@ -185,7 +194,9 @@ def flash_verify(h, addr, firmware):
   errors = 0
   verified = 0
   while verified < total:
-    chunk = min(255, total - verified)
+    # Verification uses 256-byte logical windows. flash_read() splits each
+    # window into USB2-safe 64-byte E4 control transfers when necessary.
+    chunk = min(VERIFY_CHUNK_SIZE, total - verified)
     got = flash_read(h, addr + verified, chunk)
     expected = firmware[verified:verified + chunk]
     for i in range(min(len(got), len(expected))):
