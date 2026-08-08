@@ -9,7 +9,6 @@
 #include "usb4_state.h"
 #include "usb.h"
 #include "gpio.h"
-#include "protocol.h"
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
@@ -75,23 +74,6 @@ static void hw_status_read(__xdata hw_status_t *s) {
   s->voltage_mv = (uint16_t)(((uint32_t)bus_raw * 125) / 100);               /* 1.25 mV/LSB */
   s->current_ma = (int16_t)(((int32_t)(int16_t)shunt_raw * 2500)             /* shunt uV × 1000 */
                             / INA231_SHUNT_UOHM);                            /* / R (uOhm) = mA */
-}
-
-static void desc_put_u32(uint8_t offset, uint32_t value) {
-  DESC_BUF[offset + 0] = (uint8_t)(value >> 0);
-  DESC_BUF[offset + 1] = (uint8_t)(value >> 8);
-  DESC_BUF[offset + 2] = (uint8_t)(value >> 16);
-  DESC_BUF[offset + 3] = (uint8_t)(value >> 24);
-}
-
-static void firmware_info_write(void) {
-  DESC_BUF[0] = 'T'; DESC_BUF[1] = 'G'; DESC_BUF[2] = '2'; DESC_BUF[3] = '4';
-  DESC_BUF[4] = FW_PROTOCOL_MAJOR;
-  DESC_BUF[5] = FW_PROTOCOL_MINOR;
-  DESC_BUF[6] = FW_INFO_SIZE;
-  DESC_BUF[7] = 0;
-  desc_put_u32(8, FW_CAPABILITIES);
-  desc_put_u32(12, FW_REVISION);
 }
 
 static void pcie_power_off(void) {
@@ -272,7 +254,6 @@ static void sram_stream_poll(void) {
   CRITICAL_EXIT();
 }
 
-
 /*=== USB Control Handler ===*/
 
 static void handle_usb_control(void) {
@@ -334,10 +315,6 @@ static void handle_usb_control(void) {
       /* 0xC0 IN: hw_status_t */
       hw_status_read((__xdata hw_status_t *)DESC_BUF);
       usb_send_data(sizeof(hw_status_t));
-    } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == FW_INFO_REQUEST) {
-      /* 0xF4 IN: stable firmware protocol and capability record. */
-      firmware_info_write();
-      usb_send_data(wLen < FW_INFO_SIZE ? wLen : FW_INFO_SIZE);
     } else if (bmReq == (USB_SETUP_DIR_DEV_TO_HOST | USB_SETUP_TYPE_VENDOR) && bReq == 0xE4) {
       /* Vendor read XDATA via control.  wValue=addr, wLength=size.
        * wIndex high byte selects bank (0=normal, 1=PHY/switch via DPX). */

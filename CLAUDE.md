@@ -43,3 +43,10 @@ If you want to do experiments with the stock firmware, you can flash it with:
 You can access the serial port with this in a different screen, then tail /tmp/serial:
 
 PYTHONUNBUFFERED=1 ./ftdi_debug.py | tee /tmp/serial
+
+
+Build `handmade` with SDCC 4.2.0 build 13081. SDCC 4.6.0 is not supported and can crash in `peep.c` while compiling this firmware.
+The local pinned toolchain is `/private/tmp/sdcc-4.2-full/bin`.
+Build with:
+
+make -C handmade clean wrapped CC=/private/tmp/sdcc-4.2-full/bin/sdcc AS=/private/tmp/sdcc-4.2-full/bin/sdas8051

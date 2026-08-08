@@ -1,5 +1,4 @@
 import re
-import struct
 from pathlib import Path
 
 import pytest
@@ -81,17 +80,6 @@ def finish_usb3_init(emu):
     # The generic emulator has no INA231 model; complete its one startup I2C transaction.
     emu.hw.read_callbacks[0xC875] = lambda _hw, _addr: 0x40
     run_control(emu)
-
-
-@pytest.mark.parametrize("requested,expected", [(8, 8), (16, 16), (64, 16)])
-def test_firmware_info_record(handmade_emulator, requested, expected):
-    emu = handmade_emulator
-    queue_handmade_control(emu, 0xC0, 0xF4, length=requested)
-    run_control(emu)
-
-    record = bytes(emu.hw.regs.get(0x9E00 + i, 0) for i in range(16))
-    assert struct.unpack("<4sBBHII", record) == (b"TG24", 1, 0, 16, 0xFF, 8)
-    assert (emu.hw.regs.get(0x9003), emu.hw.regs.get(0x9004)) == (0, expected)
 
 
 def test_cold_boot_commits_gpu_post_train_state(handmade_usb3_emulator):

@@ -3,7 +3,6 @@
 
 import ctypes
 import re
-import struct
 import time
 from pathlib import Path
 
@@ -12,17 +11,8 @@ from tinygrad.runtime.autogen import libusb
 from pcie_probe import usb_close, usb_open, xdata_read
 
 
-FW_INFO = struct.Struct("<4sBBHII")
-FW_CAP_SRAM_STREAM = 1 << 7
 EP_OUT = 0x02
 RING_SLOTS = (18, 25, 11, 11)
-
-
-def control_read(handle, request, length, value=0, index=0):
-  buf = (ctypes.c_ubyte * length)()
-  ret = libusb.libusb_control_transfer(handle, 0xC0, request, value, index, buf, length, 1000)
-  assert ret == length, f"control read 0x{request:02x} returned {ret}, expected {length}"
-  return bytes(buf)
 
 
 def control_write(handle, request, value=0, index=0):
@@ -84,11 +74,6 @@ def main():
   symbols = stream_symbols()
   handle, context = usb_open()
   try:
-    magic, major, minor, info_size, capabilities, revision = FW_INFO.unpack(control_read(handle, 0xF4, FW_INFO.size))
-    assert (magic, major, minor, info_size, revision) == (b"TG24", 1, 0, FW_INFO.size, 8)
-    assert capabilities & FW_CAP_SRAM_STREAM
-    print(f"firmware revision {revision}, capabilities 0x{capabilities:08x}")
-
     # A full-window stream proves that a completed transfer is rearmed and that
     # the following transfer replaces SRAM rather than falling into EP scratch.
     full_size = 32 * 0x4000
