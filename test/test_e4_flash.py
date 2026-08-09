@@ -1,4 +1,5 @@
 import importlib.util
+import random
 import sys
 import types
 from pathlib import Path
@@ -95,3 +96,88 @@ def test_flash_read_rejects_short_usb2_control_read(monkeypatch):
 
   with pytest.raises(IOError, match=r"Short E4 read at 0x7000: 63/64 bytes"):
     e4_flash.flash_read(object(), 0, 64)
+
+
+def test_flash_write_uses_usb2_safe_chunks_for_config_and_firmware(monkeypatch):
+  """Config restoration and firmware writes must stay within 64 bytes."""
+  e4_flash = load_e4_flash(monkeypatch)
+  config = bytes(range(256))
+  firmware = bytes(range(130))
+  erased = []
+  bulk_writes = []
+  page_programs = []
+
+  monkeypatch.setattr(e4_flash, "flash_read", lambda _handle, addr, size: config if (addr, size) == (0, 256) else None)
+  monkeypatch.setattr(e4_flash, "flash_block_erase", lambda _handle, addr: erased.append(addr))
+  monkeypatch.setattr(e4_flash, "bulk_out", lambda _handle, data: bulk_writes.append(bytes(data)))
+  monkeypatch.setattr(
+    e4_flash,
+    "flash_page_program",
+    lambda _handle, addr, size: page_programs.append((addr, size)),
+  )
+
+  e4_flash.flash_write(object(), 0x100, firmware)
+
+  assert erased == [0]
+  assert [len(chunk) for chunk in bulk_writes] == [64, 64, 64, 64, 64, 64, 4]
+  assert bulk_writes[-1] == firmware[-2:] + b"\x00\x00"
+  assert page_programs == [
+    (0x000, 64),
+    (0x040, 64),
+    (0x080, 64),
+    (0x0C0, 64),
+    (0x100, 64),
+    (0x140, 64),
+    (0x180, 2),
+  ]
+
+
+def test_flash_test_uses_usb2_safe_chunks(monkeypatch):
+  """The destructive flash self-test must use the same safe write size."""
+  e4_flash = load_e4_flash(monkeypatch)
+  rng = random.Random(42)
+  pattern = bytes(rng.randint(0, 255) for _ in range(4096))
+  erased = []
+  bulk_sizes = []
+  page_programs = []
+
+  def fake_flash_read(_handle, _addr, size):
+    if size == 16:
+      return b"\xFF" * size
+    if size == len(pattern):
+      return pattern
+    raise AssertionError(f"Unexpected flash read size: {size}")
+
+  monkeypatch.setattr(e4_flash, "flash_read", fake_flash_read)
+  monkeypatch.setattr(e4_flash, "flash_block_erase", lambda _handle, addr: erased.append(addr))
+  monkeypatch.setattr(e4_flash, "bulk_out", lambda _handle, data: bulk_sizes.append(len(data)))
+  monkeypatch.setattr(
+    e4_flash,
+    "flash_page_program",
+    lambda _handle, addr, size: page_programs.append((addr, size)),
+  )
+
+  assert e4_flash.flash_test(object()) == 0
+  assert erased == [0x10000, 0x10000]
+  assert bulk_sizes == [64] * 64
+  assert page_programs == [(0x10000 + offset, 64) for offset in range(0, 4096, 64)]
+
+
+def test_flash_test_erases_scratch_block_after_write_failure(monkeypatch):
+  """A failed self-test must still erase its scratch flash block."""
+  e4_flash = load_e4_flash(monkeypatch)
+  erased = []
+
+  monkeypatch.setattr(e4_flash, "flash_read", lambda _handle, _addr, size: b"\xFF" * size)
+  monkeypatch.setattr(e4_flash, "flash_block_erase", lambda _handle, addr: erased.append(addr))
+  monkeypatch.setattr(e4_flash, "bulk_out", lambda *_args, **_kwargs: None)
+
+  def fail_page_program(*_args, **_kwargs):
+    raise IOError("simulated page program failure")
+
+  monkeypatch.setattr(e4_flash, "flash_page_program", fail_page_program)
+
+  with pytest.raises(IOError, match="simulated page program failure"):
+    e4_flash.flash_test(object())
+
+  assert erased == [0x10000, 0x10000]

@@ -28,6 +28,7 @@ from pcie_probe import xdata_read, xdata_write
 VID, PID = 0x3801, 0x0001
 EP_OUT = 0x02
 USB2_EP0_MAX_PACKET_SIZE = 64
+USB2_FLASH_WRITE_CHUNK_SIZE = 64
 VERIFY_CHUNK_SIZE = 256
 
 def flash_init(h):
@@ -168,17 +169,17 @@ def flash_write(h, addr, firmware):
   # Restore config if we saved it
   if config is not None:
     print("  Restoring config...")
-    for off in range(0, 256, 128):
-      chunk = config[off:off+128]
+    for off in range(0, len(config), USB2_FLASH_WRITE_CHUNK_SIZE):
+      chunk = config[off:off + USB2_FLASH_WRITE_CHUNK_SIZE]
       if not all(b == 0xFF for b in chunk):
         bulk_out(h, chunk)
-        flash_page_program(h, off, 128)
+        flash_page_program(h, off, len(chunk))
 
-  # Write in 128-byte chunks — 0x7000 buffer only reliably holds 128 bytes
-  # (upper half gets overwritten by firmware code/ISR)
+  # A USB2 bulk OUT may report success while only refreshing the first
+  # 64 bytes of the 0x7000 buffer, so stage each flash write separately.
   written = 0
   while written < total:
-    chunk_size = min(128, total - written)
+    chunk_size = min(USB2_FLASH_WRITE_CHUNK_SIZE, total - written)
     chunk = firmware[written:written + chunk_size]
     padded = chunk + bytes((-len(chunk)) % 4)
     bulk_out(h, padded)
@@ -225,28 +226,29 @@ def flash_test(h):
   # Erase
   print("  Erasing...")
   flash_block_erase(h, TEST_ADDR)
-  erased = flash_read(h, TEST_ADDR, 16)
-  assert all(b == 0xFF for b in erased), f"Erase failed: {erased.hex()}"
+  try:
+    erased = flash_read(h, TEST_ADDR, 16)
+    assert all(b == 0xFF for b in erased), f"Erase failed: {erased.hex()}"
 
-  # Write in 128-byte pages
-  print("  Writing...")
-  for off in range(0, TEST_SIZE, 128):
-    chunk = pattern[off:off+128]
-    bulk_out(h, chunk)
-    flash_page_program(h, TEST_ADDR + off, 128)
+    # Use the same USB2-safe write size as the firmware programming path.
+    print("  Writing...")
+    for off in range(0, TEST_SIZE, USB2_FLASH_WRITE_CHUNK_SIZE):
+      chunk = pattern[off:off + USB2_FLASH_WRITE_CHUNK_SIZE]
+      bulk_out(h, chunk)
+      flash_page_program(h, TEST_ADDR + off, len(chunk))
 
-  # Read back and verify
-  print("  Verifying...")
-  got = flash_read(h, TEST_ADDR, TEST_SIZE)
-  errors = 0
-  for i in range(TEST_SIZE):
-    if got[i] != pattern[i]:
-      if errors < 5:
-        print(f"    MISMATCH at +0x{i:04X}: got 0x{got[i]:02X}, expected 0x{pattern[i]:02X}")
-      errors += 1
-
-  # Clean up: re-erase the test block
-  flash_block_erase(h, TEST_ADDR)
+    # Read back and verify
+    print("  Verifying...")
+    got = flash_read(h, TEST_ADDR, TEST_SIZE)
+    errors = 0
+    for i in range(TEST_SIZE):
+      if got[i] != pattern[i]:
+        if errors < 5:
+          print(f"    MISMATCH at +0x{i:04X}: got 0x{got[i]:02X}, expected 0x{pattern[i]:02X}")
+        errors += 1
+  finally:
+    # Always leave the scratch block erased, including after test failures.
+    flash_block_erase(h, TEST_ADDR)
 
   if errors == 0:
     print(f"  PASS: {TEST_SIZE} bytes verified")
