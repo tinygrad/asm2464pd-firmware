@@ -27,6 +27,9 @@ from pcie_probe import xdata_read, xdata_write
 
 VID, PID = 0x3801, 0x0001
 EP_OUT = 0x02
+FLASH_SIZE = 0x40000  # 256 KiB, matching JEDEC capacity code 0x12
+FLASH_BUFFER_SIZE = 4096
+FLASH_READ_PREFIX_SIZE = 1
 USB2_EP0_MAX_PACKET_SIZE = 64
 USB2_FLASH_WRITE_CHUNK_SIZE = 64
 VERIFY_CHUNK_SIZE = 256
@@ -124,21 +127,24 @@ def flash_jedec_id(h):
   return xdata_read(h, 0x7000, 3)
 
 def flash_read(h, addr, size):
-  """Read from SPI flash in 4KB DMA chunks, return requested bytes."""
+  """Read SPI flash while discarding the DMA buffer's unreliable first byte."""
   result = bytearray()
   offset = 0
   while offset < size:
-    want = min(4096, size - offset)
-    # DMA needs at least 4KB to fill buffer reliably
-    dma_len = max(4096, want)
-    flash_transaction(h, cmd=0x03, addr=addr + offset, data_len=dma_len, addr_len=0x07, mode=0x00)
+    want = min(FLASH_BUFFER_SIZE - FLASH_READ_PREFIX_SIZE, size - offset)
+    target_addr = (addr + offset) % FLASH_SIZE
+    dma_addr = (target_addr - FLASH_READ_PREFIX_SIZE) % FLASH_SIZE
+    # The first flash DMA byte can remain stale even after the controller
+    # reports idle.  Read one prefix byte and discard it.  Address zero wraps
+    # from the final byte of the 256 KiB flash.
+    flash_transaction(h, cmd=0x03, addr=dma_addr, data_len=FLASH_BUFFER_SIZE, addr_len=0x07, mode=0x00)
     read = 0
     while read < want:
       # The device may fall back from SuperSpeed to USB2, where the firmware
       # limits E4 control responses to one 64-byte EP0 packet.  Keep this
       # transport limit separate from the higher-level read/verify size.
       n = min(USB2_EP0_MAX_PACKET_SIZE, want - read)
-      chunk_addr = 0x7000 + read
+      chunk_addr = 0x7000 + FLASH_READ_PREFIX_SIZE + read
       chunk = xdata_read(h, chunk_addr, n)
       if len(chunk) != n:
         raise IOError(f"Short E4 read at 0x{chunk_addr:04X}: {len(chunk)}/{n} bytes")
