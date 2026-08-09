@@ -56,8 +56,24 @@ def flash_poll_busy(h):
     if not (xdata_read(h, 0xC8A9, 1)[0] & 0x01): return
   raise TimeoutError("Flash CSR busy timeout")
 
+def flash_clear_dma_status(h):
+  """Clear the DMA state used by flash reads."""
+  for addr in (0xC8B8, 0xC8B6, 0xC8D6, 0xC8D8):
+    xdata_write(h, addr, 0x00)
+
+def flash_poll_dma_idle(h):
+  """Wait until both flash DMA activity indicators are idle."""
+  for _ in range(100000):
+    if not (xdata_read(h, 0xC8B8, 1)[0] & 0x01) and not (xdata_read(h, 0xC8B6, 1)[0] & 0x80): return
+  raise TimeoutError("Flash DMA idle timeout")
+
 def flash_transaction(h, cmd, addr=0, data_len=0, addr_len=0x07, mode=0x00):
   """Run a flash transaction matching the stock bootloader sequence."""
+  is_read = data_len > 0 and not (mode & 0x01)
+  flash_poll_busy(h)
+  if is_read:
+    flash_clear_dma_status(h)
+    flash_poll_dma_idle(h)
   xdata_write(h, 0xC8AD, mode)
   xdata_write(h, 0xC8AE, 0x00)
   xdata_write(h, 0xC8AF, 0x00)
@@ -72,10 +88,15 @@ def flash_transaction(h, cmd, addr=0, data_len=0, addr_len=0x07, mode=0x00):
   xdata_write(h, 0xC8A4, data_len & 0xFF)
   xdata_write(h, 0xC8A9, 0x01)
   flash_poll_busy(h)
-  xdata_write(h, 0xC8AD, 0x00)
-  xdata_write(h, 0xC8AD, 0x00)
-  xdata_write(h, 0xC8AD, 0x00)
-  xdata_write(h, 0xC8AD, 0x00)
+  if is_read:
+    flash_poll_dma_idle(h)
+  # Keep these mode-bit clears as separate read-modify-write cycles.  The
+  # bootstub uses the same sequence because collapsing them corrupts reads.
+  for mask in (0x10, 0x20, 0x40, 0x80, 0x01):
+    current_mode = xdata_read(h, 0xC8AD, 1)[0]
+    xdata_write(h, 0xC8AD, current_mode & ~mask)
+  if is_read:
+    flash_clear_dma_status(h)
 
 def flash_wren(h):
   """WREN — write enable. Does NOT use flash_transaction to avoid clobbering 0x7000 buffer."""

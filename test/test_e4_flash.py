@@ -98,6 +98,77 @@ def test_flash_read_rejects_short_usb2_control_read(monkeypatch):
     e4_flash.flash_read(object(), 0, 64)
 
 
+def test_flash_clear_dma_status_resets_all_activity_registers(monkeypatch):
+  e4_flash = load_e4_flash(monkeypatch)
+  writes = []
+  monkeypatch.setattr(e4_flash, "xdata_write", lambda _handle, addr, value: writes.append((addr, value)))
+
+  e4_flash.flash_clear_dma_status(object())
+
+  assert writes == [
+    (0xC8B8, 0),
+    (0xC8B6, 0),
+    (0xC8D6, 0),
+    (0xC8D8, 0),
+  ]
+
+
+def test_flash_poll_dma_idle_waits_for_both_activity_bits(monkeypatch):
+  e4_flash = load_e4_flash(monkeypatch)
+  trigger = iter((0x01, 0x00, 0x00))
+  channel = iter((0x80, 0x00))
+
+  def fake_xdata_read(_handle, addr, size):
+    assert size == 1
+    if addr == 0xC8B8:
+      return bytes([next(trigger)])
+    if addr == 0xC8B6:
+      return bytes([next(channel)])
+    raise AssertionError(f"Unexpected DMA register: 0x{addr:04X}")
+
+  monkeypatch.setattr(e4_flash, "xdata_read", fake_xdata_read)
+
+  e4_flash.flash_poll_dma_idle(object())
+
+
+def test_flash_transaction_waits_for_read_dma_and_clears_mode_bits(monkeypatch):
+  e4_flash = load_e4_flash(monkeypatch)
+  events = []
+  registers = {}
+  mode_writes = []
+
+  monkeypatch.setattr(e4_flash, "flash_poll_busy", lambda _handle: events.append("flash_busy"))
+  monkeypatch.setattr(e4_flash, "flash_clear_dma_status", lambda _handle: events.append("dma_clear"), raising=False)
+  monkeypatch.setattr(e4_flash, "flash_poll_dma_idle", lambda _handle: events.append("dma_idle"), raising=False)
+
+  def fake_xdata_write(_handle, addr, value):
+    registers[addr] = value
+    if addr == 0xC8AD:
+      mode_writes.append(value)
+
+  monkeypatch.setattr(e4_flash, "xdata_write", fake_xdata_write)
+  monkeypatch.setattr(e4_flash, "xdata_read", lambda _handle, addr, _size: bytes([registers.get(addr, 0)]))
+
+  e4_flash.flash_transaction(
+    object(),
+    cmd=0x03,
+    addr=0x100,
+    data_len=4096,
+    addr_len=0x07,
+    mode=0xF0,
+  )
+
+  assert events == [
+    "flash_busy",
+    "dma_clear",
+    "dma_idle",
+    "flash_busy",
+    "dma_idle",
+    "dma_clear",
+  ]
+  assert mode_writes == [0xF0, 0xE0, 0xC0, 0x80, 0x00, 0x00]
+
+
 def test_flash_write_uses_usb2_safe_chunks_for_config_and_firmware(monkeypatch):
   """Config restoration and firmware writes must stay within 64 bytes."""
   e4_flash = load_e4_flash(monkeypatch)
