@@ -27,6 +27,14 @@ from pcie_probe import xdata_read, xdata_write
 
 VID, PID = 0x3801, 0x0001
 EP_OUT = 0x02
+FLASH_SIZE = 0x40000  # 256 KiB, matching JEDEC capacity code 0x12
+FLASH_BUFFER_SIZE = 4096
+FLASH_READ_PREFIX_SIZE = 1
+FLASH_READ_CONFIRMATIONS = 2
+FLASH_READ_MAX_ATTEMPTS = 3
+USB2_EP0_MAX_PACKET_SIZE = 64
+USB2_FLASH_WRITE_CHUNK_SIZE = 64
+VERIFY_CHUNK_SIZE = 256
 
 def flash_init(h):
   """Initialize flash controller — required before any SPI operation."""
@@ -53,8 +61,24 @@ def flash_poll_busy(h):
     if not (xdata_read(h, 0xC8A9, 1)[0] & 0x01): return
   raise TimeoutError("Flash CSR busy timeout")
 
+def flash_clear_dma_status(h):
+  """Clear the DMA state used by flash reads."""
+  for addr in (0xC8B8, 0xC8B6, 0xC8D6, 0xC8D8):
+    xdata_write(h, addr, 0x00)
+
+def flash_poll_dma_idle(h):
+  """Wait until both flash DMA activity indicators are idle."""
+  for _ in range(100000):
+    if not (xdata_read(h, 0xC8B8, 1)[0] & 0x01) and not (xdata_read(h, 0xC8B6, 1)[0] & 0x80): return
+  raise TimeoutError("Flash DMA idle timeout")
+
 def flash_transaction(h, cmd, addr=0, data_len=0, addr_len=0x07, mode=0x00):
   """Run a flash transaction matching the stock bootloader sequence."""
+  is_read = data_len > 0 and not (mode & 0x01)
+  flash_poll_busy(h)
+  if is_read:
+    flash_clear_dma_status(h)
+    flash_poll_dma_idle(h)
   xdata_write(h, 0xC8AD, mode)
   xdata_write(h, 0xC8AE, 0x00)
   xdata_write(h, 0xC8AF, 0x00)
@@ -69,10 +93,15 @@ def flash_transaction(h, cmd, addr=0, data_len=0, addr_len=0x07, mode=0x00):
   xdata_write(h, 0xC8A4, data_len & 0xFF)
   xdata_write(h, 0xC8A9, 0x01)
   flash_poll_busy(h)
-  xdata_write(h, 0xC8AD, 0x00)
-  xdata_write(h, 0xC8AD, 0x00)
-  xdata_write(h, 0xC8AD, 0x00)
-  xdata_write(h, 0xC8AD, 0x00)
+  if is_read:
+    flash_poll_dma_idle(h)
+  # Keep these mode-bit clears as separate read-modify-write cycles.  The
+  # bootstub uses the same sequence because collapsing them corrupts reads.
+  for mask in (0x10, 0x20, 0x40, 0x80, 0x01):
+    current_mode = xdata_read(h, 0xC8AD, 1)[0]
+    xdata_write(h, 0xC8AD, current_mode & ~mask)
+  if is_read:
+    flash_clear_dma_status(h)
 
 def flash_wren(h):
   """WREN — write enable. Does NOT use flash_transaction to avoid clobbering 0x7000 buffer."""
@@ -99,22 +128,42 @@ def flash_jedec_id(h):
   flash_transaction(h, cmd=0x9F, data_len=3, addr_len=0x04, mode=0x00)
   return xdata_read(h, 0x7000, 3)
 
-def flash_read(h, addr, size):
-  """Read from SPI flash in 4KB DMA chunks, return requested bytes."""
+def _flash_read_once(h, addr, size):
+  """Read SPI flash while discarding the DMA buffer's unreliable first byte."""
   result = bytearray()
   offset = 0
   while offset < size:
-    want = min(4096, size - offset)
-    # DMA needs at least 4KB to fill buffer reliably
-    dma_len = max(4096, want)
-    flash_transaction(h, cmd=0x03, addr=addr + offset, data_len=dma_len, addr_len=0x07, mode=0x00)
+    want = min(FLASH_BUFFER_SIZE - FLASH_READ_PREFIX_SIZE, size - offset)
+    target_addr = (addr + offset) % FLASH_SIZE
+    dma_addr = (target_addr - FLASH_READ_PREFIX_SIZE) % FLASH_SIZE
+    # The first flash DMA byte can remain stale even after the controller
+    # reports idle.  Read one prefix byte and discard it.  Address zero wraps
+    # from the final byte of the 256 KiB flash.
+    flash_transaction(h, cmd=0x03, addr=dma_addr, data_len=FLASH_BUFFER_SIZE, addr_len=0x07, mode=0x00)
     read = 0
     while read < want:
-      n = min(255, want - read)
-      result.extend(xdata_read(h, 0x7000 + read, n))
+      # The device may fall back from SuperSpeed to USB2, where the firmware
+      # limits E4 control responses to one 64-byte EP0 packet.  Keep this
+      # transport limit separate from the higher-level read/verify size.
+      n = min(USB2_EP0_MAX_PACKET_SIZE, want - read)
+      chunk_addr = 0x7000 + FLASH_READ_PREFIX_SIZE + read
+      chunk = xdata_read(h, chunk_addr, n)
+      if len(chunk) != n:
+        raise IOError(f"Short E4 read at 0x{chunk_addr:04X}: {len(chunk)}/{n} bytes")
+      result.extend(chunk)
       read += n
     offset += want
   return bytes(result)
+
+def flash_read(h, addr, size):
+  """Return a flash read only after two of three DMA samples agree."""
+  samples = {}
+  for _ in range(FLASH_READ_MAX_ATTEMPTS):
+    data = _flash_read_once(h, addr, size)
+    samples[data] = samples.get(data, 0) + 1
+    if samples[data] >= FLASH_READ_CONFIRMATIONS:
+      return data
+  raise IOError(f"Unstable flash read at 0x{addr:05X}: no two of {FLASH_READ_MAX_ATTEMPTS} samples matched")
 
 def flash_block_erase(h, addr):
   """Erase 64KB block."""
@@ -159,17 +208,17 @@ def flash_write(h, addr, firmware):
   # Restore config if we saved it
   if config is not None:
     print("  Restoring config...")
-    for off in range(0, 256, 128):
-      chunk = config[off:off+128]
+    for off in range(0, len(config), USB2_FLASH_WRITE_CHUNK_SIZE):
+      chunk = config[off:off + USB2_FLASH_WRITE_CHUNK_SIZE]
       if not all(b == 0xFF for b in chunk):
         bulk_out(h, chunk)
-        flash_page_program(h, off, 128)
+        flash_page_program(h, off, len(chunk))
 
-  # Write in 128-byte chunks — 0x7000 buffer only reliably holds 128 bytes
-  # (upper half gets overwritten by firmware code/ISR)
+  # A USB2 bulk OUT may report success while only refreshing the first
+  # 64 bytes of the 0x7000 buffer, so stage each flash write separately.
   written = 0
   while written < total:
-    chunk_size = min(128, total - written)
+    chunk_size = min(USB2_FLASH_WRITE_CHUNK_SIZE, total - written)
     chunk = firmware[written:written + chunk_size]
     padded = chunk + bytes((-len(chunk)) % 4)
     bulk_out(h, padded)
@@ -185,7 +234,9 @@ def flash_verify(h, addr, firmware):
   errors = 0
   verified = 0
   while verified < total:
-    chunk = min(255, total - verified)
+    # Verification uses 256-byte logical windows. flash_read() splits each
+    # window into USB2-safe 64-byte E4 control transfers when necessary.
+    chunk = min(VERIFY_CHUNK_SIZE, total - verified)
     got = flash_read(h, addr + verified, chunk)
     expected = firmware[verified:verified + chunk]
     for i in range(min(len(got), len(expected))):
@@ -214,28 +265,29 @@ def flash_test(h):
   # Erase
   print("  Erasing...")
   flash_block_erase(h, TEST_ADDR)
-  erased = flash_read(h, TEST_ADDR, 16)
-  assert all(b == 0xFF for b in erased), f"Erase failed: {erased.hex()}"
+  try:
+    erased = flash_read(h, TEST_ADDR, 16)
+    assert all(b == 0xFF for b in erased), f"Erase failed: {erased.hex()}"
 
-  # Write in 128-byte pages
-  print("  Writing...")
-  for off in range(0, TEST_SIZE, 128):
-    chunk = pattern[off:off+128]
-    bulk_out(h, chunk)
-    flash_page_program(h, TEST_ADDR + off, 128)
+    # Use the same USB2-safe write size as the firmware programming path.
+    print("  Writing...")
+    for off in range(0, TEST_SIZE, USB2_FLASH_WRITE_CHUNK_SIZE):
+      chunk = pattern[off:off + USB2_FLASH_WRITE_CHUNK_SIZE]
+      bulk_out(h, chunk)
+      flash_page_program(h, TEST_ADDR + off, len(chunk))
 
-  # Read back and verify
-  print("  Verifying...")
-  got = flash_read(h, TEST_ADDR, TEST_SIZE)
-  errors = 0
-  for i in range(TEST_SIZE):
-    if got[i] != pattern[i]:
-      if errors < 5:
-        print(f"    MISMATCH at +0x{i:04X}: got 0x{got[i]:02X}, expected 0x{pattern[i]:02X}")
-      errors += 1
-
-  # Clean up: re-erase the test block
-  flash_block_erase(h, TEST_ADDR)
+    # Read back and verify
+    print("  Verifying...")
+    got = flash_read(h, TEST_ADDR, TEST_SIZE)
+    errors = 0
+    for i in range(TEST_SIZE):
+      if got[i] != pattern[i]:
+        if errors < 5:
+          print(f"    MISMATCH at +0x{i:04X}: got 0x{got[i]:02X}, expected 0x{pattern[i]:02X}")
+        errors += 1
+  finally:
+    # Always leave the scratch block erased, including after test failures.
+    flash_block_erase(h, TEST_ADDR)
 
   if errors == 0:
     print(f"  PASS: {TEST_SIZE} bytes verified")
