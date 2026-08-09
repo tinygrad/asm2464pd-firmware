@@ -30,6 +30,8 @@ EP_OUT = 0x02
 FLASH_SIZE = 0x40000  # 256 KiB, matching JEDEC capacity code 0x12
 FLASH_BUFFER_SIZE = 4096
 FLASH_READ_PREFIX_SIZE = 1
+FLASH_READ_CONFIRMATIONS = 2
+FLASH_READ_MAX_ATTEMPTS = 3
 USB2_EP0_MAX_PACKET_SIZE = 64
 USB2_FLASH_WRITE_CHUNK_SIZE = 64
 VERIFY_CHUNK_SIZE = 256
@@ -126,7 +128,7 @@ def flash_jedec_id(h):
   flash_transaction(h, cmd=0x9F, data_len=3, addr_len=0x04, mode=0x00)
   return xdata_read(h, 0x7000, 3)
 
-def flash_read(h, addr, size):
+def _flash_read_once(h, addr, size):
   """Read SPI flash while discarding the DMA buffer's unreliable first byte."""
   result = bytearray()
   offset = 0
@@ -152,6 +154,16 @@ def flash_read(h, addr, size):
       read += n
     offset += want
   return bytes(result)
+
+def flash_read(h, addr, size):
+  """Return a flash read only after two of three DMA samples agree."""
+  samples = {}
+  for _ in range(FLASH_READ_MAX_ATTEMPTS):
+    data = _flash_read_once(h, addr, size)
+    samples[data] = samples.get(data, 0) + 1
+    if samples[data] >= FLASH_READ_CONFIRMATIONS:
+      return data
+  raise IOError(f"Unstable flash read at 0x{addr:05X}: no two of {FLASH_READ_MAX_ATTEMPTS} samples matched")
 
 def flash_block_erase(h, addr):
   """Erase 64KB block."""

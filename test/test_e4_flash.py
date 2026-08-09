@@ -32,7 +32,7 @@ def load_e4_flash(monkeypatch):
   return module
 
 
-def test_flash_read_splits_256_byte_read_into_usb2_packets(monkeypatch):
+def test_flash_read_once_splits_256_byte_read_into_usb2_packets(monkeypatch):
   """A 256-byte verification read must use four 64-byte E4 transfers."""
   e4_flash = load_e4_flash(monkeypatch)
   transactions = []
@@ -52,7 +52,7 @@ def test_flash_read_splits_256_byte_read_into_usb2_packets(monkeypatch):
 
   monkeypatch.setattr(e4_flash, "xdata_read", fake_xdata_read)
 
-  result = e4_flash.flash_read(object(), 0x1234, 256)
+  result = e4_flash._flash_read_once(object(), 0x1234, 256)
 
   assert transactions == [{
     "cmd": 0x03,
@@ -70,7 +70,7 @@ def test_flash_read_splits_256_byte_read_into_usb2_packets(monkeypatch):
   assert result == bytes(range(256))
 
 
-def test_flash_read_wraps_prefix_for_address_zero(monkeypatch):
+def test_flash_read_once_wraps_prefix_for_address_zero(monkeypatch):
   """Address zero must use the last flash byte as the discarded prefix."""
   e4_flash = load_e4_flash(monkeypatch)
   transactions = []
@@ -90,7 +90,7 @@ def test_flash_read_wraps_prefix_for_address_zero(monkeypatch):
 
   monkeypatch.setattr(e4_flash, "xdata_read", fake_xdata_read)
 
-  assert e4_flash.flash_read(object(), 0, len(expected)) == expected
+  assert e4_flash._flash_read_once(object(), 0, len(expected)) == expected
   assert transactions == [{
     "cmd": 0x03,
     "addr": e4_flash.FLASH_SIZE - 1,
@@ -101,7 +101,7 @@ def test_flash_read_wraps_prefix_for_address_zero(monkeypatch):
   assert reads == [(0x7001, len(expected))]
 
 
-def test_flash_read_keeps_prefix_with_full_buffer_request(monkeypatch):
+def test_flash_read_once_keeps_prefix_with_full_buffer_request(monkeypatch):
   """A 4 KiB request must split without reading past the DMA buffer."""
   e4_flash = load_e4_flash(monkeypatch)
   transactions = []
@@ -119,7 +119,7 @@ def test_flash_read_keeps_prefix_with_full_buffer_request(monkeypatch):
 
   monkeypatch.setattr(e4_flash, "xdata_read", fake_xdata_read)
 
-  assert e4_flash.flash_read(object(), 0x100, 4096) == bytes(4096)
+  assert e4_flash._flash_read_once(object(), 0x100, 4096) == bytes(4096)
   assert [(transaction["addr"], transaction["data_len"]) for transaction in transactions] == [
     (0x0FF, 4096),
     (0x10FE, 4096),
@@ -150,13 +150,38 @@ def test_flash_verify_keeps_256_byte_comparison_windows(monkeypatch):
   ]
 
 
-def test_flash_read_rejects_short_usb2_control_read(monkeypatch):
+def test_flash_read_once_rejects_short_usb2_control_read(monkeypatch):
   e4_flash = load_e4_flash(monkeypatch)
   monkeypatch.setattr(e4_flash, "flash_transaction", lambda *_args, **_kwargs: None)
   monkeypatch.setattr(e4_flash, "xdata_read", lambda _handle, _addr, size: bytes(size - 1))
 
   with pytest.raises(IOError, match=r"Short E4 read at 0x7001: 63/64 bytes"):
-    e4_flash.flash_read(object(), 0, 64)
+    e4_flash._flash_read_once(object(), 0, 64)
+
+
+def test_flash_read_returns_sample_seen_twice(monkeypatch):
+  e4_flash = load_e4_flash(monkeypatch)
+  expected = bytes(range(16))
+  samples = iter((b"stale read sample", expected, expected))
+  calls = []
+
+  def fake_flash_read_once(_handle, addr, size):
+    calls.append((addr, size))
+    return next(samples)
+
+  monkeypatch.setattr(e4_flash, "_flash_read_once", fake_flash_read_once, raising=False)
+
+  assert e4_flash.flash_read(object(), 0x100, len(expected)) == expected
+  assert calls == [(0x100, len(expected))] * 3
+
+
+def test_flash_read_rejects_three_different_samples(monkeypatch):
+  e4_flash = load_e4_flash(monkeypatch)
+  samples = iter((b"sample-a", b"sample-b", b"sample-c"))
+  monkeypatch.setattr(e4_flash, "_flash_read_once", lambda *_args, **_kwargs: next(samples), raising=False)
+
+  with pytest.raises(IOError, match=r"Unstable flash read at 0x00100: no two of 3 samples matched"):
+    e4_flash.flash_read(object(), 0x100, 8)
 
 
 def test_flash_clear_dma_status_resets_all_activity_registers(monkeypatch):
