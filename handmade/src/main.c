@@ -10,12 +10,17 @@
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
+__sfr __at(0xB8) IP;
 __sfr __at(0x88) TCON;
 
 #define IE_EA   0x80
 #define IE_EX1  0x04
-#define IE_ET0  0x02
 #define IE_EX0  0x01
+
+#define DISABLE_INTERRUPTS() (IE &= (uint8_t)~IE_EA)
+#define ENABLE_INTERRUPTS()  (IE |= IE_EA)
+
+#define IP_PX0  0x01
 
 // blocking version: void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
 void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
@@ -51,8 +56,19 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 typedef struct {
   uint16_t voltage_mv;   /* INA231 bus voltage */
   int16_t  current_ma;   /* INA231 shunt current (signed) */
-  bool     bob_flt;      /* BOB fault asserted (active-low GPIO 1) */
+  bool     psu_fault;    /* Current PSU fault state */
+  bool     psu_fault_latched; /* Held high for five seconds */
+  uint32_t uptime_s;     /* Whole seconds since firmware initialization */
 } hw_status_t;
+
+static volatile uint8_t psu_fault_latch_ticks;
+static uint8_t subsecond_ticks;
+static volatile uint32_t uptime_s;
+
+#define SYSTEM_TICK_HZ      10U
+#define SYSTEM_TIMER_MODE   0x04U
+#define SYSTEM_TIMER_COUNTS 200U
+#define PSU_FAULT_LATCH_TICKS (5U * SYSTEM_TICK_HZ)
 
 static void hw_status_read(__xdata hw_status_t *s) {
   uint16_t shunt_raw = 0, bus_raw = 0;
@@ -61,7 +77,9 @@ static void hw_status_read(__xdata hw_status_t *s) {
   s->voltage_mv = (uint16_t)(((uint32_t)bus_raw * 125) / 100);               /* 1.25 mV/LSB */
   s->current_ma = (int16_t)(((int32_t)(int16_t)shunt_raw * 2500)             /* shunt uV × 1000 */
                             / INA231_SHUNT_UOHM);                            /* / R (uOhm) = mA */
-  s->bob_flt = gpio_read(GPIO_BOB_FLT_N) ? false : true;
+  s->psu_fault = !gpio_read(GPIO_BOB_FLT_N);
+  s->psu_fault_latched = s->psu_fault || psu_fault_latch_ticks;
+  s->uptime_s = uptime_s;
 }
 
 static void pcie_power_off(void) {
@@ -484,8 +502,19 @@ void int0_isr(void) __interrupt(0) {
   }
 }
 
-void int1_isr(void) __interrupt(1) {
-  uart_puts("[int1]\n");
+void int1_isr(void) __interrupt(2) {
+  if (REG_INT_SYSTEM & INT_SYSTEM_EVENT) {
+    REG_TIMER3_CSR = TIMER_CSR_EXPIRED;
+    REG_TIMER3_CSR = TIMER_CSR_ENABLE;
+    if (!gpio_read(GPIO_BOB_FLT_N)) psu_fault_latch_ticks = PSU_FAULT_LATCH_TICKS;
+    else if (psu_fault_latch_ticks) psu_fault_latch_ticks--;
+    if (++subsecond_ticks == SYSTEM_TICK_HZ) {
+      subsecond_ticks = 0;
+      DISABLE_INTERRUPTS();
+      uptime_s++;
+      ENABLE_INTERRUPTS();
+    }
+  }
 }
 
 void main(void) {
@@ -513,8 +542,18 @@ void main(void) {
   // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
   usb_init_controller(0);
 
+  // configure 10 Hz system timer
+  REG_TIMER3_CSR = TIMER_CSR_CLEAR;
+  REG_TIMER3_CSR = TIMER_CSR_EXPIRED;
+  REG_TIMER3_DIV = (REG_TIMER3_DIV & 0xE8) | SYSTEM_TIMER_MODE;
+  REG_TIMER3_THRESHOLD_HI = SYSTEM_TIMER_COUNTS >> 8;
+  REG_TIMER3_THRESHOLD_LO = SYSTEM_TIMER_COUNTS & 0xFF;
+  REG_TIMER3_CSR = TIMER_CSR_ENABLE;
+  REG_INT_ENABLE |= INT_ENABLE_SYSTEM;
+
   // enable interrupts
-  IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
+  IP = IP_PX0;
+  IE = IE_EA | IE_EX0 | IE_EX1;
 
   i2c_init();
   ina231_init();
