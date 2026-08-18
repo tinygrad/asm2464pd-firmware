@@ -408,7 +408,6 @@ static void handle_usb_control(void) {
   }
 }
 
-
 /*=== ISR ===*/
 
 void handle_usb_bulk_data(void) {
@@ -563,3 +562,4 @@ void main(void) {
     // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
   }
 }
+
