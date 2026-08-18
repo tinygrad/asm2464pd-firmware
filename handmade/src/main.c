@@ -56,21 +56,19 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 typedef struct {
   uint16_t voltage_mv;   /* INA231 bus voltage */
   int16_t  current_ma;   /* INA231 shunt current (signed) */
-  bool     psu_fault;    /* PSU fault seen since the previous status read */
+  bool     psu_fault;    /* Current PSU fault state */
+  bool     psu_fault_latched; /* Held high for five seconds */
   uint32_t uptime_s;     /* Whole seconds since firmware initialization */
 } hw_status_t;
 
-static volatile bool psu_fault_latched;
+static volatile uint8_t psu_fault_latch_ticks;
 static uint8_t subsecond_ticks;
 static volatile uint32_t uptime_s;
-
-static void psu_fault_poll(void) {
-  if (!gpio_read(GPIO_BOB_FLT_N)) psu_fault_latched = true;
-}
 
 #define SYSTEM_TICK_HZ      10U
 #define SYSTEM_TIMER_MODE   0x04U
 #define SYSTEM_TIMER_COUNTS 200U
+#define PSU_FAULT_LATCH_TICKS (5U * SYSTEM_TICK_HZ)
 
 static void hw_status_read(__xdata hw_status_t *s) {
   uint16_t shunt_raw = 0, bus_raw = 0;
@@ -79,9 +77,8 @@ static void hw_status_read(__xdata hw_status_t *s) {
   s->voltage_mv = (uint16_t)(((uint32_t)bus_raw * 125) / 100);               /* 1.25 mV/LSB */
   s->current_ma = (int16_t)(((int32_t)(int16_t)shunt_raw * 2500)             /* shunt uV × 1000 */
                             / INA231_SHUNT_UOHM);                            /* / R (uOhm) = mA */
-  psu_fault_poll();
-  s->psu_fault = psu_fault_latched;
-  psu_fault_latched = false;
+  s->psu_fault = !gpio_read(GPIO_BOB_FLT_N);
+  s->psu_fault_latched = s->psu_fault || psu_fault_latch_ticks;
   s->uptime_s = uptime_s;
 }
 
@@ -510,7 +507,8 @@ void int1_isr(void) __interrupt(2) {
   if (REG_INT_SYSTEM & INT_SYSTEM_EVENT) {
     REG_TIMER3_CSR = TIMER_CSR_EXPIRED;
     REG_TIMER3_CSR = TIMER_CSR_ENABLE;
-    psu_fault_poll();
+    if (!gpio_read(GPIO_BOB_FLT_N)) psu_fault_latch_ticks = PSU_FAULT_LATCH_TICKS;
+    else if (psu_fault_latch_ticks) psu_fault_latch_ticks--;
     if (++subsecond_ticks == SYSTEM_TICK_HZ) {
       subsecond_ticks = 0;
       DISABLE_INTERRUPTS();
