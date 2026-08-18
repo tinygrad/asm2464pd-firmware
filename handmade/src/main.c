@@ -411,6 +411,7 @@ static void handle_usb_control(void) {
   }
 }
 
+
 /*=== ISR ===*/
 
 void handle_usb_bulk_data(void) {
@@ -544,6 +545,7 @@ void main(void) {
   // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
   usb_init_controller(0);
 
+  // configure 10 Hz system timer
   REG_TIMER3_CSR = TIMER_CSR_CLEAR;
   REG_TIMER3_CSR = TIMER_CSR_EXPIRED;
   REG_TIMER3_DIV = (REG_TIMER3_DIV & 0xE8) | SYSTEM_TIMER_MODE;
@@ -552,6 +554,7 @@ void main(void) {
   REG_TIMER3_CSR = TIMER_CSR_ENABLE;
   REG_INT_ENABLE |= INT_ENABLE_SYSTEM;
 
+  // enable interrupts
   IP = IP_PX0;
   IE = IE_EA | IE_EX0 | IE_EX1;
 
