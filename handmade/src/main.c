@@ -17,7 +17,10 @@ __sfr __at(0x88) TCON;
 #define IE_EX1  0x04
 #define IE_EX0  0x01
 
-#define IP_PX0  0x01 /* External interrupt 0 (USB) high priority */
+#define DISABLE_INTERRUPTS() (IE &= (uint8_t)~IE_EA)
+#define ENABLE_INTERRUPTS()  (IE |= IE_EA)
+
+#define IP_PX0  0x01
 
 // blocking version: void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
 void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
@@ -57,26 +60,17 @@ typedef struct {
   uint32_t uptime_s;     /* Whole seconds since firmware initialization */
 } hw_status_t;
 
-static bool psu_fault_latched;
+static volatile bool psu_fault_latched;
 static uint8_t subsecond_ticks;
-static uint32_t uptime_s;
+static volatile uint32_t uptime_s;
 
 static void psu_fault_poll(void) {
   if (!gpio_read(GPIO_BOB_FLT_N)) psu_fault_latched = true;
 }
 
-#define SYSTEM_TICK_HZ             10U
-#define SYSTEM_TIMER_MODE          0x04U /* 0.5 ms per count */
-#define SYSTEM_TIMER_COUNTS        200U  /* 100 ms */
-
-static void system_timer_start(void) {
-  REG_TIMER3_CSR = TIMER_CSR_CLEAR;
-  REG_TIMER3_CSR = TIMER_CSR_EXPIRED;
-  REG_TIMER3_DIV = (REG_TIMER3_DIV & 0xE8) | SYSTEM_TIMER_MODE;
-  REG_TIMER3_THRESHOLD_HI = SYSTEM_TIMER_COUNTS >> 8;
-  REG_TIMER3_THRESHOLD_LO = SYSTEM_TIMER_COUNTS & 0xFF;
-  REG_TIMER3_CSR = TIMER_CSR_ENABLE;
-}
+#define SYSTEM_TICK_HZ      10U
+#define SYSTEM_TIMER_MODE   0x04U
+#define SYSTEM_TIMER_COUNTS 200U
 
 static void hw_status_read(__xdata hw_status_t *s) {
   uint16_t shunt_raw = 0, bus_raw = 0;
@@ -512,19 +506,15 @@ void int0_isr(void) __interrupt(0) {
 }
 
 void int1_isr(void) __interrupt(2) {
-  uint8_t system_status = REG_INT_SYSTEM;
-  if (system_status & INT_SYSTEM_EVENT) {
-    /* Timer 3 is one-shot.  Re-arm first to minimize tick-to-tick skew. */
+  if (REG_INT_SYSTEM & INT_SYSTEM_EVENT) {
     REG_TIMER3_CSR = TIMER_CSR_EXPIRED;
     REG_TIMER3_CSR = TIMER_CSR_ENABLE;
     psu_fault_poll();
     if (++subsecond_ticks == SYSTEM_TICK_HZ) {
       subsecond_ticks = 0;
-      /* A 32-bit increment is not atomic on the 8051.  Briefly mask all
-       * interrupts so high-priority USB cannot observe a torn value. */
-      IE &= (uint8_t)~IE_EA;
+      DISABLE_INTERRUPTS();
       uptime_s++;
-      IE |= IE_EA;
+      ENABLE_INTERRUPTS();
     }
   }
 }
@@ -554,11 +544,14 @@ void main(void) {
   // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
   usb_init_controller(0);
 
-  system_timer_start();
+  REG_TIMER3_CSR = TIMER_CSR_CLEAR;
+  REG_TIMER3_CSR = TIMER_CSR_EXPIRED;
+  REG_TIMER3_DIV = (REG_TIMER3_DIV & 0xE8) | SYSTEM_TIMER_MODE;
+  REG_TIMER3_THRESHOLD_HI = SYSTEM_TIMER_COUNTS >> 8;
+  REG_TIMER3_THRESHOLD_LO = SYSTEM_TIMER_COUNTS & 0xFF;
+  REG_TIMER3_CSR = TIMER_CSR_ENABLE;
   REG_INT_ENABLE |= INT_ENABLE_SYSTEM;
 
-  /* Keep the timer/system EX1 at low priority.  USB EX0 is high priority and
-   * can preempt the short PSU-fault sampling handler. */
   IP = IP_PX0;
   IE = IE_EA | IE_EX0 | IE_EX1;
 
