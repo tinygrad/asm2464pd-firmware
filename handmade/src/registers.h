@@ -1736,9 +1736,11 @@
 #define REG_TIMER2_THRESHOLD    XDATA_REG16(0xCC1E)
 #define REG_TIMER2_THRESHOLD_LO XDATA_REG8(0xCC1E)  /* Timer 2 threshold low */
 #define REG_TIMER2_THRESHOLD_HI XDATA_REG8(0xCC1F)  /* Timer 2 threshold high */
-#define REG_TIMER3_DIV          XDATA_REG8(0xCC22)
-#define REG_TIMER3_CSR          XDATA_REG8(0xCC23)
-#define REG_TIMER3_IDLE_TIMEOUT XDATA_REG8(0xCC24)
+#define REG_TIMER3_DIV          XDATA_REG8(0xCC22)  /* Mode 4: 0.5 ms per threshold count */
+#define REG_TIMER3_CSR          XDATA_REG8(0xCC23)  /* One-shot; expiry raises C806 bit 0 / EX1 */
+#define REG_TIMER3_THRESHOLD_HI XDATA_REG8(0xCC24)  /* 16-bit threshold, high byte */
+#define REG_TIMER3_THRESHOLD_LO XDATA_REG8(0xCC25)  /* 16-bit threshold, low byte */
+#define REG_TIMER3_IDLE_TIMEOUT REG_TIMER3_THRESHOLD_HI /* Legacy name; threshold is 16-bit. */
 
 //=============================================================================
 // CPU Control Extended (0xCC30-0xCCFF)

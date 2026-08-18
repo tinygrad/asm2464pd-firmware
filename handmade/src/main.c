@@ -10,12 +10,14 @@
 
 __sfr __at(0x93) DPX;   /* DPTR bank select — DPX=1 accesses internal PHY regs */
 __sfr __at(0xA8) IE;
+__sfr __at(0xB8) IP;
 __sfr __at(0x88) TCON;
 
 #define IE_EA   0x80
 #define IE_EX1  0x04
-#define IE_ET0  0x02
 #define IE_EX0  0x01
+
+#define IP_PX0  0x01 /* External interrupt 0 (USB) high priority */
 
 // blocking version: void uart_putc(uint8_t ch) { while (!REG_UART_TFBF); REG_UART_THR = ch; }
 void uart_putc(uint8_t ch) { REG_UART_THR = ch; }
@@ -51,8 +53,30 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 typedef struct {
   uint16_t voltage_mv;   /* INA231 bus voltage */
   int16_t  current_ma;   /* INA231 shunt current (signed) */
-  bool     bob_flt;      /* BOB fault asserted (active-low GPIO 1) */
+  bool     psu_fault;    /* PSU fault seen since the previous status read */
+  uint32_t uptime_s;     /* Whole seconds since firmware initialization */
 } hw_status_t;
+
+static bool psu_fault_latched;
+static uint8_t subsecond_ticks;
+static uint32_t uptime_s;
+
+static void psu_fault_poll(void) {
+  if (!gpio_read(GPIO_BOB_FLT_N)) psu_fault_latched = true;
+}
+
+#define SYSTEM_TICK_HZ             10U
+#define SYSTEM_TIMER_MODE          0x04U /* 0.5 ms per count */
+#define SYSTEM_TIMER_COUNTS        200U  /* 100 ms */
+
+static void system_timer_start(void) {
+  REG_TIMER3_CSR = TIMER_CSR_CLEAR;
+  REG_TIMER3_CSR = TIMER_CSR_EXPIRED;
+  REG_TIMER3_DIV = (REG_TIMER3_DIV & 0xE8) | SYSTEM_TIMER_MODE;
+  REG_TIMER3_THRESHOLD_HI = SYSTEM_TIMER_COUNTS >> 8;
+  REG_TIMER3_THRESHOLD_LO = SYSTEM_TIMER_COUNTS & 0xFF;
+  REG_TIMER3_CSR = TIMER_CSR_ENABLE;
+}
 
 static void hw_status_read(__xdata hw_status_t *s) {
   uint16_t shunt_raw = 0, bus_raw = 0;
@@ -61,7 +85,10 @@ static void hw_status_read(__xdata hw_status_t *s) {
   s->voltage_mv = (uint16_t)(((uint32_t)bus_raw * 125) / 100);               /* 1.25 mV/LSB */
   s->current_ma = (int16_t)(((int32_t)(int16_t)shunt_raw * 2500)             /* shunt uV × 1000 */
                             / INA231_SHUNT_UOHM);                            /* / R (uOhm) = mA */
-  s->bob_flt = gpio_read(GPIO_BOB_FLT_N) ? false : true;
+  psu_fault_poll();
+  s->psu_fault = psu_fault_latched;
+  psu_fault_latched = false;
+  s->uptime_s = uptime_s;
 }
 
 static void pcie_power_off(void) {
@@ -484,8 +511,22 @@ void int0_isr(void) __interrupt(0) {
   }
 }
 
-void int1_isr(void) __interrupt(1) {
-  uart_puts("[int1]\n");
+void int1_isr(void) __interrupt(2) {
+  uint8_t system_status = REG_INT_SYSTEM;
+  if (system_status & INT_SYSTEM_EVENT) {
+    /* Timer 3 is one-shot.  Re-arm first to minimize tick-to-tick skew. */
+    REG_TIMER3_CSR = TIMER_CSR_EXPIRED;
+    REG_TIMER3_CSR = TIMER_CSR_ENABLE;
+    psu_fault_poll();
+    if (++subsecond_ticks == SYSTEM_TICK_HZ) {
+      subsecond_ticks = 0;
+      /* A 32-bit increment is not atomic on the 8051.  Briefly mask all
+       * interrupts so high-priority USB cannot observe a torn value. */
+      IE &= (uint8_t)~IE_EA;
+      uptime_s++;
+      IE |= IE_EA;
+    }
+  }
 }
 
 void main(void) {
@@ -513,8 +554,13 @@ void main(void) {
   // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
   usb_init_controller(0);
 
-  // enable interrupts
-  IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
+  system_timer_start();
+  REG_INT_ENABLE |= INT_ENABLE_SYSTEM;
+
+  /* Keep the timer/system EX1 at low priority.  USB EX0 is high priority and
+   * can preempt the short PSU-fault sampling handler. */
+  IP = IP_PX0;
+  IE = IE_EA | IE_EX0 | IE_EX1;
 
   i2c_init();
   ina231_init();
@@ -523,4 +569,3 @@ void main(void) {
     // DO NOT PUT ANYTHING HERE, EVERYTHING SHOULD BE HANDLED IN INTERRUPTS
   }
 }
-

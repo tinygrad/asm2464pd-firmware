@@ -4,7 +4,8 @@
   bRequest 0xC0 IN -> hw_status_t {
     uint16_t voltage_mv;  // INA231 bus voltage
     int16_t  current_ma;  // INA231 shunt current (signed)
-    bool     bob_flt;     // BOB fault asserted
+    bool     psu_fault;   // PSU fault seen since the previous status read
+    uint32_t uptime_s;    // whole seconds since firmware initialization
   }
 """
 
@@ -22,7 +23,7 @@ SUPPORTED_CONTROLLERS = [
 ]
 
 HW_STATUS_REQ = 0xC0
-HW_STATUS_FORMAT = "<HhB"
+HW_STATUS_FORMAT = "<HhBI"
 HW_STATUS_LEN = struct.calcsize(HW_STATUS_FORMAT)
 
 
@@ -58,8 +59,8 @@ def read_hw_status(dev, timeout_ms=1000):
     data = bytes(dev.ctrl_transfer(0xC0, HW_STATUS_REQ, 0, 0, HW_STATUS_LEN, timeout=timeout_ms))
     if len(data) != HW_STATUS_LEN:
         raise RuntimeError(f"short hw_status read: expected {HW_STATUS_LEN}, got {len(data)}")
-    voltage_mv, current_ma, bob_flt = struct.unpack(HW_STATUS_FORMAT, data)
-    return voltage_mv, current_ma, bool(bob_flt)
+    voltage_mv, current_ma, psu_fault, uptime_s = struct.unpack(HW_STATUS_FORMAT, data)
+    return voltage_mv, current_ma, bool(psu_fault), uptime_s
 
 
 def fmt_timestamp(now=None):
@@ -87,8 +88,8 @@ def main():
     setup_device(dev)
 
     print(f"Device {vid:04X}:{pid:04X}", flush=True)
-    print("time             V[V]    I[A]     P[W]  BOB_FLT", flush=True)
-    print("------------  -------  ------  -------  -------", flush=True)
+    print("time             V[V]    I[A]     P[W]  PSU_FLT  UPTIME[s]", flush=True)
+    print("------------  -------  ------  -------  -------  ---------", flush=True)
 
     interval_s = args.interval_ms / 1000.0
     next_sample = time.monotonic()
@@ -100,12 +101,12 @@ def main():
                 time.sleep(next_sample - now)
 
             wall_now = time.time()
-            v_mv, i_ma, bob_flt = read_hw_status(dev)
+            v_mv, i_ma, psu_fault, uptime_s = read_hw_status(dev)
             v = v_mv / 1000.0
             a = i_ma / 1000.0
             print(
                 f"{fmt_timestamp(wall_now)}  {v:7.3f}  {a:+6.3f}  {v*a:+7.3f}"
-                f"  {'yes' if bob_flt else 'no':>7}",
+                f"  {'yes' if psu_fault else 'no':>7}  {uptime_s:9d}",
                 flush=True,
             )
 
