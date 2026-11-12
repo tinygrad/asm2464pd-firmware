@@ -7,6 +7,7 @@
 
     .module crt0
     .globl  _main
+    .globl  __start__stack
 
     ; ISR function symbols
     .globl  _int0_isr
@@ -41,7 +42,7 @@ clear_ram_loop:
     djnz    r0, clear_ram_loop
 
     ; Initialize stack pointer
-    mov     sp, #0x72
+    mov     sp, #__start__stack - 1
 
     ; Initialize DPX = 0 (bank 0)
     mov     0x96, #0x00

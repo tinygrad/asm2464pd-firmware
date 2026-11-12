@@ -46,6 +46,8 @@ static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
 #include "i2c.h"
+#include "pd.h"
+#include "usb4.h"
 
 /* Hardware status packet */
 typedef struct {
@@ -486,7 +488,7 @@ void int0_isr(void) __interrupt(0) {
 }
 
 void int1_isr(void) __interrupt(1) {
-  uart_puts("[int1]\n");
+  usb4_int1();
 }
 
 void main(void) {
@@ -499,6 +501,9 @@ void main(void) {
 
   // flash controller — needed for the USB serial OTP read on enumeration
   flash_init();
+
+  usb4_init();
+  usb4_boot_window();
 
   usb_phy_tune();
 
@@ -513,6 +518,7 @@ void main(void) {
 
   // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
   usb_init_controller(0);
+  usb4_usb_mode_pd();
 
   // enable interrupts
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;
