@@ -1,0 +1,247 @@
+#ifndef USB4_TABLES_H
+#define USB4_TABLES_H
+
+#include "types.h"
+#include "registers.h"
+
+#define USB4_N(t) (sizeof(t) / sizeof((t)[0]))
+
+typedef struct { uint8_t kind; uint16_t addr; uint8_t clr, set; } usb4_op_t;
+#define USB4_OP_W0 0  // XDATA write
+#define USB4_OP_M0 1  // XDATA read-modify-write
+#define USB4_OP_W1 2  // bank-1 write
+#define USB4_OP_M1 3  // bank-1 read-modify-write
+#define X_WR(a, v)       { USB4_OP_W0, a, 0x00, v }
+#define X_MOD(a, c, s)   { USB4_OP_M0, a, c, s }
+#define B1_WR(a, v)      { USB4_OP_W1, a, 0x00, v }
+#define B1_MOD(a, c, s)  { USB4_OP_M1, a, c, s }
+
+// offset from C280; clr 0xFF = plain write
+typedef struct { uint8_t off, clr, set; } usb4_lane_op_t;
+#define USB4_LANE(a, c, s) { (a) - LPHY0_BASE, c, s }
+
+static __code const uint8_t usb4_drom[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // UID CRC8, UID
+  0xB4, 0x61, 0x04, 0x27, 0x03, 0x28, 0x00,  // CRC32 of the data, revision 3, data length 40
+  0x0A, 0x01, 0x74, 0x69, 0x6E, 0x79, 0x67, 0x72, 0x61, 0x64,  // entry 1: vendor "tinygrad"
+  0x0A, 0x02, 0x63, 0x68, 0x65, 0x73, 0x74, 0x6E, 0x75, 0x74,  // entry 2: device "chestnut"
+  0x11, 0x09, 0x00, 0x04, U16_LE(USB_VID), U16_LE(USB_PID), 0x00, 0x01,  // entry 9: VID, PID
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF,
+};
+
+// USB3-side registers changed by usb4_begin, restored before usb4_reset's CPU reset
+static __code const uint16_t usb4_saved_regs[] = {
+  REG_ADDR(REG_LINK_STATUS_E716), REG_ADDR(REG_CPU_CTRL_CA81), REG_ADDR(REG_CPU_MODE_NEXT),
+  REG_ADDR(REG_PHY_LINK_CTRL), REG_ADDR(REG_TIMER_ENABLE_B), REG_ADDR(REG_TIMER_ENABLE_A),
+  REG_ADDR(REG_CPU_MODE), REG_ADDR(REG_LINK_WIDTH_E710), REG_ADDR(REG_INT_ENABLE),
+  REG_ADDR(REG_INT_CTRL), REG_ADDR(REG_PHY_LINK_TRIGGER), REG_ADDR(REG_CPU_CLK_CFG),
+  REG_ADDR(REG_PHY_PLL_CTRL), REG_ADDR(REG_PHY_PLL_CFG), REG_ADDR(REG_TIMER_CTRL_CC3B),
+  REG_ADDR(REG_TIMER_CTRL_CC39), REG_ADDR(REG_CPU_CTRL_CA2E), REG_ADDR(REG_CPU_CTRL_CA60),
+  REG_ADDR(REG_PHY_LINK_CONFIG_C20C), REG_ADDR(REG_PHY_LINK_CTRL_C208),
+  REG_ADDR(REG_CPU_EXEC_CTRL_2), REG_ADDR(REG_CPU_CTRL_CC3E), REG_ADDR(REG_CPU_EXEC_STATUS_3),
+  REG_ADDR(REG_PHY_CFG_C610), REG_ADDR(REG_PHY_CFG_C655), REG_ADDR(REG_PHY_CFG_C65A),
+  REG_ADDR(REG_PHY_EXT_5B), REG_ADDR(REG_PHY_EXT_5C), REG_ADDR(REG_PHY_CFG_C657),
+  REG_ADDR(REG_LINK_CTRL_E717),
+  REG_ADDR(REG_GPIO_CTRL(GPIO_LED_R)), REG_ADDR(REG_GPIO_CTRL(GPIO_LED_G)),
+  REG_ADDR(REG_GPIO_CTRL(GPIO_LED_B)),
+  REG_ADDR(REG_GPIO_CTRL(22)), REG_ADDR(REG_POWER_STATUS), REG_ADDR(REG_USB_PHY_CTRL_91C0),
+  REG_ADDR(REG_INT_C808), REG_ADDR(REG_PCIE_CTRL_B402), REG_ADDR(REG_PCIE_LANE_CTRL_C659),
+  REG_ADDR(REG_PHY_RXPLL_CFG_A), REG_ADDR(REG_PHY_RXPLL_CFG_B), REG_ADDR(REG_PCIE_PERST_CTRL),
+};
+
+// PCIe switch identity for both ports: class 0x060400, ID and subsystem 1B21:2461
+static __code const uint8_t usb4_sw_id[12] = {
+  0x1B, 0x21, 0x24, 0x61, 0x00, 0x06, 0x04, 0x00, 0x24, 0x61, 0x1B, 0x21,
+};
+
+// offset into usb4_sb_regs and size per register index; size 0 = not implemented
+static __code const uint8_t sb_off[19] = {0, 4, 0, 0, 0, 0, 0, 0, 8, 12, 16, 0, 17, 20, 0, 24, 0, 0,
+                                          28};
+static __code const uint8_t sb_len[19] = {4, 4, 0, 0, 0, 0, 0, 0, 4, 4, 1, 0, 3, 4, 0, 4, 0, 0, 64};
+
+// TxFFE preset per retry index: Gen 2, Gen 3
+static __code const uint8_t usb4_presets[2][16] = {
+  {0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x06, 0x06, 0x06, 0x06, 0x06, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A},
+  {0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x07, 0x07, 0x07, 0x07, 0x07},
+};
+
+// TxFFE presets the partner may request for our transmitter: A | B << 5
+static __code const uint8_t usb4_ffe_a[16] = {0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 3, 3, 3, 3, 7, 2};
+static __code const uint8_t usb4_ffe_b[16] = {0x00, 0x06, 0x0B, 0x0E, 0x14, 0x00, 0x05, 0x0A,
+                                              0x0E, 0x11, 0x00, 0x05, 0x08, 0x0E, 0x00, 0x04};
+
+static __code const uint16_t usb4_slot_word[4] = {B1_LSW0, B1_LSW1, B1_LSW2, B1_LSW3};
+
+// Lane rows are given with their lane 0 address (C280-C2FF); lane 1 is the same register + 0x80.
+static __code const usb4_lane_op_t usb4_lane_phy_1[] = {
+  USB4_LANE(0xC2A8, 0x80, 0x40),
+  USB4_LANE(0xC2C5, 0x00, 0x70),
+  USB4_LANE(0xC2A1, 0x00, 0x60),
+  USB4_LANE(0xC28C, 0x00, 0x01),
+  USB4_LANE(0xC29C, 0x00, 0x01),
+  USB4_LANE(0xC2AC, 0x00, 0x01),
+  USB4_LANE(0xC2BC, 0x01, 0x00),
+  USB4_LANE(0xC28C, 0x02, 0x00),
+  USB4_LANE(0xC29C, 0x00, 0x02),
+  USB4_LANE(0xC2AC, 0x00, 0x02),
+  USB4_LANE(0xC2BC, 0x02, 0x00),
+  USB4_LANE(0xC2C3, 0x20, 0x1C),
+  USB4_LANE(0xC2C9, 0x3E, 0x41),
+  USB4_LANE(0xC2A5, 0x10, 0xE0),
+  USB4_LANE(0xC2A6, 0x80, 0x70),
+  USB4_LANE(0xC2CA, 0x0F, 0x00),
+  USB4_LANE(0xC287, 0x80, 0x60),
+  USB4_LANE(0xC294, 0x00, 0x70),
+  USB4_LANE(0xC2A2, 0x80, 0x60),
+  USB4_LANE(0xC2C5, 0x04, 0x0B),
+  USB4_LANE(0xC293, 0x08, 0x04),
+  USB4_LANE(0xC2CE, 0x09, 0x16),
+};
+
+static __code const usb4_lane_op_t usb4_lane_phy_2[] = {
+  USB4_LANE(0xC290, 0x60, 0x00),
+  USB4_LANE(0xC2A0, 0x60, 0x00),
+  USB4_LANE(0xC282, 0x15, 0x0A),
+  USB4_LANE(0xC292, 0x16, 0x09),
+  USB4_LANE(0xC2A2, 0x15, 0x0A),
+  USB4_LANE(0xC290, 0x1C, 0x03),
+  USB4_LANE(0xC2A0, 0x1C, 0x03),
+  USB4_LANE(0xC291, 0x17, 0x08),
+  USB4_LANE(0xC2A1, 0x17, 0x08),
+  USB4_LANE(0xC2DB, 0x04, 0x1B),
+  USB4_LANE(0xC284, 0x0A, 0x05),
+  USB4_LANE(0xC294, 0x08, 0x07),
+  USB4_LANE(0xC285, 0x00, 0x0F),
+  USB4_LANE(0xC295, 0x03, 0x0C),
+  USB4_LANE(0xC2A5, 0x00, 0x0F),
+  USB4_LANE(0xC285, 0x90, 0x60),
+  USB4_LANE(0xC286, 0x08, 0x07),
+  USB4_LANE(0xC296, 0x00, 0x0F),
+  USB4_LANE(0xC2A7, 0x0E, 0x11),
+  USB4_LANE(0xC28B, 0x35, 0x0A),
+  USB4_LANE(0xC284, 0x30, 0x40),
+  USB4_LANE(0xC2A4, 0x70, 0x00),
+  USB4_LANE(0xC289, 0x60, 0x90),
+  USB4_LANE(0xC299, 0x70, 0x80),
+  USB4_LANE(0xC2A9, 0x70, 0x80),
+  USB4_LANE(0xC282, 0x40, 0xA0),
+  USB4_LANE(0xC292, 0xC0, 0x20),
+  USB4_LANE(0xC2C6, 0x02, 0x0D),
+  USB4_LANE(0xC2CC, 0x00, 0x0E),
+  USB4_LANE(0xC2CD, 0xFF, 0x00),
+  USB4_LANE(0xC2A3, 0x08, 0x04),
+  USB4_LANE(0xC297, 0xA0, 0x40),
+  USB4_LANE(0xC29A, 0x01, 0x0E),
+  USB4_LANE(0xC2A7, 0xA0, 0x40),
+  USB4_LANE(0xC2AB, 0x3F, 0x00),
+  USB4_LANE(0xC2AA, 0x02, 0x0D),
+  USB4_LANE(0xC297, 0x0F, 0x10),
+  USB4_LANE(0xC293, 0x02, 0x01),
+  USB4_LANE(0xC283, 0x08, 0x04),
+  USB4_LANE(0xC2A6, 0x04, 0x0B),
+  USB4_LANE(0xC2A4, 0x08, 0x07),
+  USB4_LANE(0xC2A3, 0x01, 0x02),
+  USB4_LANE(0xC29B, 0x3F, 0x00),
+  USB4_LANE(0xC294, 0x09, 0x06),
+  USB4_LANE(0xC297, 0x0E, 0x11),
+  USB4_LANE(0xC283, 0x0C, 0x00),
+};
+
+static __code const usb4_op_t usb4_tab_lane_prep[] = {
+  X_MOD(REG_ADDR(REG_PHY_LINK_CTRL_C21B), 0x00, 0xC0),
+  X_MOD(REG_ADDR(REG_LINK_CTRL), 0x00, 0x08),
+  B1_MOD(0x1262, 0x10, 0x00),
+  B1_MOD(0x28ED, 0x00, 0x40),
+  B1_MOD(0x28CE, 0x01, 0x00),
+  B1_MOD(0x281C, 0x00, 0xC2),
+  X_MOD(REG_ADDR(REG_PHY_LINK_CTRL_C20B), 0x80, 0x00),
+  B1_MOD(0x281D, 0x01, 0x00),
+  X_MOD(REG_ADDR(REG_PHY_SERDES_C22F), 0x40, 0x04),
+  X_MOD(REG_ADDR(REG_PHY_PLL_CTRL), 0x14, 0x2B),
+  X_MOD(REG_ADDR(REG_PHY_PLL_CFG), 0x00, 0x03),
+  X_MOD(REG_ADDR(REG_PHY_PLL_CTRL), 0x40, 0x80),
+  X_MOD(REG_ADDR(REG_PHY_PLL_CFG), 0x08, 0x00),
+};
+
+static __code const usb4_op_t usb4_tab_boot_pre[] = {
+  X_MOD(REG_ADDR(REG_LINK_WIDTH_E710), 0x1B, 0x04),
+  X_MOD(REG_ADDR(REG_PHY_CFG_C6A8), 0x00, 0x01),
+  X_WR(REG_ADDR(REG_CPU_EXEC_STATUS_2), CPU_EXEC_STATUS_2_INT),
+  X_MOD(REG_ADDR(REG_TIMER_CTRL_CC3B), 0x01, 0x00),
+  X_MOD(REG_ADDR(REG_LINK_CTRL_E717), 0x00, 0x01),
+  X_MOD(REG_ADDR(REG_CPU_CTRL_CC3E), 0x02, 0x00),
+  X_MOD(REG_ADDR(REG_TIMER_CTRL_CC3B), 0x42, 0x00),
+  X_MOD(REG_ADDR(REG_LINK_STATUS_E716), 0x00, 0x03),
+  X_MOD(REG_ADDR(REG_CPU_CTRL_CC3E), 0x01, 0x00),
+  X_MOD(REG_ADDR(REG_TIMER_CTRL_CC39), 0x00, 0x02),
+  X_MOD(REG_ADDR(REG_TIMER_ENABLE_B), 0x02, 0x00),
+  X_MOD(REG_ADDR(REG_TIMER_ENABLE_A), 0x02, 0x00),
+  X_MOD(REG_ADDR(REG_CPU_MODE_NEXT), 0x80, 0x60),
+  X_MOD(REG_ADDR(REG_CPU_CTRL_CA81), 0x00, 0x01),
+  X_MOD(REG_ADDR(REG_CPU_CTRL_CC37), 0x00, 0x04),
+  B1_MOD(0x2805, 0x00, 0x80),
+  X_MOD(REG_ADDR(REG_CPU_CTRL_CA70), 0x03, 0x00),
+  X_MOD(REG_ADDR(REG_SYS_CTRL_E780), 0x06, 0x00),
+  B1_MOD(0x0000, 0x02, 0x00),
+  X_MOD(REG_ADDR(REG_LINK_STATUS_E716), 0x03, 0x00),
+  X_MOD(REG_ADDR(REG_LINK_STATUS_E716), 0x00, 0x03),
+  X_MOD(REG_ADDR(REG_CPU_CTRL_CC37), 0x04, 0x00),
+  X_MOD(REG_ADDR(REG_PHY_CONFIG), 0x03, 0x04),
+  X_MOD(REG_ADDR(REG_PHY_CONFIG), 0x04, 0x00),
+  X_WR(REG_ADDR(REG_PHY_LINK_CTRL), 0x00),
+  X_MOD(REG_ADDR(REG_PCIE_LANE_CTRL_C659), PCIE_LANE_EN, 0x00),
+  X_MOD(REG_ADDR(REG_PHY_TIMER_CTRL_E764), 0x0B, 0x04),
+  X_MOD(REG_ADDR(REG_SYS_CTRL_E76C), 0x10, 0x00),
+  X_MOD(REG_ADDR(REG_SYS_CTRL_E774), 0x10, 0x00),
+  X_MOD(REG_ADDR(REG_SYS_CTRL_E77C), 0x10, 0x00),
+  B1_MOD(B1_PCIE_EVT_MASK, 0x00, 0x06),
+  X_MOD(REG_ADDR(REG_PHY_EXT_5B), 0x00, 0x08),
+  X_MOD(REG_ADDR(REG_HDDPC_CTRL), HDDPC_ENABLE, 0x00),
+  X_MOD(REG_ADDR(REG_PHY_EXT_5B), 0x00, 0x20),
+  X_MOD(REG_ADDR(REG_PHY_CFG_C657), PHY_C657_SLOT, 0x00),
+  X_MOD(REG_ADDR(REG_PHY_EXT_5C), 0x00, 0x04),
+  X_MOD(REG_ADDR(REG_CPU_CTRL_CA2E), 0x00, 0x01),
+  X_MOD(REG_ADDR(REG_CPU_EXEC_STATUS_3), 0x01, 0x00),
+  X_MOD(REG_ADDR(REG_CPU_CTRL_CA60), 0x01, 0x0E),
+  X_MOD(REG_ADDR(REG_PHY_CFG_C610), 0x01, 0x00),
+  X_MOD(REG_ADDR(REG_TIMER_CTRL_CC3B), 0x00, 0x03),
+  X_MOD(REG_ADDR(REG_PHY_LINK_CONFIG_C20C), 0x00, 0x40),
+  X_MOD(REG_ADDR(REG_PHY_LINK_CTRL_C208), 0x10, 0x00),
+};
+static __code const usb4_op_t usb4_tab_boot_post[] = {
+  X_MOD(REG_ADDR(REG_PHY_CFG_C65A), 0x08, 0x00),
+  X_MOD(REG_ADDR(REG_CPU_EXEC_STATUS_3), 0x04, 0x00),
+  B1_MOD(0x0002, 0x0F, 0x00),
+  X_MOD(REG_ADDR(REG_PHY_CFG_C655), 0x00, 0x01),
+  X_MOD(REG_ADDR(REG_PHY_CFG_C65A), 0x00, 0x01),
+  X_WR(REG_ADDR(REG_CPU_EXEC_STATUS_2), CPU_EXEC_STATUS_2_INT),
+  X_MOD(REG_ADDR(REG_CPU_EXEC_CTRL_2), CPU_EXEC_CTRL_2_BIT2, 0x00),
+  X_WR(REG_ADDR(REG_CPU_EXEC_STATUS_2), CPU_EXEC_STATUS_2_INT),
+  X_WR(REG_ADDR(REG_CPU_EXEC_STATUS_2), 0x02),
+  X_MOD(REG_ADDR(REG_CPU_MODE_NEXT), 0x10, 0x00),
+  B1_WR(B1_DSP_CFG + PCI_DEVCAP0, 0x22),
+  B1_WR(B1_USP_CFG + PCI_DEVCAP0, 0x22),
+  B1_MOD(B1_LANE_MUX_CTL, 0xD0, 0x01),
+  B1_MOD(B1_LANE_MUX_CFG, 0xF0, 0x00),
+  X_MOD(REG_ADDR(REG_LINK_MODE_CTRL), 0x00, 0x03),
+  B1_MOD(0x28D1, 0x00, 0x10),
+  B1_WR(0x2849, 0xA0),
+  B1_WR(0x2894, 0x02),
+  B1_WR(0x2895, 0x71),
+  B1_WR(0x2896, 0x00),
+  B1_WR(0x2897, 0x00),
+  B1_WR(0x2898, 0x3E),
+  B1_WR(0x2899, 0x80),
+  B1_WR(0x2853, 0xFF),
+  B1_WR(0x285D, 0xFF),
+  B1_MOD(0x28CF, 0x01, 0x00),
+  B1_MOD(B1_SB_EVT_MASK, 0x01, 0x00),
+  B1_MOD(B1_SB_LINK_EVT_MASK, 0x00, SB_LINK_CONNECTED | SB_LINK_DISCONNECTED),
+  B1_WR(B1_SB_LINK_EVT, SB_LINK_CONNECTED),
+  B1_WR(B1_SB_LINK_EVT, SB_LINK_DISCONNECTED),
+  B1_MOD(B1_LINK_EVT_MASK, 0x48, 0x00),
+  X_MOD(REG_ADDR(REG_PHY_EXT_5C), 0x40, 0x00),
+  X_MOD(REG_ADDR(REG_PHY_CFG_C655), 0x01, 0x00),
+};
+
+#endif
