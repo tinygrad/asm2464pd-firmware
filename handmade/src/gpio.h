@@ -7,6 +7,8 @@
 #define GPIO_INPUT      0x00
 #define GPIO_LOW        0x02
 #define GPIO_HIGH       0x03
+#define GPIO_BOOT_0B    0x0B
+#define GPIO_BOOT_0C    0x0C
 
 #define GPIO_NUM_MAX    27
 
