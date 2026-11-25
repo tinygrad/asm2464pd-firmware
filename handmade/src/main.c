@@ -42,6 +42,7 @@ static uint8_t is_usb2;
 
 /* Streaming PCIe state — configured via 0xF0 control message */
 static uint32_t dma_dwords;    /* total dwords remaining for streaming transfer */
+static uint8_t arm_out_pending;
 
 #include "pcie_pio.h"
 #include "pcie_tuning.h"
@@ -297,6 +298,7 @@ static void handle_usb_control(void) {
       uint8_t slot_sel = REG_USB_SETUP_WIDX_L;
       uint8_t num_slots = REG_USB_SETUP_WIDX_H;
       if (num_slots == 0) num_slots = 1;
+      dma_dwords = 0;
       /* DMA_INIT sequence for SRAM DMA */
       REG_NVME_DOORBELL       = 0x0;
       REG_NVME_SECTOR_SIZE_HI = 0x02;
@@ -364,7 +366,6 @@ static void handle_usb_control(void) {
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_STAT_OUT;
   } else if (phase & USB_CTRL_PHASE_DATA_IN || phase & USB_CTRL_PHASE_STAT_IN) {
     // USB_CTRL_PHASE_DATA_IN on USB 2.0, USB_CTRL_PHASE_STAT_IN on USB 3.0
-    if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
     if (REG_USB_SETUP_BMREQ == (USB_SETUP_DIR_HOST_TO_DEV | USB_SETUP_TYPE_VENDOR) &&
         REG_USB_SETUP_BREQ == 0xF0) {
       /* 0xF0 DATA_OUT: 12 bytes at DESC_BUF (0x9E00).
@@ -377,6 +378,7 @@ static void handle_usb_control(void) {
 
       /* Reset any in-flight streaming transfer so stale ISRs are no-ops. */
       dma_dwords = 0;
+      arm_out_pending = 0;
 
       /* Configure PCIe TLP engine */
       REG_PCIE_FMT_TYPE   = fmt_type;
@@ -408,8 +410,19 @@ static void handle_usb_control(void) {
                      ((uint32_t)DESC_BUF[9] << 8) | DESC_BUF[8];
         if (dma_dwords > 0) {
           if (mode == 1) {
-            // host to device, we arm the OUT endpoint
-            REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+            if (!is_usb2 && dma_dwords > 256) {
+              /* Defer ARM_OUT until the host's initial burst receives NRDY and drains,
+               * then arm via ERDY(NumP=1) in int1_isr (Timer1) so DP1 cannot overflow 0x7000. */
+              REG_USB_MSC_CFG = USB_MSC_CFG_ENABLE;
+              REG_USB_MSC_CFG = 0x00;
+              REG_USB_EP_EVENT = USB_EP_EVENT_OUT | USB_EP_EVENT_ANY;
+              arm_out_pending = 1;
+              REG_TIMER1_CSR = TIMER_CSR_CLEAR;
+              REG_TIMER1_CSR = TIMER_CSR_EXPIRED;
+              REG_TIMER1_CSR = TIMER_CSR_ENABLE;
+            } else {
+              REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+            }
           }
           if (mode == 2) {
             // device to host, we do the first IN
@@ -417,7 +430,10 @@ static void handle_usb_control(void) {
           }
         }
       }
+      if (phase & USB_CTRL_PHASE_STAT_IN) REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
       usb_send_zlp();
+    } else if (phase & USB_CTRL_PHASE_STAT_IN) {
+      REG_USB_DMA_TRIGGER = USB_DMA_STATUS_COMPLETE;
     }
     REG_USB_CTRL_PHASE = USB_CTRL_PHASE_DATA_IN | USB_CTRL_PHASE_STAT_IN;
   } else if (phase & USB_CTRL_PHASE_DATA_OUT) {
@@ -440,8 +456,9 @@ void handle_usb_bulk_data(void) {
   uart_puthex(bulk_cfg1); uart_puts(" "); uart_puthex(bulk_cfg2);
   uart_puts("]\n");*/
   if (bulk_cfg1 & USB_EP_CFG1_BULK_OUT_COMPLETE) {
+    arm_out_pending = 0;
     uint16_t dword_count = (((uint16_t)REG_USB_BULK_OUT_BC_H << 8) | REG_USB_BULK_OUT_BC_L) >> 2;
-    if (dma_dwords >= dword_count) {
+    if (dword_count > 0 && dma_dwords >= dword_count) {
       pcie_write_chunk((__xdata uint8_t *)0x7000, dword_count);
       dma_dwords -= dword_count;
       if (dma_dwords > 0) REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT; // re-arm OUT
@@ -522,8 +539,21 @@ void int0_isr(void) __interrupt(0) {
   }
 }
 
-void int1_isr(void) __interrupt(1) {
-  uart_puts("[int1]\n");
+void int1_isr(void) __interrupt(2) {
+  if (REG_TIMER1_CSR & TIMER_CSR_EXPIRED) {
+    REG_TIMER1_CSR = TIMER_CSR_CLEAR;
+    REG_TIMER1_CSR = TIMER_CSR_EXPIRED;
+    if (!arm_out_pending || dma_dwords == 0) {
+      arm_out_pending = 0;
+    } else if (arm_out_pending == 1) {
+      if (REG_USB_EP_EVENT & USB_EP_EVENT_OUT) arm_out_pending = 2;
+      REG_TIMER1_CSR = TIMER_CSR_ENABLE;
+    } else {
+      arm_out_pending = 0;
+      REG_USB_EP_EVENT = USB_EP_EVENT_OUT | USB_EP_EVENT_ANY;
+      REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_OUT;
+    }
+  }
 }
 
 void main(void) {
@@ -551,6 +581,12 @@ void main(void) {
 
   // Bring USB up. force_usb2=0: try SS first, fall back via LINK_EVENT.
   usb_init_controller(0);
+
+  // Timer1: 100 us tick (div=3 -> 50 us/tick, threshold=2) routed to INT1
+  REG_TIMER1_DIV = 0x03;
+  REG_TIMER1_THRESHOLD_HI = 0x00;
+  REG_TIMER1_THRESHOLD_LO = 0x02;
+  REG_INT_ENABLE |= INT_ENABLE_SYSTEM;
 
   // enable interrupts
   IE = IE_EA | IE_EX0 | IE_EX1 | IE_ET0;

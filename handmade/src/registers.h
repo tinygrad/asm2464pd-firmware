@@ -445,6 +445,10 @@
 #define   USB_EP_CFG2_ARM_IN      0x02  // Bit 1: Arm bulk IN endpoint (write)
 #define   USB_EP_CFG2_CLEAR_OUT   0x08
 #define   USB_EP_CFG2_ARM_OUT     0x10  // Bit 4: Arm bulk OUT endpoint (write)
+#define REG_USB_EP_EVENT        XDATA_REG8V(0x9095) /* W1C bulk EP event flags (set on NRDY / rx) */
+#define   USB_EP_EVENT_ANY        0x01  // Bit 0: Any bulk EP event
+#define   USB_EP_EVENT_IN         0x08  // Bit 3: Bulk IN (EP1) event
+#define   USB_EP_EVENT_OUT        0x10  // Bit 4: Bulk OUT (EP2) event (NRDY or packet rx)
 /*
  * USB Endpoint Ready/Status Masks (0x9096-0x909E)
  * These 9 registers (0x9096-0x909E) control endpoint ready state.
@@ -1727,7 +1731,7 @@
 #define REG_TIMER0_THRESHOLD_HI XDATA_REG8(0xCC12)  /* Timer 0 threshold high byte */
 #define REG_TIMER0_THRESHOLD_LO XDATA_REG8(0xCC13)  /* Timer 0 threshold low byte */
 #define REG_TIMER1_DIV          XDATA_REG8(0xCC16)
-#define REG_TIMER1_CSR          XDATA_REG8(0xCC17)
+#define REG_TIMER1_CSR          XDATA_REG8V(0xCC17)
 #define REG_TIMER1_THRESHOLD    XDATA_REG16(0xCC18)
 #define REG_TIMER1_THRESHOLD_HI XDATA_REG8(0xCC18)  /* Timer 1 threshold high byte */
 #define REG_TIMER1_THRESHOLD_LO XDATA_REG8(0xCC19)  /* Timer 1 threshold low byte */
