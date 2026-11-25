@@ -206,6 +206,19 @@ static void handle_usb_control(void) {
     }
 
     if (bmReq == USB_SETUP_DIR_HOST_TO_DEV && bReq == USB_REQ_SET_ADDRESS) {
+      // USB3 RX calibration sometimes never completes (both lane codes stuck at 63)
+      // and the link then drops out of U0 seconds later. Reset the RX PLL to
+      // recalibrate (stock fw bank1 0xE989 "[RstRxpll...]").
+      if (!is_usb2 && (XDATA_REG8V(0xC2D2) & 0x3F) == 0x3F && (XDATA_REG8V(0xC352) & 0x3F) == 0x3F) {
+        uart_puts("[RstRxpll]\n");
+        REG_CPU_CTRL_CC37 |= CPU_CTRL_CC37_RXPLL_MODE;
+        REG_PHY_RXPLL_RESET = 0xFF;
+        sleep(1);
+        REG_PHY_RXPLL_RESET = 0x00;
+        sleep(1);
+        REG_CPU_CTRL_CC37 &= ~CPU_CTRL_CC37_RXPLL_MODE;
+        sleep(5);
+      }
       usb_handle_set_address(wValL);
       uart_puts("[A]\n");
     } else if (bmReq == USB_SETUP_DIR_DEV_TO_HOST && bReq == USB_REQ_GET_DESCRIPTOR) {
