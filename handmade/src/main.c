@@ -144,6 +144,44 @@ static void do_usb_bulk_in(void) {
   REG_USB_EP_CFG2 = USB_EP_CFG2_ARM_IN;
 }
 
+static void usb_rst_rxpll(void) {
+  REG_CPU_CTRL_CC37 |= CPU_CTRL_CC37_RXPLL_MODE;
+  REG_PHY_RXPLL_RESET = 0xFF;
+  sleep(1);
+  REG_PHY_RXPLL_RESET = 0x00;
+  sleep(2);
+  REG_CPU_CTRL_CC37 &= (uint8_t)~CPU_CTRL_CC37_RXPLL_MODE;
+  sleep(2);
+}
+
+static bool usb_rxpll_cal_ok(void) {
+  uint8_t d0 = XDATA_REG8V(0xC2D0);
+  uint8_t d1 = XDATA_REG8V(0xC350);
+  uint8_t c0 = XDATA_REG8V(0xC2D2) & 0x3F;
+  uint8_t c1 = XDATA_REG8V(0xC352) & 0x3F;
+  uint16_t f0 = ((uint16_t)XDATA_REG8V(0xC2D9) << 8) | XDATA_REG8V(0xC2DA);
+  uint16_t f1 = ((uint16_t)XDATA_REG8V(0xC359) << 8) | XDATA_REG8V(0xC35A);
+  return ((d0 & 0x40) && (d1 & 0x40) &&
+          c0 >= 1 && c0 <= 40 &&
+          c1 >= 1 && c1 <= 40 &&
+          f0 >= 0x013D && f0 <= 0x0143 &&
+          f1 >= 0x013D && f1 <= 0x0143);
+}
+
+/* Matches stock bank1 0xAEE5 + 0xB9B6: reset RXPLL after usb_phy_tune()
+ * and verify both lanes calibrate within spec (cal 1..40, freq 317..323). */
+static void usb_rxpll_calibrate(void) {
+  uint8_t retry;
+  for (retry = 0; retry < 10; retry++) {
+    usb_rst_rxpll();
+    if (usb_rxpll_cal_ok()) {
+      uart_puts("[CDRV ok]\n");
+      return;
+    }
+  }
+  uart_puts("[CDRV fail]\n");
+}
+
 /*=== USB Control Handler ===*/
 
 static void handle_usb_control(void) {
@@ -501,6 +539,7 @@ void main(void) {
   flash_init();
 
   usb_phy_tune();
+  usb_rxpll_calibrate();
 
   // PCIe TLP engine values that don't change + tuning
   REG_PCIE_TLP_CTRL   = 0x01;
